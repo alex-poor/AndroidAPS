@@ -88,6 +88,7 @@ import javax.inject.Singleton
         RileyLinkModule::class,
         MedtrumModule::class,
         EquilModule::class,
+        app.aaps.pump.ypsopump.di.YpsoPumpModule::class,
         VirtualPumpModule::class
     ]
 )
