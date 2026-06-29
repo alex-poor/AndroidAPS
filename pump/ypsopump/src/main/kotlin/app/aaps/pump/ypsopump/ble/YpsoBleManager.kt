@@ -11,6 +11,7 @@ import android.content.Context
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.ypsopump.comm.YpsoCrc
+import app.aaps.pump.ypsopump.comm.YpsoFraming
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -43,15 +44,40 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
         private val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
         private val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
+        // History (events) — used for the zero-therapy write-transport validation.
+        private val CHAR_EVENT_COUNT: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecb3b7bc5")
+        private val CHAR_EVENT_INDEX: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecc3b7bc5")
+        private val CHAR_EVENT_VALUE: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbecd3b7bc5")
+        // Control (dosing). Verified against mylife / firmware V05.02.03 (vicktor + SandraK82 agree),
+        // not yet on OUR pump — gated behind capture-verify before any live use.
+        private val CHAR_BOLUS_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
+        private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
+        private val CHAR_TBR_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
         private val AUTH_SALT = byteArrayOf(
             0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
         )
+        private const val ERR_COUNTER_MISMATCH = 138
+        private const val COUNTER_SYNC_TRIES = 40
     }
 
     /** Seed the captured session key (hex) into the cryptor before connecting. */
     fun setSharedKey(hex: String) {
         sessionCrypto.sharedKey = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
+
+    /**
+     * Seed the counters before any encrypted WRITE. [writeCounter] = the genuine app's CURRENT value
+     * (mylife's numericWriteAppCounter, captured via frida); the first write uses seed+1 (the cryptor
+     * pre-increments). [rebootCounter] must match the pump's (mylife's stored value, = 8 currently) or
+     * the cryptor resets writeCounter to 0 on the first decrypt. Reads need none of this.
+     */
+    fun setCounters(writeCounter: Long, rebootCounter: Int) {
+        sessionCrypto.writeCounter = writeCounter
+        sessionCrypto.rebootCounter = rebootCounter
+        aapsLogger.info(LTag.PUMP, "YpsoPump counters seeded: writeCounter=$writeCounter rebootCounter=$rebootCounter")
+    }
+
+    val writeCounter: Long get() = sessionCrypto.writeCounter
 
     /**
      * Open the GATT link and authenticate, then STAY connected. Returns immediately; the connection
@@ -127,6 +153,42 @@ class YpsoBleManager @Inject constructor(
         return out.toByteArray()
     }
 
+    // ---- write transport (proven on real hardware via the history-index write) ----
+    @SuppressLint("MissingPermission")
+    private fun writeOp(uuid: UUID, value: ByteArray, onResult: (ByteArray?, Int) -> Unit) =
+        enqueue(Op({ g ->
+            findChar(g, uuid)?.let { g.writeCharacteristic(it, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) } ?: complete(null, -1)
+        }, onResult))
+
+    /** Write every frame of [payload]; report the LAST frame's status (0 = ok, 138 = counter mismatch). */
+    private fun writeFrames(uuid: UUID, payload: ByteArray, onComplete: (Int) -> Unit) {
+        val frames = YpsoFraming.chunkPayload(payload)
+        fun step(i: Int) {
+            if (i >= frames.size) { onComplete(0); return }
+            writeOp(uuid, frames[i]) { _, s -> if (s != BluetoothGatt.GATT_SUCCESS) onComplete(s) else step(i + 1) }
+        }
+        step(0)
+    }
+
+    /**
+     * Encrypt [command] (already CRC-wrapped or complement-protected by the caller) and write it,
+     * auto-syncing the writeCounter: the pump rejects a wrong counter with [ERR_COUNTER_MISMATCH] and
+     * does NOT advance, so on 138 we re-encrypt (cryptor pre-increments) and retry, scanning up to
+     * [COUNTER_SYNC_TRIES] times until accepted. [onResult] gets true on accept, false on give-up.
+     */
+    private fun writeEncrypted(uuid: UUID, command: ByteArray, triesLeft: Int = COUNTER_SYNC_TRIES, onResult: (Boolean) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump writeEncrypted: not connected"); onResult(false); return }
+        val frame = runCatching { sessionCrypto.encrypt(command) }
+            .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onResult(false); return }
+        writeFrames(uuid, frame) { status ->
+            when {
+                status == BluetoothGatt.GATT_SUCCESS         -> { aapsLogger.info(LTag.PUMP, "YpsoPump write accepted at wc=${sessionCrypto.writeCounter}"); onResult(true) }
+                status == ERR_COUNTER_MISMATCH && triesLeft > 0 -> writeEncrypted(uuid, command, triesLeft - 1, onResult)
+                else                                         -> { aapsLogger.error(LTag.PUMP, "YpsoPump write failed (status=$status, wc=${sessionCrypto.writeCounter})"); onResult(false) }
+            }
+        }
+    }
+
     private fun findChar(g: BluetoothGatt, uuid: UUID): BluetoothGattCharacteristic? {
         for (s in g.services) s.getCharacteristic(uuid)?.let { return it }
         return null
@@ -158,6 +220,57 @@ class YpsoBleManager @Inject constructor(
                 }
             }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump status decrypt error: ${it.message}") }
             // Stay connected — the AAPS command queue disconnects when idle.
+        }
+    }
+
+    // ---- GLB safe variable: value(u32 LE) || ~value(u32 LE) ----
+    private fun glbEncode(value: Int): ByteArray {
+        val b = ByteArray(8)
+        le32(value, b, 0); le32(value.inv(), b, 4); return b
+    }
+
+    private fun glbFind(data: ByteArray): Int? {
+        if (data.size < 8) return null
+        for (s in 0..data.size - 8) {
+            val v = u32le(data, s); val c = u32le(data, s + 4)
+            if (v == c.inv()) return v
+        }
+        return null
+    }
+
+    private fun le32(v: Int, b: ByteArray, o: Int) {
+        b[o] = v.toByte(); b[o + 1] = (v shr 8).toByte(); b[o + 2] = (v shr 16).toByte(); b[o + 3] = (v shr 24).toByte()
+    }
+    private fun u32le(b: ByteArray, o: Int): Int =
+        (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or
+            ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
+
+    /**
+     * ZERO-THERAPY validation of the encrypted WRITE path against the real pump: read the event
+     * history COUNT, write the event INDEX of the newest entry (a read-selection write that does NOT
+     * change therapy), then read that entry back. Proves encrypt + multiframe-write + counter
+     * auto-sync work end-to-end before any dosing command is built. Requires counters seeded.
+     */
+    fun validateWriteTransport(onResult: (String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
+        readMultiframe(CHAR_EVENT_COUNT) { fc ->
+            val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
+            aapsLogger.info(LTag.PUMP, "YpsoPump event history count = $count")
+            if (count == null || count <= 0) { onResult("count read failed ($count)"); return@readMultiframe }
+            val idx = count - 1
+            aapsLogger.info(LTag.PUMP, "YpsoPump writing event index $idx (counter auto-sync from wc=${sessionCrypto.writeCounter})")
+            writeEncrypted(CHAR_EVENT_INDEX, YpsoCrc.appendCrc(glbEncode(idx))) { ok ->
+                if (!ok) { onResult("index write rejected"); return@writeEncrypted }
+                readMultiframe(CHAR_EVENT_VALUE) { fv ->
+                    val entry = runCatching {
+                        val body = sessionCrypto.decrypt(fv)
+                        val p = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
+                        "entry(${p.size}B): " + p.joinToString("") { "%02x".format(it) }
+                    }.getOrElse { "entry decrypt error: ${it.message}" }
+                    pumpState.lastConnectionTime = System.currentTimeMillis()
+                    onResult("OK count=$count newest=$entry")
+                }
+            }
         }
     }
 

@@ -66,14 +66,22 @@ class YpsoPumpPlugin @Inject constructor(
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean = false
 
+    private var writeValidationDone = false
+
+    private fun seedAndConnect() {
+        bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
+        if (YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0)
+            bleManager.setCounters(YpsoPumpConst.CAPTURED_WRITE_COUNTER, YpsoPumpConst.CAPTURED_REBOOT_COUNTER)
+        bleManager.connect(YpsoPumpConst.PUMP_MAC)
+    }
+
     override fun connect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "connect: $reason")
         if (YpsoPumpConst.CAPTURED_KEY_HEX.isEmpty()) {
             aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping connect")
             return
         }
-        bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
-        bleManager.connect(YpsoPumpConst.PUMP_MAC)
+        seedAndConnect()
     }
 
     override fun disconnect(reason: String) { aapsLogger.debug(LTag.PUMP, "disconnect: $reason"); bleManager.disconnect() }
@@ -85,10 +93,14 @@ class YpsoPumpPlugin @Inject constructor(
             aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping read")
             return
         }
-        // The command queue only runs this once connected; read over the open link. If we're somehow
-        // not connected, kick off a connect and let the next queue cycle read.
-        if (bleManager.isConnected) bleManager.readStatus()
-        else { bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX); bleManager.connect(YpsoPumpConst.PUMP_MAC) }
+        if (!bleManager.isConnected) { seedAndConnect(); return }
+        // ZERO-THERAPY write-transport validation runs once instead of a status read, when armed.
+        if (YpsoPumpConst.RUN_WRITE_VALIDATION && YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0 && !writeValidationDone) {
+            writeValidationDone = true
+            bleManager.validateWriteTransport { r -> aapsLogger.info(LTag.PUMP, "YpsoPump WRITE-VALIDATION: $r") }
+        } else {
+            bleManager.readStatus()
+        }
     }
 
     override val lastDataTime: Long get() = pumpState.lastConnectionTime

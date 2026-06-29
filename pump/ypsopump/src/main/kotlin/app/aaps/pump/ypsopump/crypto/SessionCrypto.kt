@@ -35,6 +35,13 @@ class SessionCrypto @Inject constructor() {
     fun encrypt(commandData: ByteArray): ByteArray {
         val key = sharedKey ?: throw IllegalStateException("No shared key set")
 
+        // PRE-increment the writeCounter: the pump requires the EXACT next counter (= last accepted
+        // + 1), so the first write after seeding N must use N+1. This matches the proven ypso-reader
+        // flow; the earlier POST-increment (first write used the seed verbatim) made the pump reject
+        // every write with counter-mismatch (err 138). Rejected writes do NOT advance the pump, so
+        // the caller auto-syncs by retrying with the next value on 138.
+        writeCounter++
+
         // Build plaintext: command + rebootCounter(4B LE) + writeCounter(8B LE).
         // Endianness is LITTLE — confirmed against real pump traffic (rebootCounter=8 is sane in LE
         // but garbage in BE; the pump's read counter is monotonic only when read as LE). The earlier
@@ -60,8 +67,6 @@ class SessionCrypto @Inject constructor() {
             nonce, key
         )
         if (!result) throw SecurityException("Encryption failed")
-
-        writeCounter++
 
         // Return ciphertext || nonce (nonce APPENDED, not prepended!)
         return ciphertext + nonce

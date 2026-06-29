@@ -53,4 +53,15 @@ object YpsoPumpConst {
     // the captured session key is sensitive and must NOT be committed/pushed.
     const val PUMP_MAC = "REDACTED"
     const val CAPTURED_KEY_HEX = ""   // paste the current captured sharedKey here to test
+
+    // -- Write path (counters). Needed only for WRITEs (history index, dosing); reads need none.
+    // Seed CAPTURED_WRITE_COUNTER with mylife's CURRENT numericWriteAppCounter (frida ml-readprefs,
+    // captured while mylife is IDLE so it's stable); the cryptor uses seed+1 and auto-syncs on err 138.
+    // REBOOT_COUNTER must match the pump's (mylife's stored rebootCounter, currently 8).
+    const val CAPTURED_WRITE_COUNTER = -1L   // <0 = writes disabled (read-only)
+    const val CAPTURED_REBOOT_COUNTER = 8
+
+    // -- Test flag: run the ZERO-THERAPY write-transport validation (history index write + entry read)
+    // once after connect, instead of a status read. Set false for normal status reads. Never dosing.
+    const val RUN_WRITE_VALIDATION = false
 }
