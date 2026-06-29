@@ -188,6 +188,7 @@ dependencies {
     implementation(project(":pump:eopatch"))
     implementation(project(":pump:medtrum"))
     implementation(project(":pump:equil"))
+    implementation(project(":pump:ypsopump"))
     implementation(project(":pump:insight"))
     implementation(project(":pump:medtronic"))
     implementation(project(":pump:common"))
