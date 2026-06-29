@@ -59,24 +59,36 @@ class YpsoPumpPlugin @Inject constructor(
         pumpEnactResultProvider.get().success(false).enacted(false).comment("YpsoPump: not implemented yet")
 
     // ---- state (read-only) ----
-    override fun isInitialized(): Boolean = pumpState.isConnected
+    override fun isInitialized(): Boolean = pumpState.lastConnectionTime > 0L
     override fun isSuspended(): Boolean = pumpState.isSuspended
     override fun isBusy(): Boolean = false
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean = false
 
-    override fun connect(reason: String) { aapsLogger.debug(LTag.PUMP, "connect: $reason"); getPumpStatus(reason) }
+    override fun connect(reason: String) {
+        aapsLogger.debug(LTag.PUMP, "connect: $reason")
+        if (YpsoPumpConst.CAPTURED_KEY_HEX.isEmpty()) {
+            aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping connect")
+            return
+        }
+        bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
+        bleManager.connect(YpsoPumpConst.PUMP_MAC)
+    }
+
     override fun disconnect(reason: String) { aapsLogger.debug(LTag.PUMP, "disconnect: $reason"); bleManager.disconnect() }
     override fun stopConnecting() { bleManager.disconnect() }
+
     override fun getPumpStatus(reason: String) {
         aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason")
-        if (YpsoPumpConst.CAPTURED_KEY_HEX.isNotEmpty()) {
-            bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
-            bleManager.connectAndReadStatus(YpsoPumpConst.PUMP_MAC)
-        } else {
-            aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping connect")
+        if (YpsoPumpConst.CAPTURED_KEY_HEX.isEmpty()) {
+            aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping read")
+            return
         }
+        // The command queue only runs this once connected; read over the open link. If we're somehow
+        // not connected, kick off a connect and let the next queue cycle read.
+        if (bleManager.isConnected) bleManager.readStatus()
+        else { bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX); bleManager.connect(YpsoPumpConst.PUMP_MAC) }
     }
 
     override val lastDataTime: Long get() = pumpState.lastConnectionTime

@@ -53,16 +53,29 @@ class YpsoBleManager @Inject constructor(
         sessionCrypto.sharedKey = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 
+    /**
+     * Open the GATT link and authenticate, then STAY connected. Returns immediately; the connection
+     * proceeds asynchronously (CONNECTING -> DISCOVERING -> CONNECTED once MD5 auth succeeds). The
+     * AAPS command queue drives reads via [readStatus] while connected and calls [disconnect] when
+     * idle — so we must not auto-disconnect here (that caused a 1s reconnect storm).
+     */
     @SuppressLint("MissingPermission")
-    fun connectAndReadStatus(macAddress: String) {
+    fun connect(macAddress: String) {
+        if (isConnected || pumpState.connectionState == ConnectionState.CONNECTING) return
         val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         if (adapter == null || !adapter.isEnabled) { aapsLogger.error(LTag.PUMP, "YpsoPump: Bluetooth off"); return }
         val device = adapter.getRemoteDevice(macAddress)
         pumpState.pumpAddress = macAddress
         pumpState.connectionState = ConnectionState.CONNECTING
         aapsLogger.info(LTag.PUMP, "YpsoPump connecting to $macAddress (bonded=${device.bondState == BluetoothDevice.BOND_BONDED})")
-        queue.clear(); current = null
+        synchronized(opLock) { queue.clear(); current = null }
         bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    /** Read SYSTEM_STATUS over the already-open connection and update [YpsoPumpState]. No disconnect. */
+    fun readStatus() {
+        if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump readStatus: not connected"); return }
+        readStatusInternal()
     }
 
     @SuppressLint("MissingPermission")
@@ -73,12 +86,25 @@ class YpsoBleManager @Inject constructor(
     }
 
     // ---- serial GATT op queue ----
+    // Ops are enqueued from the AAPS queue-worker thread ([readStatus]) and completed from the BLE
+    // binder/callback thread, so the queue state is guarded by [opLock].
     private class Op(val action: (BluetoothGatt) -> Unit, val onResult: (ByteArray?, Int) -> Unit)
+    private val opLock = Any()
     private val queue = ArrayDeque<Op>()
     private var current: Op? = null
-    private fun enqueue(op: Op) { queue.addLast(op); pumpOps() }
-    private fun pumpOps() { if (current == null) queue.removeFirstOrNull()?.let { op -> current = op; bluetoothGatt?.let(op.action) } }
-    private fun complete(value: ByteArray?, status: Int) { val op = current; current = null; op?.onResult(value, status); pumpOps() }
+    private fun enqueue(op: Op) { synchronized(opLock) { queue.addLast(op) }; pumpOps() }
+    private fun pumpOps() {
+        val op = synchronized(opLock) {
+            if (current != null) return
+            queue.removeFirstOrNull()?.also { current = it }
+        } ?: return
+        bluetoothGatt?.let(op.action) ?: complete(null, -1)
+    }
+    private fun complete(value: ByteArray?, status: Int) {
+        val op = synchronized(opLock) { current.also { current = null } }
+        op?.onResult(value, status)
+        pumpOps()
+    }
 
     @SuppressLint("MissingPermission")
     private fun readOp(uuid: UUID, onResult: (ByteArray?, Int) -> Unit) =
@@ -113,7 +139,7 @@ class YpsoBleManager @Inject constructor(
 
     private fun fail(msg: String) { aapsLogger.error(LTag.PUMP, "YpsoPump: $msg"); disconnect() }
 
-    private fun readStatusThenDisconnect() {
+    private fun readStatusInternal() {
         readMultiframe(CHAR_STATUS) { frame ->
             runCatching {
                 val body = sessionCrypto.decrypt(frame)                       // strips 12-byte LE counter tail
@@ -131,7 +157,7 @@ class YpsoBleManager @Inject constructor(
                     aapsLogger.error(LTag.PUMP, "YpsoPump status decode failed (${payload.size}B)")
                 }
             }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump status decrypt error: ${it.message}") }
-            disconnect()
+            // Stay connected — the AAPS command queue disconnects when idle.
         }
     }
 
@@ -147,14 +173,19 @@ class YpsoBleManager @Inject constructor(
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) { fail("service discovery failed ($status)"); return }
             val auth = findChar(g, CHAR_AUTH) ?: run { fail("AUTH characteristic not found"); return }
-            pumpState.connectionState = ConnectionState.CONNECTED
+            pumpState.connectionState = ConnectionState.DISCOVERING
             aapsLogger.info(LTag.PUMP, "YpsoPump connected; writing MD5 auth")
             g.writeCharacteristic(auth, authPassword(pumpState.pumpAddress), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
-            if (ch.uuid == CHAR_AUTH) { aapsLogger.debug(LTag.PUMP, "auth write status=$status"); readStatusThenDisconnect() }
-            else complete(null, status)
+            if (ch.uuid == CHAR_AUTH) {
+                aapsLogger.debug(LTag.PUMP, "auth write status=$status")
+                if (status != BluetoothGatt.GATT_SUCCESS) { fail("auth write failed ($status)"); return }
+                // Authenticated: now report CONNECTED so the queue can drive reads. Stay connected.
+                pumpState.connectionState = ConnectionState.CONNECTED
+                aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; ready")
+            } else complete(null, status)
         }
 
         override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
