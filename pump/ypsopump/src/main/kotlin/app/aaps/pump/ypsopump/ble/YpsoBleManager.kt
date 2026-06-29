@@ -1,41 +1,30 @@
 package app.aaps.pump.ypsopump.ble
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.os.ParcelUuid
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.pump.ypsopump.YpsoPumpConst
+import app.aaps.pump.ypsopump.comm.YpsoCrc
+import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
+import java.security.MessageDigest
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * BLE communication manager for YpsoPump.
+ * BLE manager for the YpsoPump — read-only flow, validated against a real pump in the `ypso-reader`
+ * reference app: connect over the existing OS bond -> MD5(mac+salt) auth -> multi-frame read of
+ * SYSTEM_STATUS -> XChaCha20-Poly1305 decrypt -> parse -> update [YpsoPumpState].
  *
- * Handles scanning, GATT connection, service discovery, notification
- * management, and encrypted read/write operations.
- *
- * Communication flow:
- *   scan → connect → discoverServices → enableNotifications →
- *   [keyExchange if needed] → sendCommand / receiveResponse
+ * Set the captured session key with [setSharedKey] before connecting. No write/dosing path here yet.
  */
 @Singleton
 class YpsoBleManager @Inject constructor(
@@ -45,186 +34,130 @@ class YpsoBleManager @Inject constructor(
     private val pumpState: YpsoPumpState
 ) {
 
+    enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, DISCOVERING, READY, CONNECTED }
+
     private var bluetoothGatt: BluetoothGatt? = null
-    private var pendingResponse: CompletableDeferred<ByteArray>? = null
-    private val characteristicMap = GattAttributes.CharacteristicMap()
+    val isConnected: Boolean get() = pumpState.connectionState == ConnectionState.CONNECTED
 
-    val isConnected: Boolean
-        get() = bluetoothGatt != null && pumpState.connectionState == ConnectionState.CONNECTED
-
-    enum class ConnectionState {
-        DISCONNECTED, SCANNING, CONNECTING, DISCOVERING, READY, CONNECTED
+    companion object {
+        private val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
+        private val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
+        private val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
+        private val AUTH_SALT = byteArrayOf(
+            0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
+        )
     }
 
-    // -- Scanning --
-
-    @SuppressLint("MissingPermission")
-    fun startScan(onFound: (BluetoothDevice) -> Unit) {
-        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val scanner = manager.adapter.bluetoothLeScanner ?: run {
-            aapsLogger.error(LTag.PUMP, "BLE Scanner not available")
-            return
-        }
-
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(YpsoPumpConst.SCAN_FILTER_UUID))
-            .build()
-
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        pumpState.connectionState = ConnectionState.SCANNING
-        aapsLogger.info(LTag.PUMP, "Starting BLE scan for YpsoPump...")
-
-        scanner.startScan(listOf(filter), settings, object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                val name = result.device.name ?: return
-                if (name.startsWith(YpsoPumpConst.DEVICE_NAME_PREFIX)) {
-                    aapsLogger.info(LTag.PUMP, "Found YpsoPump: $name (${result.device.address})")
-                    scanner.stopScan(this)
-                    onFound(result.device)
-                }
-            }
-
-            override fun onScanFailed(errorCode: Int) {
-                aapsLogger.error(LTag.PUMP, "BLE scan failed: $errorCode")
-                pumpState.connectionState = ConnectionState.DISCONNECTED
-            }
-        })
+    /** Seed the captured session key (hex) into the cryptor before connecting. */
+    fun setSharedKey(hex: String) {
+        sessionCrypto.sharedKey = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 
-    // -- Connection --
-
     @SuppressLint("MissingPermission")
-    fun connect(device: BluetoothDevice) {
+    fun connectAndReadStatus(macAddress: String) {
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        if (adapter == null || !adapter.isEnabled) { aapsLogger.error(LTag.PUMP, "YpsoPump: Bluetooth off"); return }
+        val device = adapter.getRemoteDevice(macAddress)
+        pumpState.pumpAddress = macAddress
         pumpState.connectionState = ConnectionState.CONNECTING
-        aapsLogger.info(LTag.PUMP, "Connecting to ${device.name}...")
+        aapsLogger.info(LTag.PUMP, "YpsoPump connecting to $macAddress (bonded=${device.bondState == BluetoothDevice.BOND_BONDED})")
+        queue.clear(); current = null
         bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        bluetoothGatt?.let { gatt ->
-            aapsLogger.info(LTag.PUMP, "Disconnecting from pump")
-            gatt.disconnect()
-            gatt.close()
-        }
+        runCatching { bluetoothGatt?.disconnect(); bluetoothGatt?.close() }
         bluetoothGatt = null
         pumpState.connectionState = ConnectionState.DISCONNECTED
-        sessionCrypto.reset()
     }
 
-    // -- Command Send/Receive --
+    // ---- serial GATT op queue ----
+    private class Op(val action: (BluetoothGatt) -> Unit, val onResult: (ByteArray?, Int) -> Unit)
+    private val queue = ArrayDeque<Op>()
+    private var current: Op? = null
+    private fun enqueue(op: Op) { queue.addLast(op); pumpOps() }
+    private fun pumpOps() { if (current == null) queue.removeFirstOrNull()?.let { op -> current = op; bluetoothGatt?.let(op.action) } }
+    private fun complete(value: ByteArray?, status: Int) { val op = current; current = null; op?.onResult(value, status); pumpOps() }
 
-    /**
-     * Send an encrypted command and wait for the response.
-     * @param characteristicUuid UUID of the target characteristic
-     * @param commandData raw command data (will be encrypted)
-     * @return decrypted response data
-     */
     @SuppressLint("MissingPermission")
-    suspend fun sendCommand(characteristicUuid: UUID, commandData: ByteArray): ByteArray {
-        val gatt = bluetoothGatt ?: throw IllegalStateException("Not connected")
-        val service = gatt.getService(YpsoPumpConst.GENERAL_SERVICE_UUID)
-            ?: throw IllegalStateException("YpsoPump service not found")
-        val characteristic = service.getCharacteristic(characteristicUuid)
-            ?: throw IllegalStateException("Characteristic $characteristicUuid not found")
+    private fun readOp(uuid: UUID, onResult: (ByteArray?, Int) -> Unit) =
+        enqueue(Op({ g -> findChar(g, uuid)?.let { g.readCharacteristic(it) } ?: complete(null, -1) }, onResult))
 
-        // Encrypt
-        val encrypted = sessionCrypto.encrypt(commandData)
-
-        // Set up response deferred
-        val deferred = CompletableDeferred<ByteArray>()
-        pendingResponse = deferred
-
-        // Enable notifications
-        gatt.setCharacteristicNotification(characteristic, true)
-        val cccd = characteristic.getDescriptor(YpsoPumpConst.CCCD_UUID)
-        cccd?.let {
-            it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            gatt.writeDescriptor(it)
+    private fun readMultiframe(uuid: UUID, done: (ByteArray) -> Unit) {
+        val frames = ArrayList<ByteArray>()
+        fun step(now: UUID): Unit = readOp(now) { v, s ->
+            if (s != BluetoothGatt.GATT_SUCCESS || v == null) { fail("read $now failed (status=$s)"); return@readOp }
+            frames.add(v)
+            val total = (frames[0][0].toInt() and 0x0F).let { if (it == 0) 1 else it }
+            if (frames.size < total) step(CHAR_EXTREAD) else done(reassemble(frames))
         }
-
-        // Write encrypted data
-        characteristic.value = encrypted
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        gatt.writeCharacteristic(characteristic)
-
-        aapsLogger.debug(LTag.PUMP, "Sent ${encrypted.size} bytes to $characteristicUuid")
-
-        // Wait for response with timeout
-        return try {
-            withTimeout(YpsoPumpConst.COMMAND_TIMEOUT_MS) {
-                val response = deferred.await()
-                // Decrypt response
-                sessionCrypto.decrypt(response)
-            }
-        } catch (e: TimeoutCancellationException) {
-            pendingResponse = null
-            throw RuntimeException("Command timeout for $characteristicUuid", e)
-        }
+        step(uuid)
     }
 
-    // -- GATT Callback --
+    private fun reassemble(frames: List<ByteArray>): ByteArray {
+        val out = ArrayList<Byte>()
+        for (f in frames) if (f.size > 1) for (i in 1 until f.size) out.add(f[i])
+        return out.toByteArray()
+    }
+
+    private fun findChar(g: BluetoothGatt, uuid: UUID): BluetoothGattCharacteristic? {
+        for (s in g.services) s.getCharacteristic(uuid)?.let { return it }
+        return null
+    }
+
+    private fun authPassword(mac: String): ByteArray {
+        val macBytes = mac.replace(":", "").chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        return MessageDigest.getInstance("MD5").digest(macBytes + AUTH_SALT)
+    }
+
+    private fun fail(msg: String) { aapsLogger.error(LTag.PUMP, "YpsoPump: $msg"); disconnect() }
+
+    private fun readStatusThenDisconnect() {
+        readMultiframe(CHAR_STATUS) { frame ->
+            runCatching {
+                val body = sessionCrypto.decrypt(frame)                       // strips 12-byte LE counter tail
+                val payload = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
+                val status = StatusCommand().apply { decode(payload) }
+                if (status.success) {
+                    pumpState.reservoirUnits = status.reservoirUnits
+                    pumpState.batteryPercent = status.batteryPercent
+                    pumpState.isSuspended = status.isSuspended
+                    pumpState.activeTbrPercent = status.activeTbrPercent
+                    pumpState.lastStatusTime = System.currentTimeMillis()
+                    pumpState.lastConnectionTime = System.currentTimeMillis()
+                    aapsLogger.info(LTag.PUMP, "YpsoPump status: reservoir=${status.reservoirUnits}U battery=${status.batteryPercent}%")
+                } else {
+                    aapsLogger.error(LTag.PUMP, "YpsoPump status decode failed (${payload.size}B)")
+                }
+            }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump status decrypt error: ${it.message}") }
+            disconnect()
+        }
+    }
 
     @SuppressLint("MissingPermission")
     private val gattCallback = object : BluetoothGattCallback() {
-
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
-                BluetoothProfile.STATE_CONNECTED -> {
-                    aapsLogger.info(LTag.PUMP, "GATT connected, requesting MTU 512")
-                    pumpState.connectionState = ConnectionState.CONNECTING
-                    gatt.requestMtu(512)
-                }
-                BluetoothProfile.STATE_DISCONNECTED -> {
-                    aapsLogger.info(LTag.PUMP, "GATT disconnected (status=$status)")
-                    pumpState.connectionState = ConnectionState.DISCONNECTED
-                    bluetoothGatt = null
-                }
+                BluetoothProfile.STATE_CONNECTED    -> { pumpState.connectionState = ConnectionState.DISCOVERING; g.discoverServices() }
+                BluetoothProfile.STATE_DISCONNECTED -> { pumpState.connectionState = ConnectionState.DISCONNECTED; bluetoothGatt = null }
             }
         }
 
-        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            aapsLogger.info(LTag.PUMP, "MTU changed to $mtu")
-            pumpState.connectionState = ConnectionState.DISCOVERING
-            gatt.discoverServices()
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) { fail("service discovery failed ($status)"); return }
+            val auth = findChar(g, CHAR_AUTH) ?: run { fail("AUTH characteristic not found"); return }
+            pumpState.connectionState = ConnectionState.CONNECTED
+            aapsLogger.info(LTag.PUMP, "YpsoPump connected; writing MD5 auth")
+            g.writeCharacteristic(auth, authPassword(pumpState.pumpAddress), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         }
 
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                aapsLogger.info(LTag.PUMP, "Services discovered")
-                val service = gatt.getService(YpsoPumpConst.GENERAL_SERVICE_UUID)
-                if (service != null) {
-                    aapsLogger.info(LTag.PUMP, "Found YpsoPump service with ${service.characteristics.size} characteristics")
-                    pumpState.connectionState = ConnectionState.CONNECTED
-                } else {
-                    aapsLogger.error(LTag.PUMP, "YpsoPump service not found!")
-                    disconnect()
-                }
-            } else {
-                aapsLogger.error(LTag.PUMP, "Service discovery failed: $status")
-                disconnect()
-            }
+        override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            if (ch.uuid == CHAR_AUTH) { aapsLogger.debug(LTag.PUMP, "auth write status=$status"); readStatusThenDisconnect() }
+            else complete(null, status)
         }
 
-        @Deprecated("Deprecated in API 33")
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            val value = characteristic.value ?: return
-            aapsLogger.debug(LTag.PUMP, "Notification from ${characteristic.uuid}: ${value.size} bytes")
-            pendingResponse?.complete(value)
-            pendingResponse = null
-        }
-
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
-        ) {
-            aapsLogger.debug(LTag.PUMP, "Notification from ${characteristic.uuid}: ${value.size} bytes")
-            pendingResponse?.complete(value)
-            pendingResponse = null
-        }
+        override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
+            complete(value, status)
     }
 }

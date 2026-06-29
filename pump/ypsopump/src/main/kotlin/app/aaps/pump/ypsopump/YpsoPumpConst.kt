@@ -47,4 +47,10 @@ object YpsoPumpConst {
     const val PREF_REBOOT_COUNTER = "ypso_reboot_counter"
     const val PREF_KEY_DATE = "ypso_key_date"
     const val PREF_PUMP_SERIAL = "ypso_pump_serial"
+
+    // -- Test wiring (read-only milestone) --
+    // TODO: load from EncryptedSharedPreferences. Filled in locally for on-device testing only;
+    // the captured session key is sensitive and must NOT be committed/pushed.
+    const val PUMP_MAC = "REDACTED"
+    const val CAPTURED_KEY_HEX = ""   // paste the current captured sharedKey here to test
 }

@@ -18,6 +18,7 @@ import app.aaps.core.interfaces.pump.defs.fillFor
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import javax.inject.Inject
@@ -38,6 +39,7 @@ class YpsoPumpPlugin @Inject constructor(
     preferences: Preferences,
     commandQueue: CommandQueue,
     private val pumpState: YpsoPumpState,
+    private val bleManager: YpsoBleManager,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
@@ -64,10 +66,18 @@ class YpsoPumpPlugin @Inject constructor(
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
     override fun isHandshakeInProgress(): Boolean = false
 
-    override fun connect(reason: String) { aapsLogger.debug(LTag.PUMP, "connect: $reason") }
-    override fun disconnect(reason: String) { aapsLogger.debug(LTag.PUMP, "disconnect: $reason") }
-    override fun stopConnecting() {}
-    override fun getPumpStatus(reason: String) { aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason") }
+    override fun connect(reason: String) { aapsLogger.debug(LTag.PUMP, "connect: $reason"); getPumpStatus(reason) }
+    override fun disconnect(reason: String) { aapsLogger.debug(LTag.PUMP, "disconnect: $reason"); bleManager.disconnect() }
+    override fun stopConnecting() { bleManager.disconnect() }
+    override fun getPumpStatus(reason: String) {
+        aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason")
+        if (YpsoPumpConst.CAPTURED_KEY_HEX.isNotEmpty()) {
+            bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
+            bleManager.connectAndReadStatus(YpsoPumpConst.PUMP_MAC)
+        } else {
+            aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping connect")
+        }
+    }
 
     override val lastDataTime: Long get() = pumpState.lastConnectionTime
     override val lastBolusTime: Long? get() = null
