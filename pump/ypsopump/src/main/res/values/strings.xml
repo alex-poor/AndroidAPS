@@ -1,0 +1,5 @@
+<resources>
+    <string name="ypsopump_name">YpsoPump</string>
+    <string name="ypsopump_name_short">Ypso</string>
+    <string name="ypsopump_description">Ypsomed YpsoPump driver</string>
+</resources>
