@@ -65,10 +65,12 @@ class YpsoBleManager @Inject constructor(
         private val AUTH_SALT = byteArrayOf(
             0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
         )
-        // ATT application-error 0x8A returned by the pump on a rejected WRITE. Originally assumed to mean
-        // "write-counter mismatch" — that was WRONG: it is primarily the WRITE-HANDSHAKE precondition
-        // (no active CHAR_CTRL_NOTIFY subscription). With notifications enabled the counter logic below
-        // becomes meaningful again; a wrong counter may surface as this or a different code (TBD on device).
+        // ATT application-error 0x8A the pump returns on a rejected WRITE — a GENERIC "command invalid".
+        // On-device testing disproved both earlier theories: it is NOT a write-counter mismatch (every
+        // counter probed gave 0x8A) and NOT a missing notification subscription (writes still got 0x8A
+        // with CHAR_CTRL_NOTIFY enabled). The actual cause was a MALFORMED command — a CRC wrongly
+        // appended to the 8-byte GLB index command (fixed: index writes now send bare glbEncode). Whether
+        // a wrong write-counter also surfaces as 0x8A vs a distinct code is still TBD on the pump.
         private const val ERR_WRITE_REJECTED = 138
         private const val COUNTER_SYNC_TRIES = 40
         private const val DISCOVER_RADIUS = 1200
@@ -360,7 +362,10 @@ class YpsoBleManager @Inject constructor(
             // readCounter is hopeless. Expected accept = seed+1.
             val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
             val idx = count - 1
-            val payload = YpsoCrc.appendCrc(glbEncode(idx))
+            // Index/selection commands are complement-protected (value||~value) and carry NO CRC —
+            // verified against mylife's accepted event-index writes (8-byte `00000000ffffffff`, no CRC).
+            // Appending a CRC here (as bolus does) makes a 10-byte command the pump rejects with 0x8A.
+            val payload = glbEncode(idx)
             val rc = sessionCrypto.readCounter
             aapsLogger.info(LTag.PUMP, "YpsoPump COUNTERS: pump rebootCounter=${sessionCrypto.rebootCounter} (seeded ${YpsoPumpConst.CAPTURED_REBOOT_COUNTER}), readCounter=$rc, writeSeed=$base")
             // DECISIVE PROBE: is the write counter in the READ-counter sequence (shared) or near writeSeed?
@@ -397,7 +402,7 @@ class YpsoBleManager @Inject constructor(
             if (count == null || count <= 0) { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter: count read failed ($count)"); onResult(false); return@readMultiframe }
             val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
             aapsLogger.info(LTag.PUMP, "YpsoPump establishCounter: count=$count, discovering write counter (base=$base)")
-            writeEncryptedDiscover(CHAR_EVENT_INDEX, YpsoCrc.appendCrc(glbEncode(count - 1)), base, onResult)
+            writeEncryptedDiscover(CHAR_EVENT_INDEX, glbEncode(count - 1), base, onResult)   // GLB command: no CRC
         }
     }
 
@@ -468,7 +473,7 @@ class YpsoBleManager @Inject constructor(
      */
     fun testBolusCanary(units: Double, seedW: Long, onResult: (String) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
-        val canary = YpsoCrc.appendCrc(glbEncode(0))           // select event index 0 — zero therapy
+        val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
         val candidates = listOf(seedW + 1, seedW, seedW + 2)
         fun tryCanary(i: Int) {
             if (i >= candidates.size) { onResult("CANARY FAILED (tried $candidates) — counter off, NO BOLUS sent"); return }
