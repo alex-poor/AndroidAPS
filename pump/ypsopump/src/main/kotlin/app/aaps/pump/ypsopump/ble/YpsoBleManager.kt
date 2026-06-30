@@ -349,19 +349,28 @@ class YpsoBleManager @Inject constructor(
             // readCounter is hopeless. Expected accept = seed+1.
             val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
             val idx = count - 1
-            aapsLogger.info(LTag.PUMP, "YpsoPump COUNTERS: pump rebootCounter=${sessionCrypto.rebootCounter} (seeded ${YpsoPumpConst.CAPTURED_REBOOT_COUNTER}), readCounter=${sessionCrypto.readCounter}, writeSeed=$base")
-            discoverCounterBinary(CHAR_EVENT_INDEX, YpsoCrc.appendCrc(glbEncode(idx)), base) { ok ->
-                if (!ok) { onResult("index write rejected"); return@discoverCounterBinary }
-                readMultiframe(CHAR_EVENT_VALUE) { fv ->
-                    val entry = runCatching {
-                        val body = sessionCrypto.decrypt(fv)
-                        val p = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
-                        "entry(${p.size}B): " + p.joinToString("") { "%02x".format(it) }
-                    }.getOrElse { "entry decrypt error: ${it.message}" }
-                    pumpState.lastConnectionTime = System.currentTimeMillis()
-                    onResult("OK count=$count newest=$entry")
+            val payload = YpsoCrc.appendCrc(glbEncode(idx))
+            val rc = sessionCrypto.readCounter
+            aapsLogger.info(LTag.PUMP, "YpsoPump COUNTERS: pump rebootCounter=${sessionCrypto.rebootCounter} (seeded ${YpsoPumpConst.CAPTURED_REBOOT_COUNTER}), readCounter=$rc, writeSeed=$base")
+            // DECISIVE PROBE: is the write counter in the READ-counter sequence (shared) or near writeSeed?
+            val probeSet = listOf(rc + 1, rc, rc - 1, rc + 2, base + 1)
+            fun probeNext(i: Int) {
+                if (i >= probeSet.size) {
+                    aapsLogger.info(LTag.PUMP, "YpsoPump read-region probes all 138; falling back to upward scan from writeSeed=$base")
+                    discoverCounterBinary(CHAR_EVENT_INDEX, payload, base) { ok ->
+                        if (!ok) { onResult("index write rejected"); return@discoverCounterBinary }
+                        onResult("OK via scan (writeCounter=${sessionCrypto.writeCounter})")
+                    }
+                    return
+                }
+                val c = probeSet[i]
+                writeOnceAt(CHAR_EVENT_INDEX, payload, c) { st ->
+                    aapsLogger.info(LTag.PUMP, "YpsoPump PROBE c=$c -> status=$st  (rc=$rc, writeSeed=$base)")
+                    if (st == BluetoothGatt.GATT_SUCCESS) onResult("WRITE ACCEPTED at counter=$c  [readCounter=$rc writeSeed=$base]")
+                    else probeNext(i + 1)
                 }
             }
+            probeNext(0)
         }
     }
 
@@ -428,6 +437,56 @@ class YpsoBleManager @Inject constructor(
                     pumpState.lastConnectionTime = System.currentTimeMillis()
                     onResult("BOLUS ACCEPTED status=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
                 }
+            }
+        }
+    }
+
+    /** One encrypted write at EXACTLY [counter] (no auto-sync). onStatus gets the raw GATT status. */
+    private fun writeOnceAt(uuid: UUID, command: ByteArray, counter: Long, onStatus: (Int) -> Unit) {
+        sessionCrypto.writeCounter = counter - 1               // cryptor pre-increments to [counter]
+        val frame = runCatching { sessionCrypto.encrypt(command) }
+            .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onStatus(-99); return }
+        writeFrames(uuid, frame, onStatus)
+    }
+
+    /**
+     * SAFE single test bolus. Locks the write counter on the BENIGN event-index char first (canary:
+     * tries seed+1, seed, seed+2 — a wrong counter is rejected with NO pump effect), then sends the
+     * bolus EXACTLY ONCE at the confirmed next counter. No auto-sync, no scanning. If the canary can't
+     * be confirmed in that tiny window it ABORTS and the bolus char is never written.
+     */
+    fun testBolusCanary(units: Double, seedW: Long, onResult: (String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
+        val canary = YpsoCrc.appendCrc(glbEncode(0))           // select event index 0 — zero therapy
+        val candidates = listOf(seedW + 1, seedW, seedW + 2)
+        fun tryCanary(i: Int) {
+            if (i >= candidates.size) { onResult("CANARY FAILED (tried $candidates) — counter off, NO BOLUS sent"); return }
+            val c = candidates[i]
+            aapsLogger.info(LTag.PUMP, "YpsoPump canary index-write @counter=$c")
+            writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
+                when (status) {
+                    BluetoothGatt.GATT_SUCCESS   -> {
+                        aapsLogger.info(LTag.PUMP, "YpsoPump CANARY ACCEPTED @$c — counter locked; bolus will be @${c + 1}")
+                        sendTestBolus(units, c, onResult)
+                    }
+                    ERR_COUNTER_MISMATCH         -> tryCanary(i + 1)
+                    else                         -> onResult("canary write status=$status — ABORT, NO BOLUS")
+                }
+            }
+        }
+        tryCanary(0)
+    }
+
+    private fun sendTestBolus(units: Double, lockedCounter: Long, onResult: (String) -> Unit) {
+        val cmd = BolusCommand(units)                          // standard/immediate bolus
+        val boIns = cmd.encode()
+        aapsLogger.info(LTag.PUMP, "YpsoPump >>> SENDING BOLUS ${units}U @counter=${lockedCounter + 1} raw=${boIns.joinToString("") { "%02x".format(it) }}")
+        writeOnceAt(CHAR_BOLUS_START_STOP, YpsoCrc.appendCrc(boIns), lockedCounter + 1) { status ->
+            if (status != BluetoothGatt.GATT_SUCCESS) { onResult("BOLUS REJECTED status=$status @${lockedCounter + 1} — check pump, likely not delivered"); return@writeOnceAt }
+            aapsLogger.info(LTag.PUMP, "YpsoPump >>> BOLUS ACCEPTED @${lockedCounter + 1}")
+            readBolusStatus { st ->
+                pumpState.lastConnectionTime = System.currentTimeMillis()
+                onResult("BOLUS ACCEPTED ${units}U; bolusStatus=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U | FINAL writeCounter=${sessionCrypto.writeCounter} readCounter=${sessionCrypto.readCounter}")
             }
         }
     }

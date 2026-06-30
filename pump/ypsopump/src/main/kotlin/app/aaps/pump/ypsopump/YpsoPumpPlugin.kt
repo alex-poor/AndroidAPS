@@ -100,14 +100,15 @@ class YpsoPumpPlugin @Inject constructor(
         // finished and disconnects (5s idle) mid-write. The GATT callbacks run on the BLE binder
         // thread, so blocking here is safe. Real dosing (deliverTreatment) must block the same way.
         when {
-            // SAFETY-CRITICAL: deliver one real bolus. Armed only behind explicit consent.
+            // SAFETY-CRITICAL: deliver one real bolus via the canary-gated safe path (no scan, no
+            // auto-sync; aborts before the bolus char if the seeded write counter is wrong).
             YpsoPumpConst.RUN_TEST_BOLUS && !testBolusDone -> {
                 testBolusDone = true
                 val latch = java.util.concurrent.CountDownLatch(1)
-                bleManager.deliverBolus(YpsoPumpConst.TEST_BOLUS_UNITS, 0, 0.0) { r ->
+                bleManager.testBolusCanary(YpsoPumpConst.TEST_BOLUS_UNITS, YpsoPumpConst.CAPTURED_WRITE_COUNTER) { r ->
                     aapsLogger.info(LTag.PUMP, "YpsoPump TEST-BOLUS: $r"); latch.countDown()
                 }
-                latch.await(20, java.util.concurrent.TimeUnit.MINUTES)
+                latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
             }
             // READ-ONLY diagnostic: event-count (single-frame key check) -> system status -> bolus
             // status. No writes — safe mid-bolus. Per-frame logging shows exactly what the pump returns.
