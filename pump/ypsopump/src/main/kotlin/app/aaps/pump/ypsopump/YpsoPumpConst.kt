@@ -74,4 +74,12 @@ object YpsoPumpConst {
     // with the pump observed. Leave false otherwise.
     const val RUN_TEST_BOLUS = false
     const val TEST_BOLUS_UNITS = 0.1
+
+    // -- Test flag: set ONE temporary basal rate once after connect (canary-gated, like the bolus).
+    // TEST_TBR_PERCENT 0 = SUSPEND basal (REDUCES insulin — the safe first TBR test); 100 = cancel.
+    // The pump auto-reverts after TEST_TBR_DURATION_MIN. Writes the pump (advances the counter →
+    // recover mylife after). Leave false otherwise.
+    const val RUN_TEST_TBR = false
+    const val TEST_TBR_PERCENT = 0
+    const val TEST_TBR_DURATION_MIN = 3
 }

@@ -68,6 +68,7 @@ class YpsoPumpPlugin @Inject constructor(
 
     private var writeValidationDone = false
     private var testBolusDone = false
+    private var testTbrDone = false
     private var bolusStatusReadDone = false
 
     private fun seedAndConnect() {
@@ -107,6 +108,15 @@ class YpsoPumpPlugin @Inject constructor(
                 val latch = java.util.concurrent.CountDownLatch(1)
                 bleManager.testBolusCanary(YpsoPumpConst.TEST_BOLUS_UNITS, YpsoPumpConst.CAPTURED_WRITE_COUNTER) { r ->
                     aapsLogger.info(LTag.PUMP, "YpsoPump TEST-BOLUS: $r"); latch.countDown()
+                }
+                latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
+            }
+            // Set ONE TBR via the canary-gated safe path (0% = suspend basal, reduces insulin).
+            YpsoPumpConst.RUN_TEST_TBR && !testTbrDone -> {
+                testTbrDone = true
+                val latch = java.util.concurrent.CountDownLatch(1)
+                bleManager.testTbrCanary(YpsoPumpConst.TEST_TBR_PERCENT, YpsoPumpConst.TEST_TBR_DURATION_MIN, YpsoPumpConst.CAPTURED_WRITE_COUNTER) { r ->
+                    aapsLogger.info(LTag.PUMP, "YpsoPump TEST-TBR: $r"); latch.countDown()
                 }
                 latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
             }
