@@ -10,8 +10,10 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.pump.ypsopump.YpsoPumpConst
 import app.aaps.pump.ypsopump.comm.YpsoCrc
 import app.aaps.pump.ypsopump.comm.YpsoFraming
+import app.aaps.pump.ypsopump.comm.commands.BolusCommand
 import app.aaps.pump.ypsopump.comm.commands.StatusCommand
 import app.aaps.pump.ypsopump.crypto.SessionCrypto
 import app.aaps.pump.ypsopump.data.YpsoPumpState
@@ -58,6 +60,7 @@ class YpsoBleManager @Inject constructor(
         )
         private const val ERR_COUNTER_MISMATCH = 138
         private const val COUNTER_SYNC_TRIES = 40
+        private const val DISCOVER_RADIUS = 1200
     }
 
     /** Seed the captured session key (hex) into the cryptor before connecting. */
@@ -99,9 +102,9 @@ class YpsoBleManager @Inject constructor(
     }
 
     /** Read SYSTEM_STATUS over the already-open connection and update [YpsoPumpState]. No disconnect. */
-    fun readStatus() {
-        if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump readStatus: not connected"); return }
-        readStatusInternal()
+    fun readStatus(onDone: () -> Unit = {}) {
+        if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump readStatus: not connected"); onDone(); return }
+        readStatusInternal(onDone)
     }
 
     @SuppressLint("MissingPermission")
@@ -136,13 +139,21 @@ class YpsoBleManager @Inject constructor(
     private fun readOp(uuid: UUID, onResult: (ByteArray?, Int) -> Unit) =
         enqueue(Op({ g -> findChar(g, uuid)?.let { g.readCharacteristic(it) } ?: complete(null, -1) }, onResult))
 
+    // The pump's EXTREAD characteristic is a single shared cursor, so only ONE multi-frame read may
+    // be in flight at a time — overlapping reads interleave EXTREAD frames and corrupt both. This
+    // guard rejects (rather than silently corrupting) an overlapping read; all internal flows chain
+    // sequentially via callbacks.
+    private var multiframeBusy = false
     private fun readMultiframe(uuid: UUID, done: (ByteArray) -> Unit) {
+        if (multiframeBusy) { aapsLogger.error(LTag.PUMP, "YpsoPump: overlapping multi-frame read on $uuid rejected"); return }
+        multiframeBusy = true
         val frames = ArrayList<ByteArray>()
         fun step(now: UUID): Unit = readOp(now) { v, s ->
-            if (s != BluetoothGatt.GATT_SUCCESS || v == null) { fail("read $now failed (status=$s)"); return@readOp }
+            aapsLogger.debug(LTag.PUMP, "YpsoPump frame[${frames.size}] from $now: status=$s ${v?.joinToString("") { "%02x".format(it) } ?: "null"}")
+            if (s != BluetoothGatt.GATT_SUCCESS || v == null) { multiframeBusy = false; fail("read $now failed (status=$s, got ${frames.size} frames)"); return@readOp }
             frames.add(v)
             val total = (frames[0][0].toInt() and 0x0F).let { if (it == 0) 1 else it }
-            if (frames.size < total) step(CHAR_EXTREAD) else done(reassemble(frames))
+            if (frames.size < total) step(CHAR_EXTREAD) else { multiframeBusy = false; done(reassemble(frames)) }
         }
         step(uuid)
     }
@@ -189,6 +200,77 @@ class YpsoBleManager @Inject constructor(
         }
     }
 
+    /**
+     * One-time counter DISCOVERY: the pump accepts only the EXACT next writeCounter (gaps rejected
+     * in both directions with 138), and the write counter is an independent sequence from the read
+     * counter we observe — so we can't derive it. Scan candidates outward from [base] (downward-
+     * biased: writes lag the read counter) until one is accepted, then log it so AAPS can own + persist
+     * the counter from there. Tries a [candidate] by forcing the cryptor's pre-increment to land on it.
+     */
+    private fun writeEncryptedDiscover(uuid: UUID, command: ByteArray, base: Long, onResult: (Boolean) -> Unit) {
+        val candidates = ArrayDeque<Long>()
+        candidates.addLast(base)                                                       // base = seeded writeCounter; expected accept = base+1
+        for (d in 1..DISCOVER_RADIUS) { candidates.addLast(base + d); if (base - d >= 1) candidates.addLast(base - d) }  // base+1, base-1, base+2, ...
+        var tries = 0
+        fun tryNext() {
+            val c = candidates.removeFirstOrNull()
+            if (c == null) { aapsLogger.error(LTag.PUMP, "YpsoPump counter discovery exhausted (base=$base ±$DISCOVER_RADIUS)"); onResult(false); return }
+            sessionCrypto.writeCounter = c - 1                // cryptor pre-increments to c
+            val frame = runCatching { sessionCrypto.encrypt(command) }
+                .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onResult(false); return }
+            tries++
+            if (tries % 100 == 0) aapsLogger.info(LTag.PUMP, "YpsoPump counter discovery: $tries tries (now c=$c)")
+            writeFrames(uuid, frame) { status ->
+                when {
+                    status == BluetoothGatt.GATT_SUCCESS -> { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $c (base was $base, after $tries tries)"); onResult(true) }
+                    status == ERR_COUNTER_MISMATCH       -> tryNext()
+                    else                                 -> { aapsLogger.error(LTag.PUMP, "YpsoPump write failed (status=$status at c=$c)"); onResult(false) }
+                }
+            }
+        }
+        tryNext()
+    }
+
+    /** Send ONE write at counter [c] (cryptor pre-increments to c) and report the raw status. */
+    private fun probeCounter(uuid: UUID, command: ByteArray, c: Long, onStatus: (Int) -> Unit) {
+        sessionCrypto.writeCounter = c - 1
+        val frame = runCatching { sessionCrypto.encrypt(command) }.getOrElse { onStatus(-99); return }
+        writeFrames(uuid, frame) { onStatus(it) }
+    }
+
+    /**
+     * BINARY-SEARCH counter discovery. The pump accepts only the exact next writeCounter; if it returns
+     * DISTINCT errors for "too low" (already used) vs "too high" (gap), we bisect to the exact value in
+     * ~21 probes instead of a linear scan of thousands. Probes the extremes first to learn the codes;
+     * falls back to [writeEncryptedDiscover] from [base] if the pump can't distinguish direction.
+     */
+    private fun discoverCounterBinary(uuid: UUID, command: ByteArray, base: Long, onResult: (Boolean) -> Unit) {
+        probeCounter(uuid, command, 1L) { lowStatus ->
+            if (lowStatus == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = 1"); onResult(true); return@probeCounter }
+            probeCounter(uuid, command, 2_000_000L) { highStatus ->
+                aapsLogger.info(LTag.PUMP, "YpsoPump counter probe: low(c=1)->$lowStatus  high(c=2000000)->$highStatus")
+                if (highStatus == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = 2000000"); onResult(true); return@probeCounter }
+                if (lowStatus == highStatus) {
+                    aapsLogger.warn(LTag.PUMP, "YpsoPump: pump does not distinguish low/high (both=$lowStatus) — falling back to linear scan")
+                    writeEncryptedDiscover(uuid, command, base, onResult); return@probeCounter
+                }
+                var lo = 1L; var hi = 2_000_000L; var probes = 0
+                fun step() {
+                    if (lo >= hi) { probeCounter(uuid, command, lo) { s -> if (s == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $lo (${probes} probes)"); onResult(true) } else { aapsLogger.error(LTag.PUMP, "YpsoPump binary search converged to $lo but status=$s"); onResult(false) } }; return }
+                    val mid = (lo + hi) / 2; probes++
+                    probeCounter(uuid, command, mid) { s ->
+                        when (s) {
+                            BluetoothGatt.GATT_SUCCESS -> { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $mid (${probes} probes)"); onResult(true) }
+                            lowStatus                  -> { lo = mid + 1; step() }   // too low -> expected is higher
+                            else                       -> { hi = mid; step() }       // too high -> expected is lower
+                        }
+                    }
+                }
+                step()
+            }
+        }
+    }
+
     private fun findChar(g: BluetoothGatt, uuid: UUID): BluetoothGattCharacteristic? {
         for (s in g.services) s.getCharacteristic(uuid)?.let { return it }
         return null
@@ -201,7 +283,7 @@ class YpsoBleManager @Inject constructor(
 
     private fun fail(msg: String) { aapsLogger.error(LTag.PUMP, "YpsoPump: $msg"); disconnect() }
 
-    private fun readStatusInternal() {
+    private fun readStatusInternal(onDone: () -> Unit = {}) {
         readMultiframe(CHAR_STATUS) { frame ->
             runCatching {
                 val body = sessionCrypto.decrypt(frame)                       // strips 12-byte LE counter tail
@@ -220,6 +302,7 @@ class YpsoBleManager @Inject constructor(
                 }
             }.onFailure { aapsLogger.error(LTag.PUMP, "YpsoPump status decrypt error: ${it.message}") }
             // Stay connected — the AAPS command queue disconnects when idle.
+            onDone()
         }
     }
 
@@ -255,12 +338,20 @@ class YpsoBleManager @Inject constructor(
         if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
         readMultiframe(CHAR_EVENT_COUNT) { fc ->
             val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
-            aapsLogger.info(LTag.PUMP, "YpsoPump event history count = $count")
+            aapsLogger.info(LTag.PUMP, "YpsoPump event history count = $count (pump counter=${sessionCrypto.readCounter})")
             if (count == null || count <= 0) { onResult("count read failed ($count)"); return@readMultiframe }
+            // Seed the writeCounter from the pump's OWN counter (returned in the read response tail):
+            // the pump uses one monotonic counter for reads+writes, so the next write must be its last
+            // value + 1. This auto-discovers the counter and is robust to mylife's stale stored value
+            // (its history-import burst pushes the pump far ahead of numericWriteAppCounter).
+            // Seed the discovery from the captured writeCounter (mylife's numericWriteAppCounter) — the
+            // pump's write counter is a separate sequence ~3000 below the read counter, so basing it on
+            // readCounter is hopeless. Expected accept = seed+1.
+            val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
             val idx = count - 1
-            aapsLogger.info(LTag.PUMP, "YpsoPump writing event index $idx (counter auto-sync from wc=${sessionCrypto.writeCounter})")
-            writeEncrypted(CHAR_EVENT_INDEX, YpsoCrc.appendCrc(glbEncode(idx))) { ok ->
-                if (!ok) { onResult("index write rejected"); return@writeEncrypted }
+            aapsLogger.info(LTag.PUMP, "YpsoPump COUNTERS: pump rebootCounter=${sessionCrypto.rebootCounter} (seeded ${YpsoPumpConst.CAPTURED_REBOOT_COUNTER}), readCounter=${sessionCrypto.readCounter}, writeSeed=$base")
+            discoverCounterBinary(CHAR_EVENT_INDEX, YpsoCrc.appendCrc(glbEncode(idx)), base) { ok ->
+                if (!ok) { onResult("index write rejected"); return@discoverCounterBinary }
                 readMultiframe(CHAR_EVENT_VALUE) { fv ->
                     val entry = runCatching {
                         val body = sessionCrypto.decrypt(fv)
@@ -269,6 +360,73 @@ class YpsoBleManager @Inject constructor(
                     }.getOrElse { "entry decrypt error: ${it.message}" }
                     pumpState.lastConnectionTime = System.currentTimeMillis()
                     onResult("OK count=$count newest=$entry")
+                }
+            }
+        }
+    }
+
+    /**
+     * Establish the write counter on the SAFE history-index characteristic (zero-therapy): read the
+     * event count, then discover the exact write counter via an index-selection write. After this
+     * succeeds the cryptor owns the counter (writeCounter = the accepted value) and subsequent writes
+     * just pre-increment — so the dosing write that follows hits the bolus char exactly ONCE.
+     */
+    private fun establishCounter(onResult: (Boolean) -> Unit) {
+        readMultiframe(CHAR_EVENT_COUNT) { fc ->
+            val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
+            if (count == null || count <= 0) { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter: count read failed ($count)"); onResult(false); return@readMultiframe }
+            val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
+            aapsLogger.info(LTag.PUMP, "YpsoPump establishCounter: count=$count, discovering write counter (base=$base)")
+            writeEncryptedDiscover(CHAR_EVENT_INDEX, YpsoCrc.appendCrc(glbEncode(count - 1)), base, onResult)
+        }
+    }
+
+    /** Single-frame read (event count) — isolates KEY validity from multi-frame reliability. */
+    fun readEventCount(onResult: (Int?) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(null); return }
+        readMultiframe(CHAR_EVENT_COUNT) { fc ->
+            val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrElse {
+                aapsLogger.error(LTag.PUMP, "YpsoPump event-count decrypt error: ${it.message}"); null
+            }
+            aapsLogger.info(LTag.PUMP, "YpsoPump event-count read = $count (key ${if (count != null) "VALID" else "FAILED"})")
+            onResult(count)
+        }
+    }
+
+    /** Read CHAR_BOLUS_STATUS and parse the immediate-delivery block via [BolusCommand.decode]. */
+    fun readBolusStatus(onResult: (BolusCommand?) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(null); return }
+        readMultiframe(CHAR_BOLUS_STATUS) { f ->
+            val cmd = runCatching {
+                val body = sessionCrypto.decrypt(f)
+                val p = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
+                aapsLogger.info(LTag.PUMP, "YpsoPump bolus-status raw (${p.size}B): ${p.joinToString("") { "%02x".format(it) }}")
+                BolusCommand(0.0).apply { decode(p) }
+            }.getOrNull()
+            onResult(cmd)
+        }
+    }
+
+    /**
+     * SAFETY-CRITICAL — deliver a real bolus. Establishes the write counter on the safe index char
+     * first (so the bolus char is written EXACTLY ONCE, never scanned), sends one encrypted
+     * START_STOP_BOLUS, then reads the bolus status to confirm. Only ever called behind an explicit
+     * test flag + capture-verify + user consent. [units] standard if [durationMinutes]==0, else
+     * extended over that duration with [immediateUnits] up front.
+     */
+    fun deliverBolus(units: Double, durationMinutes: Int, immediateUnits: Double, onResult: (String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
+        val cmd = BolusCommand(units, durationMinutes, immediateUnits)
+        val payload = YpsoCrc.appendCrc(cmd.encode())
+        aapsLogger.info(LTag.PUMP, "YpsoPump BOLUS request ${units}U dur=$durationMinutes imm=$immediateUnits raw=${cmd.encode().joinToString("") { "%02x".format(it) }}")
+        establishCounter { ok ->
+            if (!ok) { onResult("counter discovery failed — BOLUS NOT SENT"); return@establishCounter }
+            aapsLogger.info(LTag.PUMP, "YpsoPump SENDING BOLUS to control char at wc=${sessionCrypto.writeCounter + 1}")
+            writeEncrypted(CHAR_BOLUS_START_STOP, payload) { accepted ->
+                if (!accepted) { onResult("bolus write rejected"); return@writeEncrypted }
+                readBolusStatus { st ->
+                    pumpState.lastConnectionTime = System.currentTimeMillis()
+                    onResult("BOLUS ACCEPTED status=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
                 }
             }
         }

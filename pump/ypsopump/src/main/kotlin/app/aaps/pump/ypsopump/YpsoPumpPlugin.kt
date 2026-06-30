@@ -67,6 +67,8 @@ class YpsoPumpPlugin @Inject constructor(
     override fun isHandshakeInProgress(): Boolean = false
 
     private var writeValidationDone = false
+    private var testBolusDone = false
+    private var bolusStatusReadDone = false
 
     private fun seedAndConnect() {
         bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
@@ -94,12 +96,50 @@ class YpsoPumpPlugin @Inject constructor(
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
-        // ZERO-THERAPY write-transport validation runs once instead of a status read, when armed.
-        if (YpsoPumpConst.RUN_WRITE_VALIDATION && YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0 && !writeValidationDone) {
-            writeValidationDone = true
-            bleManager.validateWriteTransport { r -> aapsLogger.info(LTag.PUMP, "YpsoPump WRITE-VALIDATION: $r") }
-        } else {
-            bleManager.readStatus()
+        // These test ops BLOCK the queue-worker thread until done — otherwise AAPS sees the command as
+        // finished and disconnects (5s idle) mid-write. The GATT callbacks run on the BLE binder
+        // thread, so blocking here is safe. Real dosing (deliverTreatment) must block the same way.
+        when {
+            // SAFETY-CRITICAL: deliver one real bolus. Armed only behind explicit consent.
+            YpsoPumpConst.RUN_TEST_BOLUS && !testBolusDone -> {
+                testBolusDone = true
+                val latch = java.util.concurrent.CountDownLatch(1)
+                bleManager.deliverBolus(YpsoPumpConst.TEST_BOLUS_UNITS, 0, 0.0) { r ->
+                    aapsLogger.info(LTag.PUMP, "YpsoPump TEST-BOLUS: $r"); latch.countDown()
+                }
+                latch.await(20, java.util.concurrent.TimeUnit.MINUTES)
+            }
+            // READ-ONLY diagnostic: event-count (single-frame key check) -> system status -> bolus
+            // status. No writes — safe mid-bolus. Per-frame logging shows exactly what the pump returns.
+            YpsoPumpConst.RUN_READ_BOLUS_STATUS && !bolusStatusReadDone -> {
+                bolusStatusReadDone = true
+                val latch = java.util.concurrent.CountDownLatch(1)
+                // STRICTLY chained — the pump's EXTREAD cursor is shared, so multi-frame reads must
+                // never overlap (concurrent reads interleave EXTREAD frames and corrupt both).
+                bleManager.readEventCount {
+                    bleManager.readStatus {
+                        bleManager.readBolusStatus { st ->
+                            aapsLogger.info(
+                                LTag.PUMP,
+                                "YpsoPump BOLUS-STATUS: state=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U"
+                            )
+                            latch.countDown()
+                        }
+                    }
+                }
+                latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            }
+            // ZERO-THERAPY write-transport validation (history index write + entry read).
+            YpsoPumpConst.RUN_WRITE_VALIDATION && YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0 && !writeValidationDone -> {
+                writeValidationDone = true
+                val latch = java.util.concurrent.CountDownLatch(1)
+                bleManager.validateWriteTransport { r ->
+                    aapsLogger.info(LTag.PUMP, "YpsoPump WRITE-VALIDATION: $r"); latch.countDown()
+                }
+                latch.await(20, java.util.concurrent.TimeUnit.MINUTES)   // counter discovery can take minutes
+            }
+
+            else                                            -> bleManager.readStatus()
         }
     }
 

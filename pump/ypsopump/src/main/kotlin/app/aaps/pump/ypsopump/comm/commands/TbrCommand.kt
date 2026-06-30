@@ -6,44 +6,40 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * START_STOP_TBR (index 29) — set or cancel a Temporary Basal Rate.
+ * START_STOP_TBR (index 29) — set or cancel a Temporary Basal Rate. Written to CHAR_TBR_START_STOP
+ * (…fcbee38b…).
  *
- * TBR is percentage-based (PumpType.YPSOPUMP.tempBasalType = Percent).
- * Duration in 15-minute steps (specialBasalDurations = [15, 30]).
+ * Request payload — 16 bytes LE (validated against mylife / firmware V05.02.03; vicktor + SandraK82
+ * test app agree — NOT yet confirmed on our pump, gated behind capture-verify):
+ *   percent(u32) || ~percent(u32) || duration(u32, minutes) || ~duration(u32)
+ * The bitwise complements are the integrity check, so — unlike the bolus — NO CRC16 is appended.
+ *
+ * Cancel a running TBR by setting 100% for 0 minutes (see [cancelPayload]).
  */
 class TbrCommand(
-    private val percentage: Int,
-    private val durationMinutes: Int,
-    private val start: Boolean = true
+    private val percent: Int,
+    private val durationMinutes: Int
 ) : YpsoCommand(YpsoCommandCodes.START_STOP_TBR) {
 
-    var tbrState: Int = 0; private set
-    var activePercent: Int = 100; private set
-    var remainingMinutes: Int = 0; private set
+    var tbrStatusCode: Int = 0; private set
 
-    override fun encode(): ByteArray {
-        return if (start) {
-            ByteBuffer.allocate(8)
-                .order(ByteOrder.LITTLE_ENDIAN)
-                .put(0x01.toByte()) // start
-                .putShort(percentage.toShort())
-                .putShort(durationMinutes.toShort())
-                .array()
-                .sliceArray(0 until 5)
+    override fun encode(): ByteArray =
+        ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+            .putInt(percent).putInt(percent.inv())
+            .putInt(durationMinutes).putInt(durationMinutes.inv())
+            .array()
+
+    override fun decode(data: ByteArray) {
+        if (data.isNotEmpty()) {
+            tbrStatusCode = data[0].toInt() and 0xFF
+            success = true
         } else {
-            byteArrayOf(0x00) // stop TBR
+            success = false
         }
     }
 
-    override fun decode(data: ByteArray) {
-        if (data.size >= 5) {
-            tbrState = data[0].toInt() and 0xFF
-            activePercent = data.getUInt16(1)
-            remainingMinutes = data.getUInt16(3)
-            success = tbrState == 0x01 // accepted
-        } else {
-            errorCode = if (data.isNotEmpty()) data[0].toInt() and 0xFF else -1
-            success = false
-        }
+    companion object {
+        /** Cancel a running TBR: 100% for 0 minutes. */
+        fun cancelPayload(): ByteArray = TbrCommand(100, 0).encode()
     }
 }

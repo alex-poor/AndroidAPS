@@ -64,4 +64,14 @@ object YpsoPumpConst {
     // -- Test flag: run the ZERO-THERAPY write-transport validation (history index write + entry read)
     // once after connect, instead of a status read. Set false for normal status reads. Never dosing.
     const val RUN_WRITE_VALIDATION = false
+
+    // -- READ-ONLY test flag: read SYSTEM_STATUS + BOLUS_STATUS once and log them (no writes). Safe to
+    // run while a bolus is being delivered — validates the bolus-status decoder against live data.
+    const val RUN_READ_BOLUS_STATUS = false
+
+    // -- SAFETY-CRITICAL test flag: deliver ONE real bolus of TEST_BOLUS_UNITS once after connect.
+    // This DELIVERS INSULIN. Only ever set true with explicit user consent + after capture-verify,
+    // with the pump observed. Leave false otherwise.
+    const val RUN_TEST_BOLUS = false
+    const val TEST_BOLUS_UNITS = 0.1
 }
