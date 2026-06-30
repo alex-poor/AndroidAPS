@@ -81,5 +81,5 @@ object YpsoPumpConst {
     // recover mylife after). Leave false otherwise.
     const val RUN_TEST_TBR = false
     const val TEST_TBR_PERCENT = 0
-    const val TEST_TBR_DURATION_MIN = 3
+    const val TEST_TBR_DURATION_MIN = 15
 }

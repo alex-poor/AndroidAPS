@@ -9,12 +9,17 @@ import java.nio.ByteOrder
  * START_STOP_TBR (index 29) — set or cancel a Temporary Basal Rate. Written to CHAR_TBR_START_STOP
  * (…fcbee38b…).
  *
- * Request payload — 16 bytes LE (validated against mylife / firmware V05.02.03; vicktor + SandraK82
- * test app agree — NOT yet confirmed on our pump, gated behind capture-verify):
+ * Request payload — 16 bytes LE — CONFIRMED ON THE REAL PUMP 2026-07-01 (0% for 15min accepted; pump
+ * reported activeTbrPercent=0; firmware V05.02.03):
  *   percent(u32) || ~percent(u32) || duration(u32, minutes) || ~duration(u32)
  * The bitwise complements are the integrity check, so — unlike the bolus — NO CRC16 is appended.
  *
- * Cancel a running TBR by setting 100% for 0 minutes (see [cancelPayload]).
+ * DURATION MUST BE IN 15-MINUTE STEPS (15, 30, …). A 3-minute duration was REJECTED with app-status
+ * 0x82 (130) — a command-PARAMETER error, distinct from the 0x8A counter/structure error. (The on-wire
+ * CamAPS TBR framing confirms 16 bytes; SandraK82's 5-byte format is wrong.)
+ *
+ * Cancel a running TBR via 100% for 0 minutes (see [cancelPayload]) — NOTE: a 0-minute duration is
+ * UNVERIFIED and may also require a 15-min-step value; confirm before relying on cancel.
  */
 class TbrCommand(
     private val percent: Int,
