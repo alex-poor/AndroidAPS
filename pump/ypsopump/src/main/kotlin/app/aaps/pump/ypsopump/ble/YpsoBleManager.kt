@@ -72,8 +72,6 @@ class YpsoBleManager @Inject constructor(
         // appended to the 8-byte GLB index command (fixed: index writes now send bare glbEncode). Whether
         // a wrong write-counter also surfaces as 0x8A vs a distinct code is still TBD on the pump.
         private const val ERR_WRITE_REJECTED = 138
-        private const val COUNTER_SYNC_TRIES = 40
-        private const val DISCOVER_RADIUS = 1200
     }
 
     /** Seed the captured session key (hex) into the cryptor before connecting. */
@@ -195,92 +193,19 @@ class YpsoBleManager @Inject constructor(
     }
 
     /**
-     * Encrypt [command] (already CRC-wrapped or complement-protected by the caller) and write it,
-     * auto-syncing the writeCounter: the pump rejects a wrong counter with [ERR_WRITE_REJECTED] and
-     * does NOT advance, so on 138 we re-encrypt (cryptor pre-increments) and retry, scanning up to
-     * [COUNTER_SYNC_TRIES] times until accepted. [onResult] gets true on accept, false on give-up.
+     * Encrypt [command] (already CRC-wrapped or complement-protected by the caller) and write it ONCE at
+     * the cryptor's current (pre-incremented) writeCounter. The pump's write check is forward-gap tolerant,
+     * so we must NOT retry/scan on rejection — a higher counter would be accepted but corrupt the shared
+     * counter space and break mylife. The caller is responsible for having locked the exact write counter
+     * first (e.g. via [establishCounter]). [onResult] true on accept, false on reject.
      */
-    private fun writeEncrypted(uuid: UUID, command: ByteArray, triesLeft: Int = COUNTER_SYNC_TRIES, onResult: (Boolean) -> Unit) {
+    private fun writeEncrypted(uuid: UUID, command: ByteArray, onResult: (Boolean) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { aapsLogger.warn(LTag.PUMP, "YpsoPump writeEncrypted: not connected"); onResult(false); return }
         val frame = runCatching { sessionCrypto.encrypt(command) }
             .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onResult(false); return }
         writeFrames(uuid, frame) { status ->
-            when {
-                status == BluetoothGatt.GATT_SUCCESS         -> { aapsLogger.info(LTag.PUMP, "YpsoPump write accepted at wc=${sessionCrypto.writeCounter}"); onResult(true) }
-                status == ERR_WRITE_REJECTED && triesLeft > 0 -> writeEncrypted(uuid, command, triesLeft - 1, onResult)
-                else                                         -> { aapsLogger.error(LTag.PUMP, "YpsoPump write failed (status=$status, wc=${sessionCrypto.writeCounter})"); onResult(false) }
-            }
-        }
-    }
-
-    /**
-     * One-time counter DISCOVERY: the pump accepts only the EXACT next writeCounter (gaps rejected
-     * in both directions with 138), and the write counter is an independent sequence from the read
-     * counter we observe — so we can't derive it. Scan candidates outward from [base] (downward-
-     * biased: writes lag the read counter) until one is accepted, then log it so AAPS can own + persist
-     * the counter from there. Tries a [candidate] by forcing the cryptor's pre-increment to land on it.
-     */
-    private fun writeEncryptedDiscover(uuid: UUID, command: ByteArray, base: Long, onResult: (Boolean) -> Unit) {
-        val candidates = ArrayDeque<Long>()
-        candidates.addLast(base)                                                       // base = seeded writeCounter; expected accept = base+1
-        for (d in 1..DISCOVER_RADIUS) { candidates.addLast(base + d); if (base - d >= 1) candidates.addLast(base - d) }  // base+1, base-1, base+2, ...
-        var tries = 0
-        fun tryNext() {
-            val c = candidates.removeFirstOrNull()
-            if (c == null) { aapsLogger.error(LTag.PUMP, "YpsoPump counter discovery exhausted (base=$base ±$DISCOVER_RADIUS)"); onResult(false); return }
-            sessionCrypto.writeCounter = c - 1                // cryptor pre-increments to c
-            val frame = runCatching { sessionCrypto.encrypt(command) }
-                .getOrElse { aapsLogger.error(LTag.PUMP, "YpsoPump encrypt error: ${it.message}"); onResult(false); return }
-            tries++
-            if (tries % 100 == 0) aapsLogger.info(LTag.PUMP, "YpsoPump counter discovery: $tries tries (now c=$c)")
-            writeFrames(uuid, frame) { status ->
-                when {
-                    status == BluetoothGatt.GATT_SUCCESS -> { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $c (base was $base, after $tries tries)"); onResult(true) }
-                    status == ERR_WRITE_REJECTED       -> tryNext()
-                    else                                 -> { aapsLogger.error(LTag.PUMP, "YpsoPump write failed (status=$status at c=$c)"); onResult(false) }
-                }
-            }
-        }
-        tryNext()
-    }
-
-    /** Send ONE write at counter [c] (cryptor pre-increments to c) and report the raw status. */
-    private fun probeCounter(uuid: UUID, command: ByteArray, c: Long, onStatus: (Int) -> Unit) {
-        sessionCrypto.writeCounter = c - 1
-        val frame = runCatching { sessionCrypto.encrypt(command) }.getOrElse { onStatus(-99); return }
-        writeFrames(uuid, frame) { onStatus(it) }
-    }
-
-    /**
-     * BINARY-SEARCH counter discovery. The pump accepts only the exact next writeCounter; if it returns
-     * DISTINCT errors for "too low" (already used) vs "too high" (gap), we bisect to the exact value in
-     * ~21 probes instead of a linear scan of thousands. Probes the extremes first to learn the codes;
-     * falls back to [writeEncryptedDiscover] from [base] if the pump can't distinguish direction.
-     */
-    private fun discoverCounterBinary(uuid: UUID, command: ByteArray, base: Long, onResult: (Boolean) -> Unit) {
-        probeCounter(uuid, command, 1L) { lowStatus ->
-            if (lowStatus == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = 1"); onResult(true); return@probeCounter }
-            probeCounter(uuid, command, 2_000_000L) { highStatus ->
-                aapsLogger.info(LTag.PUMP, "YpsoPump counter probe: low(c=1)->$lowStatus  high(c=2000000)->$highStatus")
-                if (highStatus == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = 2000000"); onResult(true); return@probeCounter }
-                if (lowStatus == highStatus) {
-                    aapsLogger.warn(LTag.PUMP, "YpsoPump: pump does not distinguish low/high (both=$lowStatus) — falling back to linear scan")
-                    writeEncryptedDiscover(uuid, command, base, onResult); return@probeCounter
-                }
-                var lo = 1L; var hi = 2_000_000L; var probes = 0
-                fun step() {
-                    if (lo >= hi) { probeCounter(uuid, command, lo) { s -> if (s == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $lo (${probes} probes)"); onResult(true) } else { aapsLogger.error(LTag.PUMP, "YpsoPump binary search converged to $lo but status=$s"); onResult(false) } }; return }
-                    val mid = (lo + hi) / 2; probes++
-                    probeCounter(uuid, command, mid) { s ->
-                        when (s) {
-                            BluetoothGatt.GATT_SUCCESS -> { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $mid (${probes} probes)"); onResult(true) }
-                            lowStatus                  -> { lo = mid + 1; step() }   // too low -> expected is higher
-                            else                       -> { hi = mid; step() }       // too high -> expected is lower
-                        }
-                    }
-                }
-                step()
-            }
+            if (status == BluetoothGatt.GATT_SUCCESS) { aapsLogger.info(LTag.PUMP, "YpsoPump write accepted at wc=${sessionCrypto.writeCounter}"); onResult(true) }
+            else { aapsLogger.error(LTag.PUMP, "YpsoPump write rejected (status=$status, wc=${sessionCrypto.writeCounter}) — NOT scanning (would corrupt the counter)"); onResult(false) }
         }
     }
 
@@ -351,58 +276,52 @@ class YpsoBleManager @Inject constructor(
         if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
         readMultiframe(CHAR_EVENT_COUNT) { fc ->
             val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
-            aapsLogger.info(LTag.PUMP, "YpsoPump event history count = $count (pump counter=${sessionCrypto.readCounter})")
+            aapsLogger.info(LTag.PUMP, "YpsoPump event history count = $count (pump readCounter=${sessionCrypto.readCounter})")
             if (count == null || count <= 0) { onResult("count read failed ($count)"); return@readMultiframe }
-            // Seed the writeCounter from the pump's OWN counter (returned in the read response tail):
-            // the pump uses one monotonic counter for reads+writes, so the next write must be its last
-            // value + 1. This auto-discovers the counter and is robust to mylife's stale stored value
-            // (its history-import burst pushes the pump far ahead of numericWriteAppCounter).
-            // Seed the discovery from the captured writeCounter (mylife's numericWriteAppCounter) — the
-            // pump's write counter is a separate sequence ~3000 below the read counter, so basing it on
-            // readCounter is hopeless. Expected accept = seed+1.
-            val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
-            val idx = count - 1
-            // Index/selection commands are complement-protected (value||~value) and carry NO CRC —
-            // verified against mylife's accepted event-index writes (8-byte `00000000ffffffff`, no CRC).
-            // Appending a CRC here (as bolus does) makes a 10-byte command the pump rejects with 0x8A.
-            val payload = glbEncode(idx)
-            val rc = sessionCrypto.readCounter
-            aapsLogger.info(LTag.PUMP, "YpsoPump COUNTERS: pump rebootCounter=${sessionCrypto.rebootCounter} (seeded ${YpsoPumpConst.CAPTURED_REBOOT_COUNTER}), readCounter=$rc, writeSeed=$base")
-            // DECISIVE PROBE: is the write counter in the READ-counter sequence (shared) or near writeSeed?
-            val probeSet = listOf(rc + 1, rc, rc - 1, rc + 2, base + 1)
-            fun probeNext(i: Int) {
-                if (i >= probeSet.size) {
-                    aapsLogger.info(LTag.PUMP, "YpsoPump read-region probes all 138; falling back to upward scan from writeSeed=$base")
-                    discoverCounterBinary(CHAR_EVENT_INDEX, payload, base) { ok ->
-                        if (!ok) { onResult("index write rejected"); return@discoverCounterBinary }
-                        onResult("OK via scan (writeCounter=${sessionCrypto.writeCounter})")
-                    }
-                    return
-                }
-                val c = probeSet[i]
-                writeOnceAt(CHAR_EVENT_INDEX, payload, c) { st ->
-                    aapsLogger.info(LTag.PUMP, "YpsoPump PROBE c=$c -> status=$st  (rc=$rc, writeSeed=$base)")
-                    if (st == BluetoothGatt.GATT_SUCCESS) onResult("WRITE ACCEPTED at counter=$c  [readCounter=$rc writeSeed=$base]")
-                    else probeNext(i + 1)
+            if (sessionCrypto.writeCounter <= 0) {
+                onResult("no write counter seeded — set CAPTURED_WRITE_COUNTER to the pump's CURRENT write counter")
+                return@readMultiframe
+            }
+            // SAFE single write at the WRITE counter + 1. The pump's write-counter check is FORWARD-GAP
+            // TOLERANT (accepts ANY counter > last_write, not just exactly-next), so probing read-counter
+            // values or scanning UPWARD is DANGEROUS: a too-high value is accepted and jumps the pump's
+            // write counter far ahead of where mylife sits, making mylife's subsequent writes read as
+            // replays (APPERR_COUNTER_ERROR — it breaks). So write EXACTLY ONCE at writeCounter+1 from the
+            // (separate) write sequence; NEVER use a read-counter value and NEVER scan. On reject the seed
+            // is stale → abort and reseed (do NOT search upward). [confirmed on pump 2026-06-30]
+            val base = sessionCrypto.writeCounter
+            // Index/selection commands are complement-protected (value||~value) and carry NO CRC — verified
+            // against mylife's accepted event-index writes (8-byte `00000000ffffffff`). A CRC here → 0x8A.
+            val payload = glbEncode(count - 1)
+            aapsLogger.info(LTag.PUMP, "YpsoPump write-validate: single index write at writeCounter=${base + 1} (readCounter=${sessionCrypto.readCounter} is NOT used for writes)")
+            writeOnceAt(CHAR_EVENT_INDEX, payload, base + 1) { st ->
+                when (st) {
+                    BluetoothGatt.GATT_SUCCESS -> onResult("WRITE ACCEPTED at writeCounter=${base + 1}")
+                    ERR_WRITE_REJECTED         -> onResult("write rejected (138) at writeCounter=${base + 1} — seed stale; reseed CAPTURED_WRITE_COUNTER from the pump's current write counter (NOT scanning, would corrupt the counter)")
+                    else                       -> onResult("write failed status=$st at writeCounter=${base + 1}")
                 }
             }
-            probeNext(0)
         }
     }
 
     /**
-     * Establish the write counter on the SAFE history-index characteristic (zero-therapy): read the
-     * event count, then discover the exact write counter via an index-selection write. After this
-     * succeeds the cryptor owns the counter (writeCounter = the accepted value) and subsequent writes
-     * just pre-increment — so the dosing write that follows hits the bolus char exactly ONCE.
+     * Lock the write counter on the SAFE history-index characteristic (zero-therapy) with ONE write at
+     * writeCounter+1, so the dosing write that follows pre-increments to exactly +2 and hits the bolus
+     * char once. The write counter MUST be seeded accurately (the pump's current write counter): the
+     * forward-gap-tolerant check means a too-high value would be accepted but corrupt the shared counter
+     * space and break mylife — so on reject we ABORT rather than scan. [see validateWriteTransport]
      */
     private fun establishCounter(onResult: (Boolean) -> Unit) {
         readMultiframe(CHAR_EVENT_COUNT) { fc ->
             val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
             if (count == null || count <= 0) { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter: count read failed ($count)"); onResult(false); return@readMultiframe }
-            val base = if (sessionCrypto.writeCounter > 0) sessionCrypto.writeCounter else sessionCrypto.readCounter
-            aapsLogger.info(LTag.PUMP, "YpsoPump establishCounter: count=$count, discovering write counter (base=$base)")
-            writeEncryptedDiscover(CHAR_EVENT_INDEX, glbEncode(count - 1), base, onResult)   // GLB command: no CRC
+            if (sessionCrypto.writeCounter <= 0) { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter: no write counter seeded"); onResult(false); return@readMultiframe }
+            val base = sessionCrypto.writeCounter
+            aapsLogger.info(LTag.PUMP, "YpsoPump establishCounter: single index write at writeCounter=${base + 1}")
+            writeOnceAt(CHAR_EVENT_INDEX, glbEncode(count - 1), base + 1) { st ->   // GLB command: no CRC
+                if (st == BluetoothGatt.GATT_SUCCESS) onResult(true)                // cryptor.writeCounter now = base+1
+                else { aapsLogger.error(LTag.PUMP, "YpsoPump establishCounter rejected (status=$st) — reseed write counter; NOT scanning"); onResult(false) }
+            }
         }
     }
 
