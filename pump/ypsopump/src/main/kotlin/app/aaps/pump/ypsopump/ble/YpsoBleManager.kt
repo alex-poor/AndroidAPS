@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
@@ -55,10 +56,20 @@ class YpsoBleManager @Inject constructor(
         private val CHAR_BOLUS_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee18b7bc5")
         private val CHAR_BOLUS_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee28b7bc5")
         private val CHAR_TBR_START_STOP: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee38b7bc5")
+        // Control-notification characteristic (handle 0x006f). mylife enables NOTIFY (CCCD 0x0001) on
+        // this as its FIRST op after connect, before any write; the pump GATES control writes on this
+        // subscription and rejects writes with ATT app-error 0x8A (138) if it is absent. Confirmed by
+        // diffing mylife vs AAPS btsnoop: mylife 0 ERROR_RSP / AAPS 3423× err=0x8A on event-index
+        // writes, the ONLY difference being this subscription. This is the write-handshake precondition.
+        private val CHAR_CTRL_NOTIFY: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee58b7bc5")
         private val AUTH_SALT = byteArrayOf(
             0x4F, 0xC2.toByte(), 0x45, 0x4D, 0x9B.toByte(), 0x81.toByte(), 0x59, 0xA4.toByte(), 0x93.toByte(), 0xBB.toByte()
         )
-        private const val ERR_COUNTER_MISMATCH = 138
+        // ATT application-error 0x8A returned by the pump on a rejected WRITE. Originally assumed to mean
+        // "write-counter mismatch" — that was WRONG: it is primarily the WRITE-HANDSHAKE precondition
+        // (no active CHAR_CTRL_NOTIFY subscription). With notifications enabled the counter logic below
+        // becomes meaningful again; a wrong counter may surface as this or a different code (TBD on device).
+        private const val ERR_WRITE_REJECTED = 138
         private const val COUNTER_SYNC_TRIES = 40
         private const val DISCOVER_RADIUS = 1200
     }
@@ -183,7 +194,7 @@ class YpsoBleManager @Inject constructor(
 
     /**
      * Encrypt [command] (already CRC-wrapped or complement-protected by the caller) and write it,
-     * auto-syncing the writeCounter: the pump rejects a wrong counter with [ERR_COUNTER_MISMATCH] and
+     * auto-syncing the writeCounter: the pump rejects a wrong counter with [ERR_WRITE_REJECTED] and
      * does NOT advance, so on 138 we re-encrypt (cryptor pre-increments) and retry, scanning up to
      * [COUNTER_SYNC_TRIES] times until accepted. [onResult] gets true on accept, false on give-up.
      */
@@ -194,7 +205,7 @@ class YpsoBleManager @Inject constructor(
         writeFrames(uuid, frame) { status ->
             when {
                 status == BluetoothGatt.GATT_SUCCESS         -> { aapsLogger.info(LTag.PUMP, "YpsoPump write accepted at wc=${sessionCrypto.writeCounter}"); onResult(true) }
-                status == ERR_COUNTER_MISMATCH && triesLeft > 0 -> writeEncrypted(uuid, command, triesLeft - 1, onResult)
+                status == ERR_WRITE_REJECTED && triesLeft > 0 -> writeEncrypted(uuid, command, triesLeft - 1, onResult)
                 else                                         -> { aapsLogger.error(LTag.PUMP, "YpsoPump write failed (status=$status, wc=${sessionCrypto.writeCounter})"); onResult(false) }
             }
         }
@@ -223,7 +234,7 @@ class YpsoBleManager @Inject constructor(
             writeFrames(uuid, frame) { status ->
                 when {
                     status == BluetoothGatt.GATT_SUCCESS -> { aapsLogger.info(LTag.PUMP, "YpsoPump WRITE ACCEPTED — write counter = $c (base was $base, after $tries tries)"); onResult(true) }
-                    status == ERR_COUNTER_MISMATCH       -> tryNext()
+                    status == ERR_WRITE_REJECTED       -> tryNext()
                     else                                 -> { aapsLogger.error(LTag.PUMP, "YpsoPump write failed (status=$status at c=$c)"); onResult(false) }
                 }
             }
@@ -469,7 +480,7 @@ class YpsoBleManager @Inject constructor(
                         aapsLogger.info(LTag.PUMP, "YpsoPump CANARY ACCEPTED @$c — counter locked; bolus will be @${c + 1}")
                         sendTestBolus(units, c, onResult)
                     }
-                    ERR_COUNTER_MISMATCH         -> tryCanary(i + 1)
+                    ERR_WRITE_REJECTED         -> tryCanary(i + 1)
                     else                         -> onResult("canary write status=$status — ABORT, NO BOLUS")
                 }
             }
@@ -512,13 +523,53 @@ class YpsoBleManager @Inject constructor(
             if (ch.uuid == CHAR_AUTH) {
                 aapsLogger.debug(LTag.PUMP, "auth write status=$status")
                 if (status != BluetoothGatt.GATT_SUCCESS) { fail("auth write failed ($status)"); return }
-                // Authenticated: now report CONNECTED so the queue can drive reads. Stay connected.
-                pumpState.connectionState = ConnectionState.CONNECTED
-                aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; ready")
+                // Authenticated. Before reporting CONNECTED, subscribe to the control-notification char:
+                // the pump GATES control writes on this subscription (see CHAR_CTRL_NOTIFY). CONNECTED is
+                // set once the CCCD write completes (onDescriptorWrite).
+                aapsLogger.info(LTag.PUMP, "YpsoPump authenticated; enabling control notifications")
+                enableCtrlNotify(g)
             } else complete(null, status)
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (descriptor.characteristic?.uuid == CHAR_CTRL_NOTIFY) {
+                if (status != BluetoothGatt.GATT_SUCCESS)
+                    aapsLogger.warn(LTag.PUMP, "YpsoPump CTRL_NOTIFY CCCD write failed ($status) — proceeding, writes may be rejected")
+                else
+                    aapsLogger.info(LTag.PUMP, "YpsoPump CTRL_NOTIFY subscription active")
+                markConnected()
+            }
+        }
+
+        override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
+            aapsLogger.debug(LTag.PUMP, "YpsoPump notify ${ch.uuid}: ${value.joinToString("") { "%02x".format(it) }}")
         }
 
         override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
             complete(value, status)
+    }
+
+    /**
+     * Enable the control-notification subscription (write CCCD 0x0001 to [CHAR_CTRL_NOTIFY]) — the
+     * pump's write-handshake precondition. Defensive: if the char/CCCD is somehow absent we still go
+     * CONNECTED so the (notification-independent) read path keeps working.
+     */
+    @SuppressLint("MissingPermission")
+    private fun enableCtrlNotify(g: BluetoothGatt) {
+        val ch = findChar(g, CHAR_CTRL_NOTIFY)
+        val cccd = ch?.getDescriptor(YpsoPumpConst.CCCD_UUID)
+        if (ch == null || cccd == null) {
+            aapsLogger.warn(LTag.PUMP, "YpsoPump CTRL_NOTIFY char/CCCD not found — proceeding without it (writes may be rejected)")
+            markConnected(); return
+        }
+        g.setCharacteristicNotification(ch, true)
+        val rc = g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        aapsLogger.info(LTag.PUMP, "YpsoPump CTRL_NOTIFY CCCD write dispatched (rc=$rc)")
+        // CONNECTED is set in onDescriptorWrite once the write completes.
+    }
+
+    private fun markConnected() {
+        pumpState.connectionState = ConnectionState.CONNECTED
+        aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled)")
     }
 }
