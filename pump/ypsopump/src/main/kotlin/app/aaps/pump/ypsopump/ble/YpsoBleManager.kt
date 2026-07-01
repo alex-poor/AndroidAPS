@@ -80,16 +80,25 @@ class YpsoBleManager @Inject constructor(
         sessionCrypto.sharedKey = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     }
 
+    // AAPS OWNS the write counter once mylife is off (sole controller): persist it across reconnects so a
+    // stale const-seed can't push the pump's forward-gap-tolerant counter ahead and desync anything. The
+    // pump reboot resets its write counter to 0, but forward-gap tolerance means our higher persisted
+    // value is still accepted, so no reboot handling is needed (rebootCounter itself must still match —
+    // re-seed if the pump battery is changed).
+    private val ypsoPrefs by lazy { context.getSharedPreferences("ypso_ble_state", Context.MODE_PRIVATE) }
+    private fun persistWriteCounter() { ypsoPrefs.edit().putLong("writeCounter", sessionCrypto.writeCounter).apply() }
+
     /**
      * Seed the counters before any encrypted WRITE. [writeCounter] = the genuine app's CURRENT value
-     * (mylife's numericWriteAppCounter, captured via frida); the first write uses seed+1 (the cryptor
-     * pre-increments). [rebootCounter] must match the pump's (mylife's stored value, = 8 currently) or
-     * the cryptor resets writeCounter to 0 on the first decrypt. Reads need none of this.
+     * (mylife's numericWriteAppCounter, captured via frida) for the FIRST ever run; thereafter the
+     * PERSISTED, AAPS-owned value wins (we use the higher of the two). The first write uses value+1 (the
+     * cryptor pre-increments). [rebootCounter] must match the pump's or the cryptor resets on decrypt.
      */
     fun setCounters(writeCounter: Long, rebootCounter: Int) {
-        sessionCrypto.writeCounter = writeCounter
+        val persisted = ypsoPrefs.getLong("writeCounter", -1L)
+        sessionCrypto.writeCounter = if (persisted > writeCounter) persisted else writeCounter
         sessionCrypto.rebootCounter = rebootCounter
-        aapsLogger.info(LTag.PUMP, "YpsoPump counters seeded: writeCounter=$writeCounter rebootCounter=$rebootCounter")
+        aapsLogger.info(LTag.PUMP, "YpsoPump counters seeded: writeCounter=${sessionCrypto.writeCounter} (seed=$writeCounter persisted=$persisted) rebootCounter=$rebootCounter")
     }
 
     val writeCounter: Long get() = sessionCrypto.writeCounter
@@ -386,86 +395,90 @@ class YpsoBleManager @Inject constructor(
     }
 
     /**
-     * SAFE single test bolus. Locks the write counter on the BENIGN event-index char first (canary:
-     * tries seed+1, seed, seed+2 — a wrong counter is rejected with NO pump effect), then sends the
-     * bolus EXACTLY ONCE at the confirmed next counter. No auto-sync, no scanning. If the canary can't
-     * be confirmed in that tiny window it ABORTS and the bolus char is never written.
+     * SAFE bolus (production + test). Locks the write counter on the BENIGN event-index char first
+     * (canary: tries seed+1, seed, seed+2 — a wrong counter is rejected with NO pump effect), then sends
+     * the bolus EXACTLY ONCE at the confirmed next counter. No auto-sync, no scanning. If the canary
+     * can't be confirmed it ABORTS and the bolus char is never written. The write counter is persisted
+     * after each accepted write so AAPS owns it across reconnects. [onResult] = (accepted, message).
      */
-    fun testBolusCanary(units: Double, seedW: Long, onResult: (String) -> Unit) {
-        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
+    fun testBolusCanary(units: Double, seedW: Long, onResult: (Boolean, String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
         val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
         val candidates = listOf(seedW + 1, seedW, seedW + 2)
         fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult("CANARY FAILED (tried $candidates) — counter off, NO BOLUS sent"); return }
+            if (i >= candidates.size) { onResult(false, "canary failed (tried $candidates) — counter off, NO BOLUS sent"); return }
             val c = candidates[i]
             aapsLogger.info(LTag.PUMP, "YpsoPump canary index-write @counter=$c")
             writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
                 when (status) {
                     BluetoothGatt.GATT_SUCCESS   -> {
+                        persistWriteCounter()
                         aapsLogger.info(LTag.PUMP, "YpsoPump CANARY ACCEPTED @$c — counter locked; bolus will be @${c + 1}")
                         sendTestBolus(units, c, onResult)
                     }
                     ERR_WRITE_REJECTED         -> tryCanary(i + 1)
-                    else                         -> onResult("canary write status=$status — ABORT, NO BOLUS")
+                    else                         -> onResult(false, "canary write status=$status — ABORT, NO BOLUS")
                 }
             }
         }
         tryCanary(0)
     }
 
-    private fun sendTestBolus(units: Double, lockedCounter: Long, onResult: (String) -> Unit) {
+    private fun sendTestBolus(units: Double, lockedCounter: Long, onResult: (Boolean, String) -> Unit) {
         val cmd = BolusCommand(units)                          // standard/immediate bolus
         val boIns = cmd.encode()
         aapsLogger.info(LTag.PUMP, "YpsoPump >>> SENDING BOLUS ${units}U @counter=${lockedCounter + 1} raw=${boIns.joinToString("") { "%02x".format(it) }}")
         writeOnceAt(CHAR_BOLUS_START_STOP, YpsoCrc.appendCrc(boIns), lockedCounter + 1) { status ->
-            if (status != BluetoothGatt.GATT_SUCCESS) { onResult("BOLUS REJECTED status=$status @${lockedCounter + 1} — check pump, likely not delivered"); return@writeOnceAt }
+            if (status != BluetoothGatt.GATT_SUCCESS) { onResult(false, "bolus REJECTED status=$status @${lockedCounter + 1} — check pump, likely not delivered"); return@writeOnceAt }
+            persistWriteCounter()
             aapsLogger.info(LTag.PUMP, "YpsoPump >>> BOLUS ACCEPTED @${lockedCounter + 1}")
             readBolusStatus { st ->
                 pumpState.lastConnectionTime = System.currentTimeMillis()
-                onResult("BOLUS ACCEPTED ${units}U; bolusStatus=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U | FINAL writeCounter=${sessionCrypto.writeCounter} readCounter=${sessionCrypto.readCounter}")
+                onResult(true, "bolus accepted ${units}U; bolusStatus=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
             }
         }
     }
 
     /**
-     * SAFE test TBR via the same canary as the bolus: lock the write counter on the BENIGN event-index
-     * char (tries seed+1, seed, seed+2 — a wrong counter has NO pump effect), then write the TBR command
-     * EXACTLY ONCE at the confirmed next counter. A 0% TBR SUSPENDS basal (reduces insulin) — the safe
-     * first test. Aborts with no TBR write if the canary can't be confirmed. [percent] 0=suspend,
-     * 100=cancel/normal; [durationMinutes] how long the override runs (the pump auto-reverts after).
+     * SAFE TBR (production + test) via the same canary as the bolus: lock the write counter on the BENIGN
+     * event-index char, then write the TBR command EXACTLY ONCE at the confirmed next counter. Aborts
+     * with no TBR write if the canary can't be confirmed. [percent] 0=suspend, 100=normal; [durationMinutes]
+     * MUST be a 15-min step (15/30/…). Counter persisted after each accepted write. [onResult]=(accepted,msg).
      */
-    fun testTbrCanary(percent: Int, durationMinutes: Int, seedW: Long, onResult: (String) -> Unit) {
-        if (!isConnected || bluetoothGatt == null) { onResult("not connected"); return }
+    fun testTbrCanary(percent: Int, durationMinutes: Int, seedW: Long, onResult: (Boolean, String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
         val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
         val candidates = listOf(seedW + 1, seedW, seedW + 2)
         fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult("CANARY FAILED (tried $candidates) — counter off, NO TBR sent"); return }
+            if (i >= candidates.size) { onResult(false, "canary failed (tried $candidates) — counter off, NO TBR sent"); return }
             val c = candidates[i]
             aapsLogger.info(LTag.PUMP, "YpsoPump TBR canary index-write @counter=$c")
             writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
                 when (status) {
                     BluetoothGatt.GATT_SUCCESS -> {
+                        persistWriteCounter()
                         aapsLogger.info(LTag.PUMP, "YpsoPump TBR CANARY ACCEPTED @$c — counter locked; TBR will be @${c + 1}")
                         sendTestTbr(percent, durationMinutes, c, onResult)
                     }
                     ERR_WRITE_REJECTED         -> tryCanary(i + 1)
-                    else                       -> onResult("TBR canary write status=$status — ABORT, NO TBR")
+                    else                       -> onResult(false, "TBR canary write status=$status — ABORT, NO TBR")
                 }
             }
         }
         tryCanary(0)
     }
 
-    private fun sendTestTbr(percent: Int, durationMinutes: Int, lockedCounter: Long, onResult: (String) -> Unit) {
+    private fun sendTestTbr(percent: Int, durationMinutes: Int, lockedCounter: Long, onResult: (Boolean, String) -> Unit) {
         val cmd = TbrCommand(percent, durationMinutes)         // complement-protected fields — NO CRC (unlike bolus)
         val payload = cmd.encode()
         aapsLogger.info(LTag.PUMP, "YpsoPump >>> SENDING TBR ${percent}% for ${durationMinutes}min @counter=${lockedCounter + 1} raw=${payload.joinToString("") { "%02x".format(it) }}")
         writeOnceAt(CHAR_TBR_START_STOP, payload, lockedCounter + 1) { status ->
-            if (status != BluetoothGatt.GATT_SUCCESS) { onResult("TBR REJECTED status=$status @${lockedCounter + 1}"); return@writeOnceAt }
+            if (status != BluetoothGatt.GATT_SUCCESS) { onResult(false, "TBR REJECTED status=$status @${lockedCounter + 1}"); return@writeOnceAt }
+            persistWriteCounter()
             aapsLogger.info(LTag.PUMP, "YpsoPump >>> TBR ACCEPTED @${lockedCounter + 1}")
             readStatus {
                 pumpState.lastConnectionTime = System.currentTimeMillis()
-                onResult("TBR ACCEPTED ${percent}% ${durationMinutes}min; pump activeTbrPercent=${pumpState.activeTbrPercent} | FINAL writeCounter=${sessionCrypto.writeCounter} readCounter=${sessionCrypto.readCounter}")
+                onResult(true, "TBR accepted ${percent}% ${durationMinutes}min; pump activeTbrPercent=${pumpState.activeTbrPercent}")
             }
         }
     }
