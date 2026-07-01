@@ -102,6 +102,15 @@ class YpsoBleManager @Inject constructor(
     /** rebootCounter from prefs ([YpsoPumpConst.PREF_REBOOT_COUNTER]) if set, else [fallback]. Changes only on a pump battery pull. */
     fun resolveRebootCounter(fallback: Int): Int = ypsoPrefs.getInt(YpsoPumpConst.PREF_REBOOT_COUNTER, fallback)
 
+    /**
+     * Resolve the pump BLE MAC at runtime: prefs ([YpsoPumpConst.PREF_PUMP_MAC]) WIN over the build-time
+     * [fallbackMac]. Keeps the user's pump address out of the APK/source (it's per-user, like the key).
+     */
+    fun resolvePumpMac(fallbackMac: String): String {
+        val fromPrefs = ypsoPrefs.getString(YpsoPumpConst.PREF_PUMP_MAC, null)?.trim().orEmpty()
+        return if (fromPrefs.isNotEmpty()) fromPrefs else fallbackMac
+    }
+
     /** Persist a freshly-captured key into prefs so it survives rebuilds/reconnects (call after a re-capture). */
     fun saveSharedKey(hex: String) { ypsoPrefs.edit().putString(YpsoPumpConst.PREF_SHARED_KEY, hex.trim()).apply() }
 
