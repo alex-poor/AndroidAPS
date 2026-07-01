@@ -9,6 +9,7 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
+import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.pump.PumpEnactResult
@@ -47,6 +48,7 @@ class YpsoPumpPlugin @Inject constructor(
     private val pumpSync: PumpSync,
     private val dateUtil: DateUtil,
     private val rxBus: RxBus,
+    private val profileFunction: ProfileFunction,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
@@ -164,7 +166,10 @@ class YpsoPumpPlugin @Inject constructor(
     override val lastDataTime: Long get() = pumpState.lastConnectionTime
     override val lastBolusTime: Long? get() = pumpSync.expectedPumpState().bolus?.timestamp
     override val lastBolusAmount: Double? get() = pumpSync.expectedPumpState().bolus?.amount
-    override val baseBasalRate: Double get() = pumpState.activeBasalRate
+    // Pump basal profile mirrors the AAPS profile (setNewBasalProfile is a no-op accept), and our status
+    // read does not decode the active basal rate — so derive base basal from the active AAPS profile.
+    // Must be > 0 or LoopPlugin.invoke() silently returns (if (pump.baseBasalRate < 0.01) return).
+    override val baseBasalRate: Double get() = profileFunction.getProfile()?.getBasal() ?: 0.0
     override val reservoirLevel: Double get() = pumpState.reservoirUnits
     override val batteryLevel: Int? get() = pumpState.batteryPercent
 
