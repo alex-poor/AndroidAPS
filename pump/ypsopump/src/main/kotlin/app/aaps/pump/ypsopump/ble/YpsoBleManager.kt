@@ -491,7 +491,18 @@ class YpsoBleManager @Inject constructor(
                 }
             }
         }
-        tryCanary(0)
+        // Read the event count once before the canary so the TBR path is read-before-write CONSISTENT with
+        // the bolus path (deliverBolus -> establishCounter reads EVENT_COUNT first). Ypsomed doc 18 advises a
+        // pump read before writing after (re)connect; this makes the behaviour uniform and is a harmless
+        // benign read (no therapy, does not touch the write counter). NOTE: this is defensive, not the cure
+        // for app-error 0x8B (139) seen 2026-07-01 — that was the write counter being BEHIND the pump (the
+        // check is forward-gap tolerant, so 0x8B = counter too low). Recovery for 0x8B is to re-seed the
+        // persisted writeCounter WELL ABOVE the pump's current value (a forward jump), not a code change.
+        readMultiframe(CHAR_EVENT_COUNT) { fc ->
+            val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
+            aapsLogger.info(LTag.PUMP, "YpsoPump TBR prime-read event count=$count (readCounter=${sessionCrypto.readCounter}) — session primed, sending canary")
+            tryCanary(0)
+        }
     }
 
     private fun sendTestTbr(percent: Int, durationMinutes: Int, lockedCounter: Long, onResult: (Boolean, String) -> Unit) {
