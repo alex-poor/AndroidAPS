@@ -80,17 +80,21 @@ class YpsoPumpPlugin @Inject constructor(
     private var testTbrDone = false
     private var bolusStatusReadDone = false
 
+    /** Session key resolved at runtime: persisted prefs win over the build const (see YpsoBleManager.resolveSharedKey). */
+    private fun resolvedKey(): String = bleManager.resolveSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
+
     private fun seedAndConnect() {
-        bleManager.setSharedKey(YpsoPumpConst.CAPTURED_KEY_HEX)
-        if (YpsoPumpConst.CAPTURED_WRITE_COUNTER >= 0)
-            bleManager.setCounters(YpsoPumpConst.CAPTURED_WRITE_COUNTER, YpsoPumpConst.CAPTURED_REBOOT_COUNTER)
+        bleManager.setSharedKey(resolvedKey())
+        // Always seed counters so the AAPS-owned PERSISTED write counter is loaded even when no build-time seed
+        // is set (setCounters keeps the higher of persisted/seed). Reboot counter from prefs if present.
+        bleManager.setCounters(YpsoPumpConst.CAPTURED_WRITE_COUNTER, bleManager.resolveRebootCounter(YpsoPumpConst.CAPTURED_REBOOT_COUNTER))
         bleManager.connect(YpsoPumpConst.PUMP_MAC)
     }
 
     override fun connect(reason: String) {
         aapsLogger.debug(LTag.PUMP, "connect: $reason")
-        if (YpsoPumpConst.CAPTURED_KEY_HEX.isEmpty()) {
-            aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping connect")
+        if (resolvedKey().isEmpty()) {
+            aapsLogger.info(LTag.PUMP, "YpsoPump: no session key (prefs ypso_shared_key or build const) — skipping connect")
             return
         }
         seedAndConnect()
@@ -101,8 +105,8 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun getPumpStatus(reason: String) {
         aapsLogger.debug(LTag.PUMP, "getPumpStatus: $reason")
-        if (YpsoPumpConst.CAPTURED_KEY_HEX.isEmpty()) {
-            aapsLogger.info(LTag.PUMP, "YpsoPump: CAPTURED_KEY_HEX not set — skipping read")
+        if (resolvedKey().isEmpty()) {
+            aapsLogger.info(LTag.PUMP, "YpsoPump: no session key (prefs ypso_shared_key or build const) — skipping read")
             return
         }
         if (!bleManager.isConnected) { seedAndConnect(); return }
@@ -178,7 +182,7 @@ class YpsoPumpPlugin @Inject constructor(
     /** Block the queue-worker thread until the pump is connected, connecting if needed. */
     private fun ensureConnected(timeoutMs: Long = 40_000): Boolean {
         if (bleManager.isConnected) return true
-        if (YpsoPumpConst.CAPTURED_KEY_HEX.isEmpty()) return false
+        if (resolvedKey().isEmpty()) return false
         seedAndConnect()
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!bleManager.isConnected && System.currentTimeMillis() < deadline) Thread.sleep(250)

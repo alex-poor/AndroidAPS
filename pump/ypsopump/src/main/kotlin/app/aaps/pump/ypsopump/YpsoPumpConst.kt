@@ -48,11 +48,15 @@ object YpsoPumpConst {
     const val PREF_KEY_DATE = "ypso_key_date"
     const val PREF_PUMP_SERIAL = "ypso_pump_serial"
 
-    // -- Test wiring (read-only milestone) --
-    // TODO: load from EncryptedSharedPreferences. Filled in locally for on-device testing only;
-    // the captured session key is sensitive and must NOT be committed/pushed.
+    // -- Key source (Model 1: key is always captured from the genuine app; see memory/model3-keyexchange-backend.md) --
+    // PREFERRED: put the captured key in prefs at runtime — NO rebuild needed, key stays out of the APK:
+    //   adb: add  <string name="ypso_shared_key">AEC10ED9...</string>  to
+    //        /data/data/info.nightscout.androidaps/shared_prefs/ypso_ble_state.xml  (plain MODE_PRIVATE prefs)
+    //   (and optional <int name="ypso_reboot_counter" value="8"/> — only changes on a battery pull).
+    // resolveSharedKey() takes prefs over this const. CAPTURED_KEY_HEX below is a build-time FALLBACK only
+    // (leave "" for shared/published builds; the key is sensitive and must NOT be committed/pushed).
     const val PUMP_MAC = "REDACTED"
-    const val CAPTURED_KEY_HEX = ""   // paste the current captured sharedKey here to test
+    const val CAPTURED_KEY_HEX = ""   // fallback only — prefer the ypso_shared_key pref (see above)
 
     // -- Write path (counters). Needed only for WRITEs (history index, dosing); reads need none.
     // Seed CAPTURED_WRITE_COUNTER with mylife's CURRENT numericWriteAppCounter (frida ml-readprefs,

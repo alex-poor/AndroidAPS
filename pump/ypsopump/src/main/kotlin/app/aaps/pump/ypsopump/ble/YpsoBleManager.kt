@@ -89,6 +89,23 @@ class YpsoBleManager @Inject constructor(
     private fun persistWriteCounter() { ypsoPrefs.edit().putLong("writeCounter", sessionCrypto.writeCounter).apply() }
 
     /**
+     * Resolve the session key at runtime: a value persisted in prefs (ypso_ble_state / [YpsoPumpConst.PREF_SHARED_KEY])
+     * WINS over the build-time [fallbackHex]. This lets a re-captured key be dropped into prefs (adb/frida) WITHOUT
+     * rebuilding, and keeps the key out of the APK. Returns "" if neither is set. (Model-1 onboarding: the key is
+     * always established by the genuine app + captured — see memory/model3-keyexchange-backend.md.)
+     */
+    fun resolveSharedKey(fallbackHex: String): String {
+        val fromPrefs = ypsoPrefs.getString(YpsoPumpConst.PREF_SHARED_KEY, null)?.trim().orEmpty()
+        return if (fromPrefs.isNotEmpty()) fromPrefs else fallbackHex
+    }
+
+    /** rebootCounter from prefs ([YpsoPumpConst.PREF_REBOOT_COUNTER]) if set, else [fallback]. Changes only on a pump battery pull. */
+    fun resolveRebootCounter(fallback: Int): Int = ypsoPrefs.getInt(YpsoPumpConst.PREF_REBOOT_COUNTER, fallback)
+
+    /** Persist a freshly-captured key into prefs so it survives rebuilds/reconnects (call after a re-capture). */
+    fun saveSharedKey(hex: String) { ypsoPrefs.edit().putString(YpsoPumpConst.PREF_SHARED_KEY, hex.trim()).apply() }
+
+    /**
      * Seed the counters before any encrypted WRITE. [writeCounter] = the genuine app's CURRENT value
      * (mylife's numericWriteAppCounter, captured via frida) for the FIRST ever run; thereafter the
      * PERSISTED, AAPS-owned value wins (we use the higher of the two). The first write uses value+1 (the
