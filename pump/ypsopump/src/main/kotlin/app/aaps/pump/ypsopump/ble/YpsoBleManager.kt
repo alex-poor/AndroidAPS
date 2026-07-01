@@ -73,6 +73,14 @@ class YpsoBleManager @Inject constructor(
         // appended to the 8-byte GLB index command (fixed: index writes now send bare glbEncode). Whether
         // a wrong write-counter also surfaces as 0x8A vs a distinct code is still TBD on the pump.
         private const val ERR_WRITE_REJECTED = 138
+        // App-error 0x8B (139) = the write counter is BEHIND the pump's (the pump advanced on a write whose
+        // BLE ack we never saw — a dropped Write-Response or a transient disconnect — so our persisted
+        // counter is off by >=1 and the pump requires strictly-greater). Recover by scanning the counter
+        // FORWARD (benign zero-therapy canary) until accepted; see [COUNTER_RESYNC_SCAN].
+        private const val ERR_COUNTER_BEHIND = 139
+        // How far to scan the write counter forward when it is behind (each step = one benign canary write).
+        // Desync is normally +1/+2; a wide-ish bound covers multiple lost acks without unbounded runaway.
+        private const val COUNTER_RESYNC_SCAN = 32
     }
 
     /** Seed the captured session key (hex) into the cryptor before connecting. */
@@ -430,9 +438,13 @@ class YpsoBleManager @Inject constructor(
     fun testBolusCanary(units: Double, seedW: Long, onResult: (Boolean, String) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
         val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
+        // SAFETY: unlike the TBR path, the BOLUS canary does NOT scan the counter forward. A dropped ack on a
+        // bolus write can mean the pump ALREADY DELIVERED; self-healing the counter would let a retry double
+        // dose. So on a counter error we FAIL CLOSED (abort). Proper fix (TODO): on ambiguous counter, read
+        // CHAR_BOLUS_STATUS to confirm whether the prior bolus landed before allowing another.
         val candidates = listOf(seedW + 1, seedW, seedW + 2)
         fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(false, "canary failed (tried $candidates) — counter off, NO BOLUS sent"); return }
+            if (i >= candidates.size) { onResult(false, "canary failed (tried $candidates) — counter off, NO BOLUS sent (fail-closed; reseed after confirming no bolus was delivered)"); return }
             val c = candidates[i]
             aapsLogger.info(LTag.PUMP, "YpsoPump canary index-write @counter=$c")
             writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
@@ -474,19 +486,22 @@ class YpsoBleManager @Inject constructor(
     fun testTbrCanary(percent: Int, durationMinutes: Int, seedW: Long, onResult: (Boolean, String) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
         val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
-        val candidates = listOf(seedW + 1, seedW, seedW + 2)
+        // Scan the counter FORWARD from seedW+1 to self-heal a dropped-ack desync (see testBolusCanary /
+        // ERR_COUNTER_BEHIND). Benign zero-therapy writes; the TBR is still sent ONCE at the confirmed counter.
+        val candidates = (1..COUNTER_RESYNC_SCAN).map { seedW + it }
         fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(false, "canary failed (tried $candidates) — counter off, NO TBR sent"); return }
+            if (i >= candidates.size) { onResult(false, "canary failed (scanned +1..+$COUNTER_RESYNC_SCAN from $seedW) — NO TBR sent"); return }
             val c = candidates[i]
             aapsLogger.info(LTag.PUMP, "YpsoPump TBR canary index-write @counter=$c")
             writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
                 when (status) {
                     BluetoothGatt.GATT_SUCCESS -> {
                         persistWriteCounter()
+                        if (i > 0) aapsLogger.warn(LTag.PUMP, "YpsoPump counter was BEHIND by $i (dropped ack) — resynced to $c")
                         aapsLogger.info(LTag.PUMP, "YpsoPump TBR CANARY ACCEPTED @$c — counter locked; TBR will be @${c + 1}")
                         sendTestTbr(percent, durationMinutes, c, onResult)
                     }
-                    ERR_WRITE_REJECTED         -> tryCanary(i + 1)
+                    ERR_WRITE_REJECTED, ERR_COUNTER_BEHIND -> tryCanary(i + 1)   // 0x8A/0x8B: counter off → scan forward
                     else                       -> onResult(false, "TBR canary write status=$status — ABORT, NO TBR")
                 }
             }
