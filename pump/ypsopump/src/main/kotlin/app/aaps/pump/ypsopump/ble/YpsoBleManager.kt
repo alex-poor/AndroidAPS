@@ -81,6 +81,11 @@ class YpsoBleManager @Inject constructor(
         // How far to scan the write counter forward when it is behind (each step = one benign canary write).
         // Desync is normally +1/+2; a wide-ish bound covers multiple lost acks without unbounded runaway.
         private const val COUNTER_RESYNC_SCAN = 32
+        // App-error 0x86 (134) on a TBR write = the pump already has an ACTIVE temp basal and refuses to
+        // START a new one until the current one is STOPped (CHAR_TBR_START_STOP is a start/stop char; a
+        // 0%/suspend TBR triggers this too). Recover by cancelling (100%/0) then re-sending. [confirmed
+        // on-device 2026-07-02: 333% and 0% both rejected 0x86 while a prior 0% TBR was active]
+        private const val ERR_TBR_ACTIVE = 134
     }
 
     /** Seed the captured session key (hex) into the cryptor before connecting. */
@@ -521,16 +526,38 @@ class YpsoBleManager @Inject constructor(
     }
 
     private fun sendTestTbr(percent: Int, durationMinutes: Int, lockedCounter: Long, onResult: (Boolean, String) -> Unit) {
-        val cmd = TbrCommand(percent, durationMinutes)         // complement-protected fields — NO CRC (unlike bolus)
-        val payload = cmd.encode()
-        aapsLogger.info(LTag.PUMP, "YpsoPump >>> SENDING TBR ${percent}% for ${durationMinutes}min @counter=${lockedCounter + 1} raw=${payload.joinToString("") { "%02x".format(it) }}")
-        writeOnceAt(CHAR_TBR_START_STOP, payload, lockedCounter + 1) { status ->
-            if (status != BluetoothGatt.GATT_SUCCESS) { onResult(false, "TBR REJECTED status=$status @${lockedCounter + 1}"); return@writeOnceAt }
+        fun writeTbrAt(pct: Int, dur: Int, counter: Long, label: String, cb: (Int) -> Unit) {
+            val payload = TbrCommand(pct, dur).encode()          // complement-protected fields — NO CRC (unlike bolus)
+            aapsLogger.info(LTag.PUMP, "YpsoPump >>> $label TBR ${pct}% for ${dur}min @counter=$counter raw=${payload.joinToString("") { "%02x".format(it) }}")
+            writeOnceAt(CHAR_TBR_START_STOP, payload, counter, cb)
+        }
+        fun finish(c: Long, note: String) {
             persistWriteCounter()
-            aapsLogger.info(LTag.PUMP, "YpsoPump >>> TBR ACCEPTED @${lockedCounter + 1}")
+            aapsLogger.info(LTag.PUMP, "YpsoPump >>> TBR ACCEPTED @$c$note")
             readStatus {
                 pumpState.lastConnectionTime = System.currentTimeMillis()
-                onResult(true, "TBR accepted ${percent}% ${durationMinutes}min; pump activeTbrPercent=${pumpState.activeTbrPercent}")
+                onResult(true, "TBR accepted ${percent}% ${durationMinutes}min$note; pump activeTbrPercent=${pumpState.activeTbrPercent}")
+            }
+        }
+        // Try to START the requested TBR directly.
+        writeTbrAt(percent, durationMinutes, lockedCounter + 1, "SENDING") { status ->
+            when {
+                status == BluetoothGatt.GATT_SUCCESS -> finish(lockedCounter + 1, "")
+                // 0x86 = a TBR is already active; the pump won't START a new one until the current is STOPped.
+                // Cancel it (100%/0 — the STOP; can never itself be blocked) then re-send. The rejected write
+                // consumes one counter on the pump, so cancel/re-send go at +2/+3 (all forward-gap safe).
+                status == ERR_TBR_ACTIVE && percent != 100 -> {
+                    aapsLogger.warn(LTag.PUMP, "YpsoPump TBR rejected 0x86 (active TBR blocks a new one) — cancelling prior TBR then re-sending")
+                    writeTbrAt(100, 0, lockedCounter + 2, "CANCEL-PRIOR") { cancelStatus ->
+                        if (cancelStatus != BluetoothGatt.GATT_SUCCESS) { onResult(false, "TBR pre-cancel rejected status=$cancelStatus @${lockedCounter + 2} — NO TBR"); return@writeTbrAt }
+                        persistWriteCounter()
+                        writeTbrAt(percent, durationMinutes, lockedCounter + 3, "RE-SENDING") { retry ->
+                            if (retry != BluetoothGatt.GATT_SUCCESS) { onResult(false, "TBR re-send rejected status=$retry @${lockedCounter + 3} — NO TBR"); return@writeTbrAt }
+                            finish(lockedCounter + 3, " (after cancelling prior TBR)")
+                        }
+                    }
+                }
+                else -> onResult(false, "TBR REJECTED status=$status @${lockedCounter + 1}")
             }
         }
     }
