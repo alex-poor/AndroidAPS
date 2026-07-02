@@ -19,6 +19,7 @@ enum class BooleanKey(
 
     GeneralSimpleMode("simple_mode", true),
     HovorkaTddAdaptation("hovorka_tdd_adaptation", false),
+    HovorkaImmBank("hovorka_imm_bank", false),
     GeneralSetupWizardProcessed("startupwizard_processed", false),
     OverviewKeepScreenOn("keep_screen_on", false, calculatedDefaultValue = true),
     OverviewShowTreatmentButton("show_treatment_button", false, defaultedBySM = true, hideParentScreenIfHidden = true),

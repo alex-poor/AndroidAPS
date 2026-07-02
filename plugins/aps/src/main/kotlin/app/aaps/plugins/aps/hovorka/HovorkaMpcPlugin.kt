@@ -104,6 +104,12 @@ class HovorkaMpcPlugin @Inject constructor(
                     summary = R.string.hovorka_tdd_adaptation_summary, title = R.string.hovorka_tdd_adaptation_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaImmBank,
+                    summary = R.string.hovorka_imm_bank_summary, title = R.string.hovorka_imm_bank_title
+                )
+            )
         }
     }
 
@@ -143,8 +149,11 @@ class HovorkaMpcPlugin @Inject constructor(
             return
         }
 
+        // 3a: if the estimator identifies a regime (IMM), roll the MPC out with that model
+        // (ModelIMM1::PredictForOptimise); the single EKF returns null → the personalised model is used.
+        val rolloutModel = ekf.rolloutModel() ?: model
         val mpc = HovorkaMpc(
-            model, targetMmol = controlTargetMmol,
+            rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin
         )
         val decision = mpc.decide(ekf.x)
@@ -236,8 +245,14 @@ class HovorkaMpcPlugin @Inject constructor(
         return if (n > 0) sum / n else profile.getBasal(start)
     }
 
-    /** Replay BG/insulin/carb history over WINDOW_H hours to estimate current Hovorka state. */
-    private fun estimateState(model: HovorkaModel, nominalBasalMuMin: Double, now: Long): HovorkaEkf {
+    /**
+     * Replay BG/insulin/carb history over WINDOW_H hours to estimate current Hovorka state.
+     * 3a: the estimator is a single EKF by default, or the 8-submodel IMM bank when [BooleanKey.HovorkaImmBank]
+     * is on. Both implement [GlucoseEstimator], so the replay below is identical either way. The IMM
+     * identifies the patient's absorption regime (fast↔slow carbs) each tick; on its own that's ~parity with
+     * the EKF on top of 2a (it earns its keep via meal detection + SMB, 3b), so it ships OFF by default.
+     */
+    private fun estimateState(model: HovorkaModel, nominalBasalMuMin: Double, now: Long): GlucoseEstimator {
         val start = now - WINDOW_H * 3_600_000L
         val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
         val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true)
@@ -245,7 +260,9 @@ class HovorkaMpcPlugin @Inject constructor(
         val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
 
         val profile = profileFunction.getProfile()!!
-        val ekf = HovorkaEkf(model, model.steadyState(nominalBasalMuMin))
+        val ekf: GlucoseEstimator =
+            if (preferences.get(BooleanKey.HovorkaImmBank)) HovorkaImmBank(model.p, nominalBasalMuMin)
+            else HovorkaEkf(model, model.steadyState(nominalBasalMuMin))
         // index events by minute offset from start
         fun minOf(ts: Long) = ((ts - start) / 60000L).toInt()
         val bolusAt = HashMap<Int, Double>()
@@ -266,7 +283,7 @@ class HovorkaMpcPlugin @Inject constructor(
         var bgIdx = 0
         for (m in 0 until totalMin) {
             carbAt[m]?.let { ekf.meal(it) }
-            bolusAt[m]?.let { ekf.x[5] += it * 1000.0 }                    // U -> mU into SC comp 1
+            bolusAt[m]?.let { ekf.bolus(it) }                             // U bolus -> SC insulin comp
             val uMuMin = basalUhrAt(start + m * 60000L) * 1000.0 / 60.0
             ekf.predict(uMuMin, 1.0)
             // apply any CGM reading landing in this minute

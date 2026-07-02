@@ -1,10 +1,11 @@
 package app.aaps.plugins.aps.hovorka
 
+import kotlin.math.ln
 import kotlin.math.max
 
 /**
- * Extended Kalman Filter over the Hovorka state, driven by CGM. This is the single-EKF phase;
- * the IMM bank (8 submodels) is a later enhancement (report/hovorka-plugin-plan.md Phase 5).
+ * Extended Kalman Filter over the Hovorka state, driven by CGM. This is the single-EKF phase; the
+ * IMM bank (8 submodels, HovorkaImmBank) wraps 8 of these (report/hovorka-plugin-plan.md 3a).
  *
  * Measurement: z = G = Q1/VG (mmol/L), so H = [1/VG, 0, 0, ...].
  * Prediction uses the model's RK4 step; the state-transition Jacobian F is computed by FINITE
@@ -13,13 +14,13 @@ import kotlin.math.max
  * Inputs known to the filter: insulin infusion u(t) (mU/min) and meals (grams CHO, via [meal]).
  */
 class HovorkaEkf(
-    private val model: HovorkaModel,
+    val model: HovorkaModel,
     initialState: DoubleArray,
     private val measNoiseVar: Double = 0.5,          // R: CGM variance (mmol/L)^2
     processNoiseScale: Double = 1e-3                 // Q diagonal scale
-) {
+) : GlucoseEstimator {
     val n = model.nStates
-    var x = initialState.copyOf(); private set
+    override var x = initialState.copyOf(); private set
     private val P = eye(n, 1.0)                       // covariance
     private val Q = eye(n, processNoiseScale)         // process noise
 
@@ -27,16 +28,40 @@ class HovorkaEkf(
         P[8][8] = 5.0; P[9][9] = 5.0; P[5][5] = 2.0; P[6][6] = 2.0
     }
 
-    fun glucoseMmol() = model.glucoseMmol(x)
+    override fun glucoseMmol() = model.glucoseMmol(x)
 
     /** Known meal input (grams CHO) — deposit into the estimate and inflate gut covariance. */
-    fun meal(carbsG: Double) {
+    override fun meal(carbsG: Double) {
         x = model.addMeal(x, carbsG)
         P[8][8] += carbsG * 0.5
     }
 
+    /** Known insulin bolus (U) — deposit into SC insulin compartment S1 (mU) and inflate its covariance. */
+    override fun bolus(unitsU: Double) {
+        x[5] += unitsU * 1000.0
+        P[5][5] += unitsU * unitsU * 100.0
+    }
+
+    /** Forecast glucose `minutes` ahead under constant infusion u (no mutation). */
+    override fun forecastGlucoseMmol(u: Double, minutes: Int): Double {
+        var s = x.copyOf()
+        repeat(minutes) { s = model.step(s, u, 1.0) }
+        return model.glucoseMmol(s)
+    }
+
+    /** Copy of the current state estimate. */
+    fun stateCopy(): DoubleArray = x.copyOf()
+
+    /** Deep copy of the current covariance. */
+    fun covCopy(): Array<DoubleArray> = Array(n) { P[it].copyOf() }
+
+    /** Overwrite the state + covariance (used by the IMM bank's mixing step). */
+    fun setStateCov(newX: DoubleArray, newP: Array<DoubleArray>) {
+        for (i in 0 until n) { x[i] = newX[i]; for (j in 0 until n) P[i][j] = newP[i][j] }
+    }
+
     /** Predict one dt-minute step under insulin infusion u (mU/min). */
-    fun predict(u: Double, dtMin: Double) {
+    override fun predict(u: Double, dtMin: Double) {
         val f = numericJacobian(u, dtMin)
         x = model.step(x, u, dtMin)
         // P = F P F^T + Q
@@ -45,8 +70,11 @@ class HovorkaEkf(
         for (i in 0 until n) for (j in 0 until n) P[i][j] = fpft[i][j] + Q[i][j]
     }
 
-    /** Correct with a CGM measurement (mmol/L). */
-    fun update(gMeasMmol: Double) {
+    /**
+     * Correct with a CGM measurement (mmol/L). Returns the measurement's Gaussian log-likelihood
+     * `-0.5·(y²/S + ln(2π·S))` — the innovation likelihood the IMM bank uses to weight this model.
+     */
+    override fun update(gMeasMmol: Double): Double {
         // H = d(G)/dx = [1/VG, 0...]; innovation y = z - Hx
         val hInv = 1.0 / model.p.vg
         val yInnov = gMeasMmol - x[0] * hInv
@@ -66,6 +94,7 @@ class HovorkaEkf(
             newP[i][j] = v
         }
         for (i in 0 until n) for (j in 0 until n) P[i][j] = newP[i][j]
+        return -0.5 * (yInnov * yInnov / s + ln(2.0 * Math.PI * s))
     }
 
     /** F ≈ ∂(step)/∂x by central finite differences (finite differences). */
