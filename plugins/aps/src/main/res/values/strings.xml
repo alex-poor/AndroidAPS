@@ -231,4 +231,6 @@
     <string name="hovorka_tdd_adaptation_summary">Slowly move the operating basal the controller is shaped around, based on the last week of enacted insulin and glucose outcomes (bounded, safety-first). Off = use the profile basal as-is.</string>
     <string name="hovorka_imm_bank_title">IMM Kalman bank (identify carb absorption)</string>
     <string name="hovorka_imm_bank_summary">Run 8 parallel models spanning fast↔slow carb absorption and pick the best-fitting each cycle (CamAPS-style), instead of one fixed model. Experimental — on its own it is about the same as the single model; it mainly prepares for meal detection and microbolus (SMB). Off = single model.</string>
+    <string name="hovorka_enable_smb_title">Microbolus (SMB) — EXPERIMENTAL, delivers insulin</string>
+    <string name="hovorka_enable_smb_summary">When a temp basal cannot lower a post-meal peak fast enough, deliver a small immediate correction bolus (a fraction of the deficit, bounded by max IOB / max bolus). Requires SMB objective. Highest-risk feature; forced to zero on any hypo. Off = temp-basal only.</string>
 </resources>

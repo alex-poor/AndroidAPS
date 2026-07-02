@@ -67,6 +67,62 @@ fun main() {
     validateOutputLaw()
     validateTddAdaptation()
     validateImmBank()
+    validateSmb()
+}
+
+/**
+ * #3b SMB (microbolus): when meals are only partially pre-bolused, a basal-only (TBR) controller cannot
+ * catch the post-meal PEAK — it lacks the authority. SMB delivers a fraction of the short-horizon insulin
+ * deficit as an immediate microbolus. This checks SMB cuts the peak + lifts TIR WITHOUT worsening hypo
+ * safety (worst-min, TBR%), that it respects maxIOB, and that it is fully SUPPRESSED on a hypo.
+ */
+private fun validateSmb() {
+    println("\n=== 3b SMB: TBR-only vs SMB (20 patients, meals only 50% pre-bolused → real post-meal peaks) ===")
+    val rng = java.util.Random(2024)
+    val tbrOnly = ArrayList<LoopMetrics>(); val withSmb = ArrayList<LoopMetrics>()
+    val smbCapU = 1.5           // per-tick microbolus cap (U)
+    val maxIobU = 8.0           // SMB may not push SC IOB above this
+    for (i in 1..20) {
+        val w = 55.0 + rng.nextDouble() * 40.0
+        val patient = HovorkaModel(HovorkaParams.randomPatient(rng, w))
+        val basal = patient.basalForSteadyState(6.0)
+        val basalUhr = basal * 60.0 / 1000.0
+        val (isfMgdl, icG) = measurePatientIsfIc(patient, basal, rng, noise = 0.15)
+        val carbErr = 0.85 + rng.nextDouble() * 0.3
+        val seed = 100L + i
+        val ctrl = HovorkaModel(HovorkaParams.personalize(w, isfMgdl, icG, basalUhr, 6.0))
+        // meals only HALF pre-bolused → a genuine post-meal excursion basal alone can't fully correct
+        tbrOnly.add(simulateClosedLoop(ctrl, patient, basal, STANDARD_MEALS, seed = seed,
+            carbAnnounceError = carbErr, bolusCoverage = 0.5))
+        withSmb.add(simulateClosedLoop(ctrl, patient, basal, STANDARD_MEALS, seed = seed,
+            carbAnnounceError = carbErr, bolusCoverage = 0.5, enableSmb = true, smbCapU = smbCapU, maxIobU = maxIobU))
+    }
+    val tirT = tbrOnly.map { it.tirPct }.average(); val tirS = withSmb.map { it.tirPct }.average()
+    val peakT = tbrOnly.map { it.maxG }.average(); val peakS = withSmb.map { it.maxG }.average()
+    val tarT = tbrOnly.map { it.tarPct }.average(); val tarS = withSmb.map { it.tarPct }.average()
+    val worstMinT = tbrOnly.minOf { it.minG }; val worstMinS = withSmb.minOf { it.minG }
+    val tbrPctT = tbrOnly.map { it.tbrPct }.average(); val tbrPctS = withSmb.map { it.tbrPct }.average()
+    val sevS = withSmb.count { it.severeHypoPct > 0.0 }
+    println("     TBR-only:  TIR=%.0f%%  mean peak=%.1f  TAR=%.0f%%  worst min=%.1f  TBR=%.1f%%".format(tirT, peakT, tarT, worstMinT, tbrPctT))
+    println("     with SMB:  TIR=%.0f%%  mean peak=%.1f  TAR=%.0f%%  worst min=%.1f  TBR=%.1f%%  severe-hypo pts=%d".format(tirS, peakS, tarS, worstMinS, tbrPctS, sevS))
+
+    // hypo-suppression: a patient deliberately driven low — SMB must be ZERO regardless of the switch.
+    val hp = HovorkaModel(HovorkaParams.forWeight(70.0))
+    val hb = hp.basalForSteadyState(6.0)
+    val lowState = hp.steadyState(hb).also { it[0] = 3.4 * hp.p.vg }        // force est.G ≈ 3.4 mmol/L (hypo)
+    val smbMpc = HovorkaMpc(hp, nominalBasalMuPerMin = hb, maxBasalMuPerMin = hb * 8,
+        enableSmb = true, maxSmbU = 2.0)
+    val hypoDecision = smbMpc.decide(lowState)
+
+    println("\n=== SMB CHECKS ===")
+    check("SMB reduces the mean post-meal peak vs TBR-only", peakS < peakT - 0.3, "%.1f → %.1f mmol/L".format(peakT, peakS))
+    check("SMB improves cohort TIR vs TBR-only", tirS > tirT + 1.0, "%.0f%% → %.0f%%".format(tirT, tirS))
+    check("SMB stays out of hypo (worst-min > 3.9, no severe-hypo pts, no added below-range time)",
+        worstMinS > 3.9 && sevS == 0 && tbrPctS <= tbrPctT + 0.5, "min=%.1f sev=%d TBR %.1f→%.1f%%".format(worstMinS, sevS, tbrPctT, tbrPctS))
+    check("SMB fully suppressed on a hypo (G≈3.4 → 0 U bolus + 0 U/hr)", hypoDecision.smbU == 0.0 && hypoDecision.basalMuPerMin == 0.0, "smb=%.2fU basal=%.2f".format(hypoDecision.smbU, hypoDecision.basalMuPerMin))
+
+    println(if (failures == 0) "\n✅ ALL CHECKS PASS (incl. SMB)."
+            else "\n❌ $failures check(s) failed.")
 }
 
 /**
@@ -320,9 +376,6 @@ private fun validateImmBank() {
     check("IMM closed-loop is at parity with EKF+2a (within 3pp — not a regression)", tirC >= tirE - 3.0, "coupled %.0f%% vs EKF %.0f%%".format(tirC, tirE))
     check("coupled IMM keeps cohort safe (worst min > 3.0, no severe-hypo patients)", worstMinC > 3.0 && sevC == 0, "min=%.1f sev=%d".format(worstMinC, sevC))
     check("coupled IMM mean TBR < 4%", tbrC < 4.0, "%.1f%%".format(tbrC))
-
-    println(if (failures == 0) "\n✅ ALL CHECKS PASS (incl. IMM bank)."
-            else "\n❌ $failures check(s) failed.")
 }
 
 /**

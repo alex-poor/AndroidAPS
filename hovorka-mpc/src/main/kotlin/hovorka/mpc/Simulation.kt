@@ -33,13 +33,21 @@ fun simulateClosedLoop(
     // 3a: pluggable estimator. Default = single EKF; pass immEstimator(...) for the IMM bank.
     estimatorFactory: (HovorkaModel, Double) -> GlucoseEstimator = { m, basal -> HovorkaEkf(m, m.steadyState(basal)) },
     // 3a: when true, roll the MPC out with the estimator's identified model each tick (IMM PredictForOptimise).
-    coupleModel: Boolean = false
+    coupleModel: Boolean = false,
+    // 3b: SMB. enableSmb + a per-tick absolute cap (smbCapU) and a maxIOB (U) the SMB may not breach.
+    enableSmb: Boolean = false,
+    smbCapU: Double = 0.0,
+    maxIobU: Double = Double.MAX_VALUE
 ): LoopMetrics {
     val rng = java.util.Random(seed)
     val maxBasal = nominalBasal * 8.0
-    fun mpcFor(m: HovorkaModel) = HovorkaMpc(m, targetMmol = controlTargetMmol,
-        nominalBasalMuPerMin = nominalBasal, maxBasalMuPerMin = maxBasal)
+    fun mpcFor(m: HovorkaModel, maxSmbU: Double = 0.0) = HovorkaMpc(m, targetMmol = controlTargetMmol,
+        nominalBasalMuPerMin = nominalBasal, maxBasalMuPerMin = maxBasal,
+        enableSmb = enableSmb, maxSmbU = maxSmbU)
     val mpc = mpcFor(controllerModel)
+    // SC insulin on board (U) from the estimator depot — the headroom that gates SMB against maxIOB.
+    fun iobU(est: GlucoseEstimator) = (est.x[5] + est.x[6]) / 1000.0
+    var totalSmbU = 0.0
 
     var truth = plantModel.steadyState(nominalBasal)            // patient starts at its own equilibrium
     val ekf = estimatorFactory(controllerModel, nominalBasal)
@@ -60,8 +68,20 @@ fun simulateClosedLoop(
         if (minute % 5 == 0) {
             val gTrue = plantModel.glucoseMmol(truth)
             ekf.update(gTrue + rng.nextGaussian() * cgmSd)
-            val decider = if (coupleModel) (ekf.rolloutModel()?.let { mpcFor(it) } ?: mpc) else mpc
-            u = decider.decide(ekf.x).basalMuPerMin
+            // per-tick SMB cap = min(absolute cap, remaining maxIOB headroom) — never breach maxIOB
+            val maxSmbU = if (enableSmb) max(0.0, min(smbCapU, maxIobU - iobU(ekf))) else 0.0
+            val rolloutM = if (coupleModel) ekf.rolloutModel() else null
+            val decider = when {
+                enableSmb || rolloutM != null -> mpcFor(rolloutM ?: controllerModel, maxSmbU)
+                else -> mpc
+            }
+            val dec = decider.decide(ekf.x)
+            u = dec.basalMuPerMin
+            if (dec.smbU > 0.0) {                                    // enact the microbolus into plant + estimator
+                truth = truth.copyOf().also { it[5] += dec.smbU * 1000.0 }
+                ekf.bolus(dec.smbU)
+                totalSmbU += dec.smbU
+            }
         }
         val g = plantModel.glucoseMmol(truth)
         total++

@@ -33,7 +33,14 @@ class HovorkaMpc(
     private val basalFloorFrac: Double = 0.7,        // floor as a fraction of nominal at/above target
     private val hypoGuardMmol: Double = 5.0,         // below this the graduated basal floor reaches 0
     private val hypoSuspendMmol: Double = 3.9,       // at/below this a HARD 0 U/hr is forced (safety)
-    private val deadbandFrac: Double = 0.1           // snap rates within ±this of nominal back to nominal
+    private val deadbandFrac: Double = 0.1,          // snap rates within ±this of nominal back to nominal
+    // --- 3b SMB (microbolus) — HIGHEST RISK, delivers insulin directly; OFF unless maxSmbU > 0 ---
+    private val enableSmb: Boolean = false,          // master switch (plugin gates on Objective 8 + pref)
+    private val maxSmbU: Double = 0.0,               // hard per-tick cap (U); plugin derives from maxSMB/maxIOB
+    private val smbFraction: Double = 0.5,           // deliver only this share of the deficit per tick (converge)
+    private val smbMarginMmol: Double = 1.5,         // only when predicted glucose stays > target+this
+    private val smbHorizonMin: Int = 60,             // horizon over which "still predicted high" is judged
+    private val minSmbU: Double = 0.05               // don't bother with sub-resolution microboluses
 ) {
     /** One control decision from the current estimated state. Returns basal rate (mU/min) + reason. */
     fun decide(stateEstimate: DoubleArray): Decision {
@@ -75,11 +82,69 @@ class HovorkaMpc(
         // rising-trend rollout or a lagging estimate could otherwise still pass ~nominal basal into a low.
         val hypoSuspended = g0 <= hypoSuspendMmol
         if (hypoSuspended) finalU = 0.0
-        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f)%s".format(
+
+        // --- 3b SMB (microbolus): a fraction of the short-horizon insulin DEFICIT (our clean-room
+        // GetShortBIR analogue). Fires only when, even at the chosen basal, glucose is predicted to stay
+        // meaningfully above target — i.e. a TBR can't correct the peak fast enough (the meal-timing
+        // authority basal lacks). The correction bolus is found with the SAME hypo-asymmetric rollout cost
+        // as the basal search, so it can never target a low; we then deliver only [smbFraction] of it so it
+        // converges over ticks. Gated OFF unless enableSmb & maxSmbU>0; NEVER when hypo-suspended/below
+        // target. Fold-back is automatic: the plugin replays delivered boluses through the estimator next
+        // tick (CamAPS AfterInsulinBolusIMM1). ---
+        var smbU = 0.0
+        if (enableSmb && maxSmbU > 0.0 && !hypoSuspended && g0 > targetMmol) {
+            val eventual = predictGlucose(stateEstimate, finalU, smbHorizonMin)
+            if (eventual > targetMmol + smbMarginMmol) {
+                val correction = searchCorrectionBolus(stateEstimate, finalU, ref)   // U, the ideal full dose
+                smbU = min(maxSmbU, smbFraction * correction)
+                if (smbU < minSmbU) smbU = 0.0
+            }
+        }
+        val smbNote = if (smbU > 0.0) " | SMB %.2fU".format(smbU) else ""
+        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f)%s%s".format(
             g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)],
             bestU * 60 / 1000, finalU * 60 / 1000, nominalBasalMuPerMin * 60 / 1000,
-            if (hypoSuspended) " | HYPO-SUSPEND G≤%.1f".format(hypoSuspendMmol) else "")
-        return Decision(finalU, finalU * 60.0 / 1000.0, reason, g0, ref)
+            if (hypoSuspended) " | HYPO-SUSPEND G≤%.1f".format(hypoSuspendMmol) else "", smbNote)
+        return Decision(finalU, finalU * 60.0 / 1000.0, reason, g0, ref, smbU)
+    }
+
+    /** Predicted glucose (mmol/L) [minutes] ahead at constant basal u, no bolus (SMB trigger test). */
+    private fun predictGlucose(s0: DoubleArray, u: Double, minutes: Int): Double {
+        var s = s0.copyOf()
+        repeat(minutes) { s = model.step(s, u, 1.0) }
+        return model.glucoseMmol(s)
+    }
+
+    /**
+     * The immediate bolus (U) that best tracks the reference at basal [basalU] — the "ideal" correction.
+     * Same hypo-asymmetric tracking cost as the basal search (so it never aims below range); monotone-ish
+     * in bolus, so grid + golden-section refine. We deliver only a FRACTION of this per tick.
+     */
+    private fun searchCorrectionBolus(s0: DoubleArray, basalU: Double, ref: DoubleArray): Double {
+        val cap = maxSmbU / smbFraction * 3.0            // enough headroom to see the true optimum
+        fun cost(b: Double): Double {
+            var s = s0.copyOf(); s[5] += b * 1000.0      // deposit bolus (U -> mU) into SC comp S1
+            var c = 0.0
+            for (i in ref.indices) {
+                val g = model.glucoseMmol(s)
+                val e = g - ref[i]
+                val w = if (g < 4.0) 6.0 else 1.0        // penalise predicted lows hard (safety)
+                c += w * e * e
+                repeat(stepMin) { s = model.step(s, basalU, 1.0) }
+            }
+            return c
+        }
+        var bestB = 0.0; var bestC = cost(0.0)
+        val step = max(0.02, cap / 40.0)
+        var b = step
+        while (b <= cap + 1e-9) { val c = cost(b); if (c < bestC) { bestC = c; bestB = b }; b += step }
+        // golden-section refine around the grid optimum
+        var lo = max(0.0, bestB - step); var hi = min(cap, bestB + step); val gr = 0.618
+        repeat(16) {
+            val a = hi - gr * (hi - lo); val bb = lo + gr * (hi - lo)
+            if (cost(a) < cost(bb)) hi = bb else lo = a
+        }
+        return 0.5 * (lo + hi)
     }
 
     /** Reference trajectory: exponential approach to target with glucose-zone-dependent decay. */
@@ -130,6 +195,7 @@ class HovorkaMpc(
         val basalUPerHr: Double,
         val reason: String,
         val glucoseMmol: Double,
-        val reference: DoubleArray
+        val reference: DoubleArray,
+        val smbU: Double = 0.0            // 3b: immediate microbolus (U) to deliver alongside the TBR
     )
 }

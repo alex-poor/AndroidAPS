@@ -11,6 +11,7 @@ import app.aaps.core.interfaces.aps.GlucoseStatus
 import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.plugins.aps.openAPSSMB.GlucoseStatusCalculatorSMB
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
@@ -60,6 +61,7 @@ class HovorkaMpcPlugin @Inject constructor(
     private val glucoseStatusCalculatorSMB: GlucoseStatusCalculatorSMB,
     private val persistenceLayer: PersistenceLayer,
     private val constraintsChecker: ConstraintsChecker,
+    private val iobCobCalculator: IobCobCalculator,
     private val dateUtil: DateUtil,
     private val preferences: Preferences,
     private val apsResultProvider: Provider<APSResult>
@@ -110,6 +112,12 @@ class HovorkaMpcPlugin @Inject constructor(
                     summary = R.string.hovorka_imm_bank_summary, title = R.string.hovorka_imm_bank_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaEnableSmb,
+                    summary = R.string.hovorka_enable_smb_summary, title = R.string.hovorka_enable_smb_title
+                )
+            )
         }
     }
 
@@ -149,12 +157,26 @@ class HovorkaMpcPlugin @Inject constructor(
             return
         }
 
+        // 3b SMB gating (all must hold; else maxSmbU=0 → the MPC emits no bolus): our pref AND AAPS's
+        // isSMBModeEnabled (encodes Objective 8 + SMB-enabled + tempBasalFallback). The per-tick cap is
+        // bounded by the maxIOB HEADROOM (authoritative AAPS IOB) and the pump/pref maxBolus — so an SMB
+        // can never push IOB past maxIOB. HIGHEST-RISK path; off by default (HovorkaEnableSmb=false).
+        val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
+            constraintsChecker.isSMBModeEnabled().value()
+        val maxSmbU = if (smbAllowed) {
+            val maxIob = constraintsChecker.getMaxIOBAllowed().value()
+            val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
+            val maxBolus = constraintsChecker.getMaxBolusAllowed().value()
+            max(0.0, min(min(maxBolus, SMB_ABS_CAP_U), maxIob - iobNow))
+        } else 0.0
+
         // 3a: if the estimator identifies a regime (IMM), roll the MPC out with that model
         // (ModelIMM1::PredictForOptimise); the single EKF returns null → the personalised model is used.
         val rolloutModel = ekf.rolloutModel() ?: model
         val mpc = HovorkaMpc(
             rolloutModel, targetMmol = controlTargetMmol,
-            nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin
+            nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin,
+            enableSmb = smbAllowed, maxSmbU = maxSmbU
         )
         val decision = mpc.decide(ekf.x)
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))
@@ -165,11 +187,15 @@ class HovorkaMpcPlugin @Inject constructor(
         val rawCgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL
         val rawHypoSuspend = rawCgmMmol <= HYPO_SUSPEND_MMOL
         if (rawHypoSuspend) rateUhr = 0.0
+        // 3b: the SMB inherits BOTH hypo backstops — the est.G suspend inside decide() (already zeroes
+        // decision.smbU) AND this raw-CGM suspend. Round to 2 dp; a dropped bolus fails closed downstream.
+        val smbU = if (rawHypoSuspend) 0.0 else round(decision.smbU * 100.0) / 100.0
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
+        // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
         val rt = RT(
             algorithm = APSResult.Algorithm.SMB,
             runningDynamicIsf = false,
@@ -179,14 +205,16 @@ class HovorkaMpcPlugin @Inject constructor(
             eventualBG = model.glucoseMgdl(ekf.x),
             reason = StringBuilder(reasonStr),
             duration = TBR_DURATION_MIN,
-            rate = rateUhr
+            rate = rateUhr,
+            units = if (smbU > 0.0) smbU else null,
+            deliverAt = if (smbU > 0.0) now else null
         )
         val result = apsResultProvider.get().with(rt)
         result.glucoseStatus = glucoseStatus
         lastAPSResult = result
         lastAPSRun = now
         rxBus.send(EventAPSCalculationFinished())
-        aapsLogger.debug(LTag.APS, "HovorkaMPC -> $rateUhr U/hr / $TBR_DURATION_MIN min | $reasonStr")
+        aapsLogger.debug(LTag.APS, "HovorkaMPC -> $rateUhr U/hr / $TBR_DURATION_MIN min${if (smbU > 0.0) " + SMB ${smbU}U" else ""} | $reasonStr")
     }
 
     // Personalisation is expensive (many steady-state solves) but only depends on profile block values,
@@ -309,5 +337,6 @@ class HovorkaMpcPlugin @Inject constructor(
         const val DAY_MS = 86_400_000L
         const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
         const val HYPO_SUSPEND_MMOL = 3.9        // at/below this RAW CGM value, force a hard 0 U/hr suspend
+        const val SMB_ABS_CAP_U = 1.5            // 3b: absolute per-tick microbolus cap (further bounded by maxIOB/maxBolus)
     }
 }
