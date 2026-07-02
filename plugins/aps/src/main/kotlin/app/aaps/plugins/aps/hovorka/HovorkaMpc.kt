@@ -31,7 +31,8 @@ class HovorkaMpc(
     private val effortWeight: Double = 0.02,
     // --- 2c output-law tuning (kills open-loop zero-temp notification spam; see decide()) ---
     private val basalFloorFrac: Double = 0.7,        // floor as a fraction of nominal at/above target
-    private val hypoGuardMmol: Double = 5.0,         // below this a full suspend (0 U/hr) is permitted
+    private val hypoGuardMmol: Double = 5.0,         // below this the graduated basal floor reaches 0
+    private val hypoSuspendMmol: Double = 3.9,       // at/below this a HARD 0 U/hr is forced (safety)
     private val deadbandFrac: Double = 0.1           // snap rates within ±this of nominal back to nominal
 ) {
     /** One control decision from the current estimated state. Returns basal rate (mU/min) + reason. */
@@ -68,9 +69,16 @@ class HovorkaMpc(
         // (isChangeRequested FALSE) instead of a churn of ~nominal micro-TBRs. Never snaps a suspend up.
         if (finalU > 0.0 && kotlin.math.abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin
-        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f)".format(
+        // HARD hypo suspend (safety backstop, distinct from the graduated floor above): at/below the
+        // suspend threshold force a full 0 U/hr, overriding the MPC optimum, the floor AND the deadband.
+        // The graduated floor only *removes* the floor below hypoGuard — it never caps the dose, so a
+        // rising-trend rollout or a lagging estimate could otherwise still pass ~nominal basal into a low.
+        val hypoSuspended = g0 <= hypoSuspendMmol
+        if (hypoSuspended) finalU = 0.0
+        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f)%s".format(
             g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)],
-            bestU * 60 / 1000, finalU * 60 / 1000, nominalBasalMuPerMin * 60 / 1000)
+            bestU * 60 / 1000, finalU * 60 / 1000, nominalBasalMuPerMin * 60 / 1000,
+            if (hypoSuspended) " | HYPO-SUSPEND G≤%.1f".format(hypoSuspendMmol) else "")
         return Decision(finalU, finalU * 60.0 / 1000.0, reason, g0, ref)
     }
 

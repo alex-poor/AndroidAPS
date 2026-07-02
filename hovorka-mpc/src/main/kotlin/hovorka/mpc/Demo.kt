@@ -171,7 +171,7 @@ private fun validateOutputLaw() {
                 // "rate == 0.0" zero-temp rule actually sees. A tiny non-zero MPC output rounds to 0.00.
                 val rateUhr = kotlin.math.round(mpc.decide(ekf.x).basalUPerHr * 100.0) / 100.0
                 val rate = rateUhr * 1000.0 / 60.0
-                if (rateUhr == 0.0) zeros++
+                if (rateUhr == 0.0 && gTrue > 3.9) zeros++    // count SPURIOUS zeros only; a zero at a genuine low is a legitimate hypo suspend
                 val notify = when {
                     rateUhr == 0.0 -> true                                      // always report zero temp
                     !tempActive && kotlin.math.abs(rate - basal) < basalStep -> false

@@ -157,9 +157,17 @@ class HovorkaMpcPlugin @Inject constructor(
             nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin
         )
         val decision = mpc.decide(ekf.x)
-        val rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))
+        var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))
+        // SAFETY backstop on the RAW sensor value: the EKF est.G can lag ~1 mmol/L high on a fast
+        // excursion (drop/rise), so gate the enacted rate on the latest CGM directly — at/below the
+        // hypo-suspend threshold force 0 U/hr regardless of the model decision. Mirrors the est.G
+        // hard suspend inside HovorkaMpc.decide(); this one uses the un-smoothed sensor value.
+        val rawCgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL
+        val rawHypoSuspend = rawCgmMmol <= HYPO_SUSPEND_MMOL
+        if (rawHypoSuspend) rateUhr = 0.0
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s | %s".format(model.glucoseMmol(ekf.x), ttNote, decision.reason)
+        val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         val rt = RT(
@@ -300,5 +308,6 @@ class HovorkaMpcPlugin @Inject constructor(
         const val TBR_DURATION_MIN = 30
         const val DAY_MS = 86_400_000L
         const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
+        const val HYPO_SUSPEND_MMOL = 3.9        // at/below this RAW CGM value, force a hard 0 U/hr suspend
     }
 }
