@@ -1,0 +1,287 @@
+package app.aaps.plugins.aps.hovorka
+
+import android.content.Context
+import androidx.preference.PreferenceCategory
+import androidx.preference.PreferenceManager
+import androidx.preference.PreferenceScreen
+import app.aaps.core.data.plugin.PluginType
+import app.aaps.core.interfaces.aps.APS
+import app.aaps.core.interfaces.aps.APSResult
+import app.aaps.core.interfaces.aps.GlucoseStatus
+import app.aaps.core.interfaces.aps.RT
+import app.aaps.core.interfaces.constraints.ConstraintsChecker
+import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.plugins.aps.openAPSSMB.GlucoseStatusCalculatorSMB
+import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.plugin.PluginBase
+import app.aaps.core.interfaces.plugin.PluginDescription
+import app.aaps.core.interfaces.profile.Profile
+import app.aaps.core.interfaces.profile.ProfileFunction
+import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.rx.events.EventAPSCalculationFinished
+import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.keys.BooleanKey
+import app.aaps.core.keys.DoubleKey
+import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.objects.extensions.target
+import app.aaps.core.validators.preferences.AdaptiveDoublePreference
+import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
+import app.aaps.plugins.aps.R
+import org.json.JSONObject
+import javax.inject.Inject
+import javax.inject.Provider
+import javax.inject.Singleton
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.round
+
+/**
+ * Hovorka nonlinear-MPC dosing plugin (EXPERIMENTAL, in-silico validated only).
+ *
+ * Wraps the control laws in report/algorithm-spec.md implemented over a
+ * published Hovorka model: EKF state estimate from CGM history, then a receding-horizon MPC tracking
+ * the decoded exponential reference trajectory. Basal-modulating (TBR) controller.
+ *
+ * Statelessness by design: re-running from history
+ * each tick: invoke() replays the last [WINDOW_H] hours of BG/insulin/carb history through the EKF to
+ * estimate the current physiological state, then decides. No persisted filter state to corrupt.
+ *
+ * SAFETY: in-silico validated (hovorka-mpc/, cohort mean TIR ~76%, no severe hypo) — NOT clinically
+ * validated. TBR-only. Never enable by default. Constraints (maxBasal/maxIOB) still applied by Loop.
+ */
+@Singleton
+class HovorkaMpcPlugin @Inject constructor(
+    aapsLogger: AAPSLogger,
+    rh: ResourceHelper,
+    private val rxBus: RxBus,
+    private val profileFunction: ProfileFunction,
+    private val glucoseStatusCalculatorSMB: GlucoseStatusCalculatorSMB,
+    private val persistenceLayer: PersistenceLayer,
+    private val constraintsChecker: ConstraintsChecker,
+    private val dateUtil: DateUtil,
+    private val preferences: Preferences,
+    private val apsResultProvider: Provider<APSResult>
+) : PluginBase(
+    PluginDescription()
+        .mainType(PluginType.APS)
+        .pluginName(R.string.hovorka_mpc_name)
+        .shortName(R.string.hovorka_mpc_shortname)
+        .preferencesId(PluginDescription.PREFERENCE_SCREEN)
+        .description(R.string.hovorka_mpc_description),
+    aapsLogger, rh
+), APS {
+
+    override val algorithm = APSResult.Algorithm.UNKNOWN
+    override var lastAPSResult: APSResult? = null
+    override var lastAPSRun: Long = 0
+
+    override fun isEnabled() = isEnabled(PluginType.APS)
+    override fun getGlucoseStatusData(allowOldData: Boolean): GlucoseStatus? =
+        glucoseStatusCalculatorSMB.getGlucoseStatusData(allowOldData)
+
+    override fun configuration(): JSONObject = JSONObject()
+    override fun applyConfiguration(configuration: JSONObject) {}
+
+    override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
+        if (requiredKey != null) return
+        val category = PreferenceCategory(context)
+        parent.addPreference(category)
+        category.apply {
+            key = "hovorka_mpc_settings"
+            title = rh.gs(R.string.hovorka_mpc_name)
+            initialExpandedChildrenCount = 0
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaBodyWeight,
+                    dialogMessage = R.string.hovorka_body_weight_summary, title = R.string.hovorka_body_weight_title
+                )
+            )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaTddAdaptation,
+                    summary = R.string.hovorka_tdd_adaptation_summary, title = R.string.hovorka_tdd_adaptation_title
+                )
+            )
+        }
+    }
+
+    override fun invoke(initiator: String, tempBasalFallback: Boolean) {
+        aapsLogger.debug(LTag.APS, "HovorkaMPC invoke from $initiator")
+        lastAPSResult = null
+        if (!isEnabled()) return
+        val profile = profileFunction.getProfile() ?: return
+        val glucoseStatus = glucoseStatusCalculatorSMB.getGlucoseStatusData(false) ?: return
+
+        val now = dateUtil.now()
+        // The PROFILE target reflects the patient's true physiology (basal holds this at steady state),
+        // so the model is always personalised/anchored to it. A temp target only shifts the CONTROL
+        // setpoint (2b) — it must NOT distort model identification.
+        val profileTargetMmol = profile.getTargetMgdl() / MGDL_PER_MMOL
+        val tempTargetMgdl = persistenceLayer.getTemporaryTargetActiveAt(now)?.target()
+        val controlTargetMmol = (tempTargetMgdl ?: profile.getTargetMgdl()) / MGDL_PER_MMOL
+        val bodyWeightKg = preferences.get(DoubleKey.HovorkaBodyWeight)
+        val basalUhr = profile.getBasal()
+        // 2a: personalise the model from the user's titrated ISF (mg/dL/U) + IC (g/U), anchored to
+        // their basal/profile-target — instead of population weight-only params. Cached (calibration heavy).
+        val isfMgdl = profile.getProfileIsfMgdl()
+        val icGPerU = profile.getIc()
+        val model = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol)
+        val maxBasalUhr = constraintsChecker.getMaxBasalAllowed(profile).value()
+        val maxBasalMuMin = maxBasalUhr * 1000.0 / 60.0
+        // 2d: adapt the OPERATING basal (the MPC's nominal / floor centre) from recent daily outcomes if
+        // enabled. The MODEL above stays anchored to the PROFILE basal — 2d moves only the operating point.
+        val operatingBasalUhr = adaptedOperatingBasalUhr(profile, bodyWeightKg, profileTargetMmol, maxBasalUhr, now)
+        val nominalBasalMuMin = operatingBasalUhr * 1000.0 / 60.0    // U/hr -> mU/min
+
+        // --- replay the recent history through the EKF to estimate current state ---
+        val ekf = try {
+            estimateState(model, nominalBasalMuMin, now)
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.APS, "HovorkaMPC state estimation failed", e)
+            return
+        }
+
+        val mpc = HovorkaMpc(
+            model, targetMmol = controlTargetMmol,
+            nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin
+        )
+        val decision = mpc.decide(ekf.x)
+        val rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))
+        val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s | %s".format(model.glucoseMmol(ekf.x), ttNote, decision.reason)
+
+        // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
+        val rt = RT(
+            algorithm = APSResult.Algorithm.SMB,
+            runningDynamicIsf = false,
+            timestamp = now,
+            bg = glucoseStatus.glucose,
+            targetBG = controlTargetMmol * MGDL_PER_MMOL,
+            eventualBG = model.glucoseMgdl(ekf.x),
+            reason = StringBuilder(reasonStr),
+            duration = TBR_DURATION_MIN,
+            rate = rateUhr
+        )
+        val result = apsResultProvider.get().with(rt)
+        result.glucoseStatus = glucoseStatus
+        lastAPSResult = result
+        lastAPSRun = now
+        rxBus.send(EventAPSCalculationFinished())
+        aapsLogger.debug(LTag.APS, "HovorkaMPC -> $rateUhr U/hr / $TBR_DURATION_MIN min | $reasonStr")
+    }
+
+    // Personalisation is expensive (many steady-state solves) but only depends on profile block values,
+    // which change rarely — memoise on a rounded key so it recomputes only when they actually change.
+    private var cachedModel: HovorkaModel? = null
+    private var cachedKey: String = ""
+
+    private fun personalizedModel(w: Double, isfMgdl: Double, icGPerU: Double, basalUhr: Double, targetMmol: Double): HovorkaModel {
+        val key = "%.1f/%.1f/%.2f/%.4f/%.2f".format(w, isfMgdl, icGPerU, basalUhr, targetMmol)
+        if (key != cachedKey || cachedModel == null) {
+            cachedModel = HovorkaModel(HovorkaParams.personalize(w, isfMgdl, icGPerU, basalUhr, targetMmol))
+            cachedKey = key
+            aapsLogger.debug(LTag.APS, "HovorkaMPC personalised: W=$w ISF=$isfMgdl IC=$icGPerU basal=$basalUhr target=$targetMmol")
+        }
+        return cachedModel!!
+    }
+
+    // 2d adaptive-gain cache: the adapted operating basal is a DAILY quantity, so recompute once per day
+    // (like the 2a calibration cache). Stateless across restarts — reconstructed from persisted history.
+    private var adaptCacheDay = -1L
+    private var adaptCacheBasalUhr = 0.0
+
+    /**
+     * 2d: adapt the operating basal from the last [ADAPT_DAYS] completed days of outcomes. Rebuilds a fresh
+     * [TddAdapter] from the PROFILE basal and folds each past day (mean enacted basal + glucose summary) —
+     * stateless (no new schema; survives restarts), bounded, and self-healing toward the profile if the
+     * profile is later fixed. Returns the profile basal unchanged when the feature is off or history is thin.
+     */
+    private fun adaptedOperatingBasalUhr(profile: Profile, weightKg: Double, targetMmol: Double, maxBasalUhr: Double, now: Long): Double {
+        val profileBasalUhr = profile.getBasal()
+        if (!preferences.get(BooleanKey.HovorkaTddAdaptation)) return profileBasalUhr
+        val dayKey = now / DAY_MS
+        if (dayKey == adaptCacheDay) return adaptCacheBasalUhr
+        val adapter = TddAdapter(weightKg, profileBasalUhr, targetMmol = targetMmol, maxBasalUhr = maxBasalUhr)
+        var folded = 0
+        for (d in ADAPT_DAYS downTo 1) {                          // oldest completed day first
+            val dayStart = now - d * DAY_MS
+            val dayEnd = dayStart + DAY_MS
+            val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(dayStart, dayEnd, true)
+            if (bg.size < 96) continue                            // need ~8 h of CGM to trust the day
+            val gsMmol = bg.map { it.value / MGDL_PER_MMOL }
+            val meanG = gsMmol.average()
+            val minG = gsMmol.min()
+            val tbrFrac = gsMmol.count { it < 3.9 }.toDouble() / gsMmol.size
+            aapsLogger.debug(LTag.APS, "HovorkaMPC 2d " + adapter.endOfDay(meanEnactedBasalUhr(profile, dayStart, dayEnd), meanG, tbrFrac, minG))
+            folded++
+        }
+        adaptCacheBasalUhr = if (folded > 0) adapter.operatingBasalUhr else profileBasalUhr
+        adaptCacheDay = dayKey
+        aapsLogger.debug(LTag.APS, "HovorkaMPC 2d operating basal: profile=%.3f → adapted=%.3f U/hr (%d days)".format(profileBasalUhr, adaptCacheBasalUhr, folded))
+        return adaptCacheBasalUhr
+    }
+
+    /** Time-weighted mean enacted basal (U/hr) over [start,end), honouring active temp basals. */
+    private fun meanEnactedBasalUhr(profile: Profile, start: Long, end: Long): Double {
+        val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start - 3_600_000L, end, true)
+        var sum = 0.0; var n = 0; var t = start
+        while (t < end) {
+            val tb = tbrs.lastOrNull { it.timestamp <= t && t < it.timestamp + it.duration }
+            val base = profile.getBasal(t)
+            sum += when { tb == null -> base; tb.isAbsolute -> tb.rate; else -> base * tb.rate / 100.0 }
+            n++; t += 30 * 60_000L                                 // 30-min buckets
+        }
+        return if (n > 0) sum / n else profile.getBasal(start)
+    }
+
+    /** Replay BG/insulin/carb history over WINDOW_H hours to estimate current Hovorka state. */
+    private fun estimateState(model: HovorkaModel, nominalBasalMuMin: Double, now: Long): HovorkaEkf {
+        val start = now - WINDOW_H * 3_600_000L
+        val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
+        val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true)
+        val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
+        val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
+
+        val profile = profileFunction.getProfile()!!
+        val ekf = HovorkaEkf(model, model.steadyState(nominalBasalMuMin))
+        // index events by minute offset from start
+        fun minOf(ts: Long) = ((ts - start) / 60000L).toInt()
+        val bolusAt = HashMap<Int, Double>()
+        boluses.forEach { bolusAt.merge(minOf(it.timestamp), it.amount, Double::plus) }
+        val carbAt = HashMap<Int, Double>()
+        carbs.forEach { carbAt.merge(minOf(it.timestamp), it.amount, Double::plus) }
+        // resolve absolute basal (U/hr) at an absolute time, honouring active temp basals
+        fun basalUhrAt(ts: Long): Double {
+            val tb = tbrs.lastOrNull { it.timestamp <= ts && ts < it.timestamp + it.duration }
+            val base = profile.getBasal(ts)
+            return when {
+                tb == null -> base
+                tb.isAbsolute -> tb.rate
+                else -> base * tb.rate / 100.0
+            }
+        }
+        val totalMin = ((now - start) / 60000L).toInt()
+        var bgIdx = 0
+        for (m in 0 until totalMin) {
+            carbAt[m]?.let { ekf.meal(it) }
+            bolusAt[m]?.let { ekf.x[5] += it * 1000.0 }                    // U -> mU into SC comp 1
+            val uMuMin = basalUhrAt(start + m * 60000L) * 1000.0 / 60.0
+            ekf.predict(uMuMin, 1.0)
+            // apply any CGM reading landing in this minute
+            while (bgIdx < bg.size && minOf(bg[bgIdx].timestamp) <= m) {
+                ekf.update(bg[bgIdx].value / MGDL_PER_MMOL); bgIdx++
+            }
+        }
+        return ekf
+    }
+
+    companion object {
+        const val MGDL_PER_MMOL = 18.0
+        const val WINDOW_H = 6L
+        const val TBR_DURATION_MIN = 30
+        const val DAY_MS = 86_400_000L
+        const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
+    }
+}

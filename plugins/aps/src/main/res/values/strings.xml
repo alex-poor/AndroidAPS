@@ -221,4 +221,12 @@
     <string name="openapsama_iob_threshold_percent_summary" formatted="false">Percentage of maxIOB above which SMBs are disabled.\nDefault value: 100%\nWith 100% this feature is effectively disabled.</string>
     <string name="openapsama_iob_threshold_percent">maxIOB threshold percent for SMB\n(iob_threshold_percent)</string>
 
+    <!--HovorkaMPC-->
+    <string name="hovorka_mpc_name">HovorkaMPC</string>
+    <string name="hovorka_mpc_shortname">HMPC</string>
+    <string name="hovorka_mpc_description">Experimental Hovorka nonlinear model-predictive control (in-silico validated only — not for therapy)</string>
+    <string name="hovorka_body_weight_title">Body weight (kg)</string>
+    <string name="hovorka_body_weight_summary">Patient body weight — parameterises the Hovorka physiological model</string>
+    <string name="hovorka_tdd_adaptation_title">Adaptive TDD (learn from recent days)</string>
+    <string name="hovorka_tdd_adaptation_summary">Slowly move the operating basal the controller is shaped around, based on the last week of enacted insulin and glucose outcomes (bounded, safety-first). Off = use the profile basal as-is.</string>
 </resources>
