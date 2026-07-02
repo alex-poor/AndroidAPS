@@ -29,6 +29,13 @@ class HovorkaMpc(
     private val nominalBasalMuPerMin: Double,        // profile basal (mU/min) = the operating point
     private val maxBasalMuPerMin: Double,            // safety clamp
     private val effortWeight: Double = 0.02,
+    // --- sequence optimisation (CamAPS-faithful: optimise a BIR *vector*, command its first step) ---
+    private val nSegments: Int = 6,                  // piecewise-constant basal segments over the horizon
+    private val sweeps: Int = 2,                     // coordinate-descent passes over the segments
+    // below-target attenuation: how hard to penalise glucose RISING above the setpoint while still ≤ the
+    // (raised) control target. 0.0 = the rise toward target is free (fullest back-off, most CamAPS-like);
+    // a small value trades a touch of that back-off against fewer rebound highs.
+    private val belowTargetRiseWeight: Double = 0.0,
     // --- 2c output-law tuning (kills open-loop zero-temp notification spam; see decide()) ---
     private val basalFloorFrac: Double = 0.7,        // floor as a fraction of nominal at/above target
     private val hypoGuardMmol: Double = 5.0,         // below this the graduated basal floor reaches 0
@@ -46,18 +53,38 @@ class HovorkaMpc(
     fun decide(stateEstimate: DoubleArray): Decision {
         val g0 = model.glucoseMmol(stateEstimate)
         val ref = referenceTrajectory(g0)
-        // 1-D search over candidate basal rates (glucose response is monotone in u over the horizon)
-        var bestU = nominalBasalMuPerMin; var bestCost = Double.MAX_VALUE
+        val steps = ref.size - 1
+        // --- SEQUENCE optimisation (CamAPS MPC::Optimise produces a 180-step BIR vector; GetBIRpump
+        // commands its FIRST step). We approximate that vector with [nSegments] piecewise-constant basal
+        // segments and minimise by coordinate descent. This gives the temporal freedom a single horizon-wide
+        // rate lacks — "suspend now, resume as glucose climbs back to target" — which is exactly what lets
+        // the controller fully back off when you're low with a raised target instead of trickling. ---
         val hi = maxBasalMuPerMin
-        var u = 0.0
-        val gridStep = max(0.05, hi / 60.0)
-        while (u <= hi + 1e-9) {
-            val cost = rolloutCost(stateEstimate, u, ref)
-            if (cost < bestCost) { bestCost = cost; bestU = u }
-            u += gridStep
+        val segLen = max(1, steps / nSegments)
+        val seq = DoubleArray(nSegments) { nominalBasalMuPerMin }     // warm-start at the operating point
+        val gridStep = max(0.05 * 1000.0 / 60.0, hi / 40.0)          // ~0.05 U/hr, in mU/min
+        repeat(sweeps) {
+            for (j in 0 until nSegments) {
+                var bestSeg = seq[j]; var bestSegCost = Double.MAX_VALUE
+                var u = 0.0
+                while (u <= hi + 1e-9) {
+                    seq[j] = u
+                    val c = rolloutCostSeq(stateEstimate, seq, ref, segLen)
+                    if (c < bestSegCost) { bestSegCost = c; bestSeg = u }
+                    u += gridStep
+                }
+                // golden-section refine this segment around the grid optimum
+                var lo = max(0.0, bestSeg - gridStep); var hh = min(hi, bestSeg + gridStep); val gr = 0.618
+                repeat(12) {
+                    val a = hh - gr * (hh - lo); val b = lo + gr * (hh - lo)
+                    seq[j] = a; val ca = rolloutCostSeq(stateEstimate, seq, ref, segLen)
+                    seq[j] = b; val cb = rolloutCostSeq(stateEstimate, seq, ref, segLen)
+                    if (ca < cb) hh = b else lo = a
+                }
+                seq[j] = 0.5 * (lo + hh)
+            }
         }
-        // refine around best with a golden-section pass
-        bestU = refine(stateEstimate, ref, max(0.0, bestU - gridStep), min(hi, bestU + gridStep))
+        val bestU = seq[0]                                           // enact the first step of the BIR vector
 
         // --- 2c output law: GRADUATED basal floor + deadband ---
         // The old law collapsed to a HARD 0 U/hr whenever G < target. In AAPS open loop, rate==0 is
@@ -93,17 +120,24 @@ class HovorkaMpc(
         // tick (CamAPS AfterInsulinBolusIMM1). ---
         var smbU = 0.0
         if (enableSmb && maxSmbU > 0.0 && !hypoSuspended && g0 > targetMmol) {
-            val eventual = predictGlucose(stateEstimate, finalU, smbHorizonMin)
+            // "will glucose stay high even with the PLANNED basal?" — judge against the sequence's mean rate
+            // over the SMB horizon, NOT the front-loaded first step. The optimiser front-loads seg 0 and
+            // tapers; using seg 0 as if it held constant over-estimates future insulin and wrongly predicts
+            // glucose falling on its own, suppressing a microbolus the tapering basal can't actually deliver.
+            val nSegSmb = max(1, min(seq.size, (smbHorizonMin / stepMin + segLen - 1) / segLen))
+            val smbBasal = (0 until nSegSmb).sumOf { seq[it] } / nSegSmb
+            val eventual = predictGlucose(stateEstimate, smbBasal, smbHorizonMin)
             if (eventual > targetMmol + smbMarginMmol) {
-                val correction = searchCorrectionBolus(stateEstimate, finalU, ref)   // U, the ideal full dose
+                val correction = searchCorrectionBolus(stateEstimate, smbBasal, ref)   // U, the ideal full dose
                 smbU = min(maxSmbU, smbFraction * correction)
                 if (smbU < minSmbU) smbU = 0.0
             }
         }
         val smbNote = if (smbU > 0.0) " | SMB %.2fU".format(smbU) else ""
-        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f)%s%s".format(
+        val seqNote = seq.joinToString(",") { "%.2f".format(it * 60 / 1000) }
+        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f) | seq[%s]%s%s".format(
             g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)],
-            bestU * 60 / 1000, finalU * 60 / 1000, nominalBasalMuPerMin * 60 / 1000,
+            bestU * 60 / 1000, finalU * 60 / 1000, nominalBasalMuPerMin * 60 / 1000, seqNote,
             if (hypoSuspended) " | HYPO-SUSPEND G≤%.1f".format(hypoSuspendMmol) else "", smbNote)
         return Decision(finalU, finalU * 60.0 / 1000.0, reason, g0, ref, smbU)
     }
@@ -165,29 +199,39 @@ class HovorkaMpc(
         return ref
     }
 
-    private fun rolloutCost(s0: DoubleArray, u: Double, ref: DoubleArray): Double {
+    /**
+     * Rollout cost for a piecewise-constant basal [seq] ([segLen] ref-steps per segment). Two departures
+     * from a plain quadratic tracker, both to reproduce CamAPS's back-off-when-low behaviour:
+     *  - tracking is ASYMMETRIC below the control target (see [trackingPenalty]);
+     *  - effort penalises only insulin ABOVE nominal (the published λ·Σ(insulin above basal)² form), so
+     *    withholding basal is free — the controller can suspend without paying an effort cost.
+     */
+    private fun rolloutCostSeq(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
         var s = s0.copyOf()
         var cost = 0.0
-        val du = u - nominalBasalMuPerMin
         for (i in ref.indices) {
             val g = model.glucoseMmol(s)
-            val e = g - ref[i]
-            // asymmetric: penalise hypo (predicted low) harder — safety
-            val w = if (g < 4.0) 6.0 else 1.0
-            cost += w * e * e
+            cost += trackingPenalty(g, ref[i])
+            val u = seq[min(seq.size - 1, i / segLen)]
             repeat(stepMin) { s = model.step(s, u, 1.0) }
         }
-        cost += effortWeight * du * du * ref.size
+        for (u in seq) { val du = u - nominalBasalMuPerMin; if (du > 0.0) cost += effortWeight * du * du * segLen }
         return cost
     }
 
-    private fun refine(s0: DoubleArray, ref: DoubleArray, lo0: Double, hi0: Double): Double {
-        var lo = lo0; var hi = hi0; val gr = 0.618
-        repeat(20) {
-            val a = hi - gr * (hi - lo); val b = lo + gr * (hi - lo)
-            if (rolloutCost(s0, a, ref) < rolloutCost(s0, b, ref)) hi = b else lo = a
-        }
-        return 0.5 * (lo + hi)
+    /**
+     * Tracking penalty at one horizon step. Predicted lows are always penalised hard (safety). But when the
+     * setpoint itself is below the control target and glucose is rising *toward* that target
+     * (ref ≤ g ≤ target), the rise is DESIRED — a basal-only loop raises glucose only by withholding
+     * insulin — so it is (near-)free. This is what lets the controller fully back off when you are low with
+     * a raised target, instead of trickling basal to pin you at the low setpoint.
+     */
+    private fun trackingPenalty(g: Double, refi: Double): Double {
+        val e = g - refi
+        if (g < 4.0) return 6.0 * e * e                                  // predicted-low safety penalty
+        if (refi < targetMmol && g >= refi && g <= targetMmol)          // below target, rising toward it
+            return belowTargetRiseWeight * e * e
+        return e * e
     }
 
     data class Decision(
