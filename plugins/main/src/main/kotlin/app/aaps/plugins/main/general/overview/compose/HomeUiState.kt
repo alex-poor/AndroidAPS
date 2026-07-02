@@ -26,17 +26,14 @@ data class HomeUiState(
     val delta: String = "",
     val timeAgo: String = "",
 
-    // Eventual / loop ring
+    // Eventual (bound to APSResult.eventualBG; blank = hide, e.g. open loop / no run yet)
     val eventualBg: String = "",
-    val ringProgress: Float = 0f,          // 0..1
 
-    // Target gauge
-    val gaugeFraction: Float = 0.5f,       // marker position 0..1
-    val gaugeLow: String = "",
-    val gaugeTarget: String = "",
-    val gaugeHigh: String = "",
+    // State line — describes the CURRENT reading only: "1.8 above target" / "In target range"
+    val stateLine: String = "",
+    val targetRange: String = "",          // e.g. "6.5–7.5 mmol/L"
 
-    // Stat cards
+    // Stat row (absorbed into the hero card)
     val iob: String = "",
     val iobSub: String = "",
     val cob: String = "",

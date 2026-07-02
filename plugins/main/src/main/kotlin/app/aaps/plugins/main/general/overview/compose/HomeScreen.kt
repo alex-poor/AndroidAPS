@@ -34,16 +34,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.ActionBarButton
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.components.Dot
-import app.aaps.core.compose.components.LoopRing
 import app.aaps.core.compose.components.RoundIconButton
-import app.aaps.core.compose.components.StatCard
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.components.TargetGauge
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -73,9 +71,8 @@ fun HomeScreen(
                 .padding(horizontal = AapsSpacing.screenH),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
         ) {
-            HeroCard(state, actions.onLoop)
+            HeroCard(state, actions)
             if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
-            StatRow(state, actions)
             GraphCard(graph)
             DetailsHandle(actions)
             Box(Modifier.padding(bottom = 4.dp))
@@ -115,10 +112,11 @@ private fun TopIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, cd: S
 }
 
 @Composable
-private fun HeroCard(state: HomeUiState, onLoop: () -> Unit) {
+private fun HeroCard(state: HomeUiState, actions: HomeActions) {
     val colors = AapsTheme.colors
+    val bgColor = state.bgColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.textPrimary
     AapsCard(shape = AapsShape.hero) {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // row 1 — loop pill (tap → Loop mode chooser) + time
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StatusPill(
@@ -129,43 +127,65 @@ private fun HeroCard(state: HomeUiState, onLoop: () -> Unit) {
                     dotColor = state.loopColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.inRange,
                     glow = state.looping,
                     labelColor = colors.textPrimary,
-                    onClick = onLoop
+                    onClick = actions.onLoop
                 )
                 Text(state.timeAgo, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
             }
-            // row 2 — hero BG + trend + loop ring
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // row 2 — BG + inline trend (left) · eventual (right)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(state.bg, style = AapsType.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp), color = bgColor)
+                    if (state.trendArrow.isNotBlank() || state.delta.isNotBlank())
                         Text(
-                            state.bg,
-                            style = AapsType.hero,
-                            color = state.bgColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.textPrimary
+                            "${state.trendArrow} ${state.delta}".trim(),
+                            style = AapsType.listTitle.copy(fontWeight = FontWeight.ExtraBold),
+                            color = bgColor,
+                            modifier = Modifier.padding(bottom = 10.dp)
                         )
-                        Text(state.units, style = AapsType.caption, color = colors.textSecondary, modifier = Modifier.padding(bottom = 12.dp))
-                    }
-                    Text(
-                        "${state.trendArrow}  ${state.delta}".trim(),
-                        style = AapsType.listTitle,
-                        color = state.bgColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.textSecondary
-                    )
                 }
                 if (state.eventualBg.isNotBlank())
-                    LoopRing(
-                        progress = state.ringProgress,
-                        centerValue = state.eventualBg,
-                        centerLabel = "eventual",
-                        color = state.loopColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.inRange
-                    )
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(state.eventualBg, style = AapsType.title, color = colors.textPrimary)
+                        Text("EVENTUAL", style = AapsType.label.copy(fontSize = 9.sp), color = colors.textTertiary)
+                    }
             }
-            // row 3 — target gauge
-            TargetGauge(
-                fraction = state.gaugeFraction,
-                lowLabel = state.gaugeLow,
-                targetLabel = state.gaugeTarget,
-                highLabel = state.gaugeHigh
+            // row 3 — state line (current reading only): "<n above target> · <range>"
+            if (state.stateLine.isNotBlank())
+                Row {
+                    Text(state.stateLine, style = AapsType.caption.copy(fontWeight = FontWeight.Bold), color = bgColor)
+                    if (state.targetRange.isNotBlank())
+                        Text(" · ${state.targetRange}", style = AapsType.caption.copy(fontWeight = FontWeight.Bold), color = colors.textSecondary)
+                }
+            // divider + stat row (IOB / COB / Basal)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.07f))
+                    .height(1.dp)
             )
+            Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+                HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f))
+                HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f))
+                HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub)
+            }
         }
+    }
+}
+
+@Composable
+private fun HeroStat(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    valueColor: androidx.compose.ui.graphics.Color = AapsTheme.colors.textPrimary,
+    sub: String = ""
+) {
+    val colors = AapsTheme.colors
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = AapsType.label.copy(fontSize = 9.sp), color = colors.textSecondary)
+        Text(value, style = AapsType.title, color = valueColor, maxLines = 1)
+        if (sub.isNotBlank()) Text(sub, style = AapsType.caption.copy(fontSize = 8.5.sp), color = colors.textTertiary, maxLines = 1)
     }
 }
 
@@ -178,15 +198,6 @@ private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         supplies.forEach { StatusPill(label = it.label, value = it.value, dotColor = it.dotColor) }
-    }
-}
-
-@Composable
-private fun StatRow(state: HomeUiState, actions: HomeActions) {
-    Row(horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap), modifier = Modifier.fillMaxWidth()) {
-        StatCard("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), sub = state.iobSub, onClick = actions.onIob)
-        StatCard("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), sub = state.cobSub, onClick = actions.onCob)
-        StatCard("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), sub = state.basalSub, onClick = actions.onBasal)
     }
 }
 

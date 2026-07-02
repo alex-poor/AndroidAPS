@@ -32,6 +32,7 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.graph.data.GraphViewWithCleanup
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
+import app.aaps.core.interfaces.aps.RT
 import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.bgQualityCheck.BgQualityCheck
 import app.aaps.core.interfaces.configuration.Config
@@ -134,6 +135,7 @@ import javax.inject.Inject
 import javax.inject.Provider
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickListener {
 
@@ -486,10 +488,18 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         val units = profileFunction.getUnits()
         val unitsStr = if (units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
         val lastBg = lastBgData.lastBg()
-        val bgColor = androidx.compose.ui.graphics.Color(lastBgData.lastBgColor(ctx))
         val isActual = lastBgData.isActualBg()
         val gs = glucoseStatusProvider.glucoseStatusData
         val profile = profileFunction.getProfile()
+        val bgMgdl = lastBg?.recalculated
+        // Colour the BG value against the PROFILE TARGET BAND (not the low/high alarm thresholds —
+        // those remain for the alerts system only). Value, trend and state line share this colour.
+        val bgColor = when {
+            profile == null || bgMgdl == null    -> AapsSemantic.inRange
+            bgMgdl > profile.getTargetHighMgdl() -> AapsSemantic.high   // amber
+            bgMgdl < profile.getTargetLowMgdl()  -> AapsSemantic.low    // red
+            else                                 -> AapsSemantic.inRange // green
+        }
 
         // Loop mode → pill label / color / looping
         val mode = loop.runningMode
@@ -514,17 +524,30 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         else if (mode == RM.Mode.SUSPENDED_BY_USER || mode == RM.Mode.DISCONNECTED_PUMP || mode == RM.Mode.SUSPENDED_BY_DST)
             dateUtil.age(loop.minutesToEndOfSuspend() * 60000L, true, rh) else ""
 
-        // Eventual BG = end of the IOB prediction curve (oref's eventualBG proxy)
-        val eventualMgdl = if (config.APS) loop.lastRun?.constraintsProcessed?.predictions()?.IOB?.lastOrNull()?.toDouble() else null
+        // Eventual BG = the algorithm's own output (APSResult.eventualBG via RT). The ONLY forward-
+        // looking number on the hero. Hidden when null (open loop / no run yet).
+        val rt = loop.lastRun?.constraintsProcessed?.rawData() as? RT
+        val eventualMgdl = if (config.APS) rt?.eventualBG else null
 
-        // Target gauge — clinical in-range domain, target band from profile
-        val lowMgdl = 70.0
-        val highMgdl = 180.0
-        val bgMgdl = lastBg?.recalculated
-        fun frac(v: Double?) = v?.let { ((it - lowMgdl) / (highMgdl - lowMgdl)).toFloat().coerceIn(0f, 1f) } ?: 0.5f
-        val targetLabel = profile?.let {
-            "target ${profileUtil.fromMgdlToStringInUnits(it.getTargetLowMgdl())}–${profileUtil.fromMgdlToStringInUnits(it.getTargetHighMgdl())}"
-        } ?: "target"
+        // State line — describes the CURRENT reading only, vs the profile target band.
+        val targetLow = profile?.getTargetLowMgdl()
+        val targetHigh = profile?.getTargetHighMgdl()
+        val targetRange = if (targetLow != null && targetHigh != null)
+            "${profileUtil.fromMgdlToStringInUnits(targetLow)}–${profileUtil.fromMgdlToStringInUnits(targetHigh)} $unitsStr" else ""
+        val stateLine = if (bgMgdl != null && targetLow != null && targetHigh != null) when {
+            bgMgdl > targetHigh -> "${profileUtil.fromMgdlToStringInUnits(bgMgdl - targetHigh)} above target"
+            bgMgdl < targetLow  -> "${profileUtil.fromMgdlToStringInUnits(targetLow - bgMgdl)} below target"
+            else                -> "In target range"
+        } else ""
+
+        // Basal — lead with the delivered rate (U/h); scheduled changes through the day.
+        val basalData = profile?.let { iobCobCalculator.getBasalData(it, dateUtil.now()) }
+        val scheduledBasal = basalData?.basal ?: 0.0
+        val rateNow = if (basalData?.isTempBasalRunning == true) basalData.tempBasalAbsolute else scheduledBasal
+        val basalPercent = if (scheduledBasal > 0) (rateNow / scheduledBasal * 100).roundToInt() else 100
+        val basalText = String.format(Locale.getDefault(), "%.2f U/h", rateNow)
+        val basalSubText = if (basalData?.isTempBasalRunning == true && scheduledBasal > 0)
+            "$basalPercent% · ${String.format(Locale.getDefault(), "%.2f", scheduledBasal)} sched" else ""
 
         // Stats
         val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
@@ -568,17 +591,14 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             delta = gs?.let { profileUtil.fromMgdlToSignedStringInUnits(it.delta) } ?: "",
             timeAgo = dateUtil.minOrSecAgo(rh, lastBg?.timestamp),
             eventualBg = eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "",
-            ringProgress = frac(eventualMgdl ?: bgMgdl),
-            gaugeFraction = frac(bgMgdl),
-            gaugeLow = profileUtil.fromMgdlToStringInUnits(lowMgdl),
-            gaugeTarget = targetLabel,
-            gaugeHigh = profileUtil.fromMgdlToStringInUnits(highMgdl),
+            stateLine = stateLine,
+            targetRange = targetRange,
             iob = iobText(),
             iobSub = rh.gs(app.aaps.core.ui.R.string.bolus) + " + " + rh.gs(app.aaps.core.ui.R.string.basal),
             cob = cobText ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short),
             cobSub = "",
-            basal = overviewData.temporaryBasalText(),
-            basalSub = "",
+            basal = basalText,
+            basalSub = basalSubText,
             supplies = supplies,
             algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
             sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
