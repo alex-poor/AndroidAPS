@@ -2,6 +2,7 @@ package app.aaps.plugins.main.skins
 
 import android.util.TypedValue.COMPLEX_UNIT_PX
 import android.view.View
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.annotation.StringRes
 import androidx.constraintlayout.widget.ConstraintLayout
@@ -68,9 +69,11 @@ interface SkinInterface {
         }
     }
 
-    fun moveButtonsLayout(root: LinearLayout) {
-        val buttonsLayout = root.findViewById<LinearLayout>(R.id.buttons_layout)
-        root.removeView(buttonsLayout)
+    fun moveButtonsLayout(root: View) {
+        val buttonsLayout = root.findViewById<View>(R.id.buttons_layout) ?: return
+        // buttons_layout may sit anywhere under [root] (the overview root was wrapped in a FrameLayout
+        // for the redesign) — detach it from its actual parent before re-attaching.
+        (buttonsLayout.parent as? ViewGroup)?.removeView(buttonsLayout)
         val innerLayout = root.findViewById<LinearLayout>(R.id.inner_layout)
         innerLayout.addView(buttonsLayout)
     }

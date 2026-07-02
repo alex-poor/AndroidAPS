@@ -1,6 +1,7 @@
 include ':app'
 include ':wear'
 include ':benchmark'
+include ':core:compose'
 include ':core:data'
 include ':core:graph'
 include ':core:graphview'

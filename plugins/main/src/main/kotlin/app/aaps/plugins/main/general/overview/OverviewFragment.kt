@@ -105,7 +105,19 @@ import app.aaps.core.ui.extensions.runOnUiThread
 import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.extensions.toVisibilityKeepSpace
 import app.aaps.plugins.main.R
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.viewinterop.AndroidView
+import app.aaps.core.compose.theme.AapsSemantic
+import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.data.model.TrendArrow
 import app.aaps.plugins.main.databinding.OverviewFragmentBinding
+import app.aaps.plugins.main.general.overview.compose.HomeActions
+import app.aaps.plugins.main.general.overview.compose.HomeScreen
+import app.aaps.plugins.main.general.overview.compose.HomeUiState
 import app.aaps.plugins.main.general.overview.graphData.GraphData
 import app.aaps.plugins.main.general.overview.notifications.NotificationStore
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
@@ -175,6 +187,10 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
 
     private var carbAnimation: AnimationDrawable? = null
     private var lastUserAction = ""
+
+    // ---- Redesigned Home (Compose overlay) ----
+    private val homeState = mutableStateOf(HomeUiState())
+    private var homeGraph: GraphView? = null
 
     private var _binding: OverviewFragmentBinding? = null
 
@@ -260,6 +276,32 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         binding.buttonsLayout.quickWizardButton.setOnLongClickListener(this)
         binding.infoLayout.apsMode.setOnClickListener(this)
         binding.infoLayout.apsMode.setOnLongClickListener(this)
+
+        // ---- Redesigned Home (Compose overlay drawn on top of the legacy layout) ----
+        val actions = buildHomeActions()
+        binding.composeHome.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        binding.composeHome.setContent {
+            AapsTheme {
+                HomeScreen(
+                    state = homeState.value,
+                    actions = actions,
+                    graph = {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                GraphViewWithCleanup(ctx).also { g ->
+                                    g.gridLabelRenderer?.gridColor = rh.gac(ctx, app.aaps.core.ui.R.attr.graphGrid)
+                                    g.gridLabelRenderer?.reloadStyles()
+                                    g.gridLabelRenderer?.labelVerticalWidth = axisWidth
+                                    homeGraph = g
+                                    updateHomeGraph()
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+        }
     }
 
     override fun onPause() {
@@ -389,7 +431,179 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         processAps()
         updateProfile()
         updateTemporaryTarget()
+        runOnUiThread {
+            _binding ?: return@runOnUiThread
+            buildHomeState()
+            updateHomeGraph()
+        }
     }
+
+    // region ---- Redesigned Home (Compose) ----
+
+    /** Wire the Compose Home actions to the SAME protected dialog paths as the legacy buttons. */
+    private fun buildHomeActions(): HomeActions {
+        fun bolusProtected(run: () -> Unit) = activity?.let { act ->
+            if (childFragmentManager.isStateSaved) return@let
+            protectionCheck.queryProtection(act, ProtectionCheck.Protection.BOLUS, UIRunnable { if (isAdded) run() })
+        }
+        return HomeActions(
+            onCarbs = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
+            onBolus = { bolusProtected { uiInteraction.runTreatmentDialog(childFragmentManager) } },
+            onWizard = { bolusProtected { uiInteraction.runWizardDialog(childFragmentManager) } },
+            onMore = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
+            onLoop = { bolusProtected { uiInteraction.runLoopDialog(childFragmentManager, 1) } },
+            onTempTarget = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
+            onProfile = { uiInteraction.runProfileViewerDialog(childFragmentManager, dateUtil.now(), UiInteraction.Mode.RUNNING_PROFILE) },
+            onIob = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.iob), iobDialogText()) } },
+            onCob = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
+            onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } }
+        )
+    }
+
+    private fun trendSymbol(arrow: TrendArrow?): String = when (arrow) {
+        TrendArrow.TRIPLE_UP, TrendArrow.DOUBLE_UP -> "⇈"
+        TrendArrow.SINGLE_UP                       -> "↑"
+        TrendArrow.FORTY_FIVE_UP                   -> "↗"
+        TrendArrow.FLAT                            -> "→"
+        TrendArrow.FORTY_FIVE_DOWN                 -> "↘"
+        TrendArrow.SINGLE_DOWN                     -> "↓"
+        TrendArrow.TRIPLE_DOWN, TrendArrow.DOUBLE_DOWN -> "⇊"
+        else                                       -> ""
+    }
+
+    /** Map the current Overview providers into [HomeUiState]. Runs on the UI thread. */
+    @SuppressLint("SetTextI18n")
+    private fun buildHomeState() {
+        if (!config.appInitialized) return
+        val ctx = context ?: return
+        val units = profileFunction.getUnits()
+        val unitsStr = if (units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
+        val lastBg = lastBgData.lastBg()
+        val bgColor = androidx.compose.ui.graphics.Color(lastBgData.lastBgColor(ctx))
+        val isActual = lastBgData.isActualBg()
+        val gs = glucoseStatusProvider.glucoseStatusData
+        val profile = profileFunction.getProfile()
+
+        // Loop mode → pill label / color / looping
+        val mode = loop.runningMode
+        val loopActive = mode == RM.Mode.CLOSED_LOOP || mode == RM.Mode.CLOSED_LOOP_LGS || mode == RM.Mode.SUPER_BOLUS
+        val loopColor = when {
+            loopActive                          -> AapsSemantic.inRange
+            mode == RM.Mode.OPEN_LOOP           -> AapsSemantic.high
+            mode == RM.Mode.DISABLED_LOOP ||
+                mode == RM.Mode.DISCONNECTED_PUMP -> AapsSemantic.low
+            else                                -> AapsSemantic.high // suspended variants
+        }
+        val loopLabel = when (mode) {
+            RM.Mode.CLOSED_LOOP       -> rh.gs(app.aaps.core.ui.R.string.closedloop)
+            RM.Mode.CLOSED_LOOP_LGS   -> rh.gs(app.aaps.core.ui.R.string.uel_lgs_loop_mode)
+            RM.Mode.OPEN_LOOP         -> rh.gs(app.aaps.core.ui.R.string.openloop)
+            RM.Mode.DISABLED_LOOP     -> rh.gs(R.string.disabled_loop)
+            RM.Mode.DISCONNECTED_PUMP -> rh.gs(app.aaps.core.ui.R.string.disconnected)
+            RM.Mode.SUPER_BOLUS       -> rh.gs(app.aaps.core.ui.R.string.superbolus)
+            else                      -> rh.gs(app.aaps.core.ui.R.string.pumpsuspended)
+        }
+        val loopSub = if (loopActive) "· looping"
+        else if (mode == RM.Mode.SUSPENDED_BY_USER || mode == RM.Mode.DISCONNECTED_PUMP || mode == RM.Mode.SUSPENDED_BY_DST)
+            dateUtil.age(loop.minutesToEndOfSuspend() * 60000L, true, rh) else ""
+
+        // Eventual BG = end of the IOB prediction curve (oref's eventualBG proxy)
+        val eventualMgdl = if (config.APS) loop.lastRun?.constraintsProcessed?.predictions()?.IOB?.lastOrNull()?.toDouble() else null
+
+        // Target gauge — clinical in-range domain, target band from profile
+        val lowMgdl = 70.0
+        val highMgdl = 180.0
+        val bgMgdl = lastBg?.recalculated
+        fun frac(v: Double?) = v?.let { ((it - lowMgdl) / (highMgdl - lowMgdl)).toFloat().coerceIn(0f, 1f) } ?: 0.5f
+        val targetLabel = profile?.let {
+            "target ${profileUtil.fromMgdlToStringInUnits(it.getTargetLowMgdl())}–${profileUtil.fromMgdlToStringInUnits(it.getTargetHighMgdl())}"
+        } ?: "target"
+
+        // Stats
+        val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
+        val autosensRatio = iobCobCalculator.ads.getLastAutosensData("Overview", aapsLogger, dateUtil)?.autosensResult?.ratio
+
+        // Supplies (reservoir + pump battery, real; more later)
+        val pump = activePlugin.activePump
+        val supplies = buildList {
+            val res = pump.reservoirLevel
+            if (res > 0) add(
+                HomeUiState.Supply(
+                    "Reservoir",
+                    rh.gs(app.aaps.core.ui.R.string.format_insulin_units, res),
+                    if (res < 20) AapsSemantic.high else AapsSemantic.inRange
+                )
+            )
+            pump.batteryLevel?.let {
+                add(
+                    HomeUiState.Supply(
+                        "Battery",
+                        "$it%",
+                        if (it < 25) AapsSemantic.low else AapsSemantic.inRange
+                    )
+                )
+            }
+        }
+
+        homeState.value = HomeUiState(
+            loopStateLabel = loopLabel,
+            loopSubLabel = loopSub,
+            loopColor = loopColor,
+            looping = loopActive,
+            bg = profileUtil.fromMgdlToStringInUnits(lastBg?.recalculated),
+            bgColor = bgColor,
+            bgStale = !isActual,
+            units = unitsStr,
+            trendArrow = trendSymbol(trendCalculator.getTrendArrow(iobCobCalculator.ads)),
+            delta = gs?.let { profileUtil.fromMgdlToSignedStringInUnits(it.delta) } ?: "",
+            timeAgo = dateUtil.minOrSecAgo(rh, lastBg?.timestamp),
+            eventualBg = eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "",
+            ringProgress = frac(eventualMgdl ?: bgMgdl),
+            gaugeFraction = frac(bgMgdl),
+            gaugeLow = profileUtil.fromMgdlToStringInUnits(lowMgdl),
+            gaugeTarget = targetLabel,
+            gaugeHigh = profileUtil.fromMgdlToStringInUnits(highMgdl),
+            iob = iobText(),
+            iobSub = rh.gs(app.aaps.core.ui.R.string.bolus) + " + " + rh.gs(app.aaps.core.ui.R.string.basal),
+            cob = cobText ?: rh.gs(app.aaps.core.ui.R.string.value_unavailable_short),
+            cobSub = "",
+            basal = overviewData.temporaryBasalText(),
+            basalSub = "",
+            supplies = supplies,
+            algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
+            sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
+            profileName = profileFunction.getProfileName(),
+            tempTarget = null,
+            ready = true
+        )
+    }
+
+    /** Drive the Compose primary glucose graph (secondary graphs omitted for the Home view). */
+    private fun updateHomeGraph() {
+        val graph = homeGraph ?: return
+        _binding ?: return
+        val menuChartSettings = overviewMenus.setting
+        if (menuChartSettings.isEmpty()) return
+        val graphData = graphDataProvider.get().with(graph, overviewData)
+        graphData.addInRangeArea(
+            overviewData.fromTime, overviewData.endTime,
+            preferences.get(UnitDoubleKey.OverviewLowMark),
+            preferences.get(UnitDoubleKey.OverviewHighMark)
+        )
+        graphData.addBgReadings(menuChartSettings[0][OverviewMenus.CharType.PRE.ordinal], context)
+        graphData.addBucketedData()
+        graphData.addTreatments(context)
+        if (activePlugin.activePump.pumpDescription.isTempBasalCapable || config.AAPSCLIENT)
+            graphData.addBasals()
+        graphData.addTargetLine()
+        graphData.addRunningModes()
+        graphData.addNowLine(dateUtil.now())
+        graphData.setNumVerticalLabels()
+        graphData.formatAxis(overviewData.fromTime, overviewData.endTime)
+        graphData.performUpdate()
+    }
+
+    // endregion
 
     @Synchronized
     override fun onDestroyView() {
@@ -403,6 +617,11 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             graph.setOnLongClickListener(null)
             graph.removeAllSeries()
         }
+        homeGraph?.let {
+            it.setOnLongClickListener(null)
+            it.removeAllSeries()
+        }
+        homeGraph = null
         _binding = null
         carbAnimation?.stop()
         carbAnimation = null
