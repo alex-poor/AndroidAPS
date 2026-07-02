@@ -290,13 +290,19 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
                             modifier = Modifier.fillMaxSize(),
                             factory = { ctx ->
                                 GraphViewWithCleanup(ctx).also { g ->
+                                    g.layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
                                     g.gridLabelRenderer?.gridColor = rh.gac(ctx, app.aaps.core.ui.R.attr.graphGrid)
                                     g.gridLabelRenderer?.reloadStyles()
                                     g.gridLabelRenderer?.labelVerticalWidth = axisWidth
                                     homeGraph = g
-                                    updateHomeGraph()
                                 }
-                            }
+                            },
+                            // Re-run on each recomposition (i.e. each refresh) so the graph draws
+                            // once the view has been measured/attached.
+                            update = { homeState.value; updateHomeGraph() }
                         )
                     }
                 )
