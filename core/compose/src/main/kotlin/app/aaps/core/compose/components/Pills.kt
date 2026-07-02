@@ -1,6 +1,7 @@
 package app.aaps.core.compose.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -30,12 +31,14 @@ fun StatusPill(
     dotColor: Color? = null,
     value: String? = null,
     labelColor: Color = AapsTheme.colors.textSecondary,
-    glow: Boolean = false
+    glow: Boolean = false,
+    onClick: (() -> Unit)? = null
 ) {
     val colors = AapsTheme.colors
     Row(
         modifier = modifier
             .clip(AapsShape.pill)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .background(colors.controlFill)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

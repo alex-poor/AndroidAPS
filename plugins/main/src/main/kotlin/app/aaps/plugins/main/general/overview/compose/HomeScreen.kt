@@ -73,7 +73,7 @@ fun HomeScreen(
                 .padding(horizontal = AapsSpacing.screenH),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
         ) {
-            HeroCard(state)
+            HeroCard(state, actions.onLoop)
             if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
             StatRow(state, actions)
             GraphCard(graph)
@@ -115,11 +115,11 @@ private fun TopIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, cd: S
 }
 
 @Composable
-private fun HeroCard(state: HomeUiState) {
+private fun HeroCard(state: HomeUiState, onLoop: () -> Unit) {
     val colors = AapsTheme.colors
     AapsCard(shape = AapsShape.hero) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            // row 1 — loop pill + time
+            // row 1 — loop pill (tap → Loop mode chooser) + time
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StatusPill(
                     label = buildString {
@@ -128,7 +128,8 @@ private fun HeroCard(state: HomeUiState) {
                     },
                     dotColor = state.loopColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.inRange,
                     glow = state.looping,
-                    labelColor = colors.textPrimary
+                    labelColor = colors.textPrimary,
+                    onClick = onLoop
                 )
                 Text(state.timeAgo, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
             }

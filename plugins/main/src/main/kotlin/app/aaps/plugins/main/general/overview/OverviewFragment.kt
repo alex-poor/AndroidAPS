@@ -113,6 +113,7 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.viewinterop.AndroidView
 import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.data.model.TE
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.plugins.main.databinding.OverviewFragmentBinding
 import app.aaps.plugins.main.general.overview.compose.HomeActions
@@ -529,9 +530,18 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         val cobText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
         val autosensRatio = iobCobCalculator.ads.getLastAutosensData("Overview", aapsLogger, dateUtil)?.autosensResult?.ratio
 
-        // Supplies (reservoir + pump battery, real; more later)
+        // Supplies: cannula + sensor age (always available from therapy events) + reservoir/battery
+        // (only when the pump actually reports them — they read 0/unknown until a fresh pump read).
         val pump = activePlugin.activePump
+        val now = dateUtil.now()
+        fun ageDays(type: TE.Type): String? = persistenceLayer.getLastTherapyRecordUpToNow(type)?.let {
+            "${TimeUnit.MILLISECONDS.toDays(now - it.timestamp)}d"
+        }
         val supplies = buildList {
+            ageDays(TE.Type.CANNULA_CHANGE)?.let {
+                add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsSemantic.inRange))
+            }
+            ageDays(TE.Type.SENSOR_CHANGE)?.let { add(HomeUiState.Supply("Sensor", it, AapsSemantic.inRange)) }
             val res = pump.reservoirLevel
             if (res > 0) add(
                 HomeUiState.Supply(
@@ -540,14 +550,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
                     if (res < 20) AapsSemantic.high else AapsSemantic.inRange
                 )
             )
-            pump.batteryLevel?.let {
-                add(
-                    HomeUiState.Supply(
-                        "Battery",
-                        "$it%",
-                        if (it < 25) AapsSemantic.low else AapsSemantic.inRange
-                    )
-                )
+            pump.batteryLevel?.takeIf { it > 0 }?.let {
+                add(HomeUiState.Supply("Battery", "$it%", if (it < 25) AapsSemantic.low else AapsSemantic.inRange))
             }
         }
 
@@ -591,11 +595,9 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         val menuChartSettings = overviewMenus.setting
         if (menuChartSettings.isEmpty()) return
         val graphData = graphDataProvider.get().with(graph, overviewData)
-        graphData.addInRangeArea(
-            overviewData.fromTime, overviewData.endTime,
-            preferences.get(UnitDoubleKey.OverviewLowMark),
-            preferences.get(UnitDoubleKey.OverviewHighMark)
-        )
+        // NB: the legacy opaque in-range AreaGraphSeries is intentionally omitted here — it renders
+        // green-on-green and hides the (range-colored) BG trace. Target reference comes from
+        // addTargetLine() below. A translucent design-style band is a later polish item.
         graphData.addBgReadings(menuChartSettings[0][OverviewMenus.CharType.PRE.ordinal], context)
         graphData.addBucketedData()
         graphData.addTreatments(context)
