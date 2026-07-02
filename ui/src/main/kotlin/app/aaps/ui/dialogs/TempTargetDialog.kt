@@ -2,155 +2,91 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
-import app.aaps.core.data.configuration.Constants
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TT
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
-import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.dialogs.OKDialog
-import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.core.ui.toast.ToastUtils
-import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogTemptargetBinding
-import com.google.common.base.Joiner
-import com.google.common.collect.Lists
+import app.aaps.ui.dialogs.compose.TempTargetSheet
+import app.aaps.ui.dialogs.compose.TempTargetSheetState
+import app.aaps.ui.dialogs.compose.TtPreset
+import app.aaps.ui.dialogs.compose.TtReason
+import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
-import java.text.DecimalFormat
-import java.util.LinkedList
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
-class TempTargetDialog : DialogFragmentWithDate() {
+/**
+ * Redesigned Temp target sheet. UI is Compose ([TempTargetSheet]); starting/cancelling a temp target
+ * reuses the SAME `persistenceLayer.insertAndCancelCurrentTemporaryTarget` /
+ * `cancelCurrentTemporaryTargetIfAny` path behind an `OKDialog` confirmation. DI + `runTempTargetDialog`
+ * routing unchanged.
+ */
+class TempTargetDialog : DaggerDialogFragment() {
 
-    @Inject lateinit var constraintChecker: ConstraintsChecker
+    @Inject lateinit var aapsLogger: AAPSLogger
+    @Inject lateinit var ctx: Context
     @Inject lateinit var rh: ResourceHelper
+    @Inject lateinit var preferences: Preferences
     @Inject lateinit var profileFunction: ProfileFunction
     @Inject lateinit var profileUtil: ProfileUtil
-    @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var persistenceLayer: PersistenceLayer
-    @Inject lateinit var ctx: Context
+    @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var protectionCheck: ProtectionCheck
 
-    private lateinit var reasonList: List<String>
-
-    private var queryingProtection = false
     private val disposable = CompositeDisposable()
-    private var _binding: DialogTemptargetBinding? = null
+    private var queryingProtection = false
 
-    // This property is only valid between onCreateView and onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("duration", binding.duration.value)
-        savedInstanceState.putDouble("tempTarget", binding.temptarget.value)
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        onCreateViewGeneral()
-        _binding = DialogTemptargetBinding.inflate(inflater, container, false)
-        return binding.root
-    }
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(true)
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        binding.duration.setParams(
-            savedInstanceState?.getDouble("duration")
-                ?: 60.0, 0.0, Constants.MAX_PROFILE_SWITCH_DURATION, 10.0, DecimalFormat("0"), false, binding.okcancel.ok
-        )
-
-        if (profileUtil.units == GlucoseUnit.MMOL)
-            binding.temptarget.setParams(
-                savedInstanceState?.getDouble("tempTarget")
-                    ?: 5.6,
-                Constants.MIN_TT_MMOL, Constants.MAX_TT_MMOL, 0.1, DecimalFormat("0.0"), false, binding.okcancel.ok
-            )
-        else
-            binding.temptarget.setParams(
-                savedInstanceState?.getDouble("tempTarget")
-                    ?: 101.0,
-                Constants.MIN_TT_MGDL, Constants.MAX_TT_MGDL, 1.0, DecimalFormat("0"), false, binding.okcancel.ok
-            )
-
-        val units = profileUtil.units
-        binding.units.text = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
-
-        // temp target
-        context?.let { context ->
-            binding.targetCancel.visibility = (persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now()) != null).toVisibility()
-
-            reasonList = Lists.newArrayList(
-                rh.gs(app.aaps.core.ui.R.string.manual),
-                rh.gs(app.aaps.core.ui.R.string.eatingsoon),
-                rh.gs(app.aaps.core.ui.R.string.activity),
-                rh.gs(app.aaps.core.ui.R.string.hypo)
-            )
-            binding.reasonList.setAdapter(ArrayAdapter(context, app.aaps.core.ui.R.layout.spinner_centered, reasonList))
-
-            binding.targetCancel.setOnClickListener { binding.duration.value = 0.0; shortClick(it) }
-            binding.eatingSoon.setOnClickListener { shortClick(it) }
-            binding.activity.setOnClickListener { shortClick(it) }
-            binding.hypo.setOnClickListener { shortClick(it) }
-
-            binding.eatingSoon.setOnLongClickListener {
-                longClick(it)
-                return@setOnLongClickListener true
-            }
-            binding.activity.setOnLongClickListener {
-                longClick(it)
-                return@setOnLongClickListener true
-            }
-            binding.hypo.setOnLongClickListener {
-                longClick(it)
-                return@setOnLongClickListener true
-            }
-            binding.durationLabel.labelFor = binding.duration.editTextId
-            binding.temptargetLabel.labelFor = binding.temptarget.editTextId
-        }
-    }
-
-    private fun shortClick(v: View) {
-        v.performLongClick()
-        if (submit()) dismiss()
-    }
-
-    private fun longClick(v: View) {
-        when (v.id) {
-            R.id.eating_soon -> {
-                binding.temptarget.value = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget)
-                binding.duration.value = preferences.get(IntKey.OverviewEatingSoonDuration).toDouble()
-                binding.reasonList.setText(rh.gs(app.aaps.core.ui.R.string.eatingsoon), false)
-            }
-
-            R.id.activity    -> {
-                binding.temptarget.value = preferences.get(UnitDoubleKey.OverviewActivityTarget)
-                binding.duration.value = preferences.get(IntKey.OverviewActivityDuration).toDouble()
-                binding.reasonList.setText(rh.gs(app.aaps.core.ui.R.string.activity), false)
-            }
-
-            R.id.hypo        -> {
-                binding.temptarget.value = preferences.get(UnitDoubleKey.OverviewHypoTarget)
-                binding.duration.value = preferences.get(IntKey.OverviewHypoDuration).toDouble()
-                binding.reasonList.setText(rh.gs(app.aaps.core.ui.R.string.hypo), false)
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                AapsTheme {
+                    TempTargetSheet(
+                        state = buildState(),
+                        onStart = ::start,
+                        onCancelActive = ::cancelActive,
+                        onClose = { dismiss() }
+                    )
+                }
             }
         }
     }
@@ -158,96 +94,82 @@ class TempTargetDialog : DialogFragmentWithDate() {
     override fun onDestroyView() {
         super.onDestroyView()
         disposable.clear()
-        _binding = null
     }
 
-    override fun submit(): Boolean {
-        if (_binding == null) return false
-        val actions: LinkedList<String> = LinkedList()
-        var reason = binding.reasonList.text.toString()
-        val unitResId = if (profileFunction.getUnits() == GlucoseUnit.MGDL) app.aaps.core.ui.R.string.mgdl else app.aaps.core.ui.R.string.mmol
-        val target = binding.temptarget.value
-        val duration = binding.duration.value.toInt()
-        if (target != 0.0 && duration != 0) {
-            actions.add(rh.gs(app.aaps.core.ui.R.string.reason) + ": " + reason)
-            actions.add(rh.gs(app.aaps.core.ui.R.string.target_label) + ": " + profileUtil.stringInCurrentUnitsDetect(target) + " " + rh.gs(unitResId))
-            actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, duration))
-        } else {
-            actions.add(rh.gs(app.aaps.core.ui.R.string.stoptemptarget))
-            reason = rh.gs(app.aaps.core.ui.R.string.stoptemptarget)
-        }
-        if (eventTimeChanged)
-            actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
+    private val mmol get() = profileFunction.getUnits() == GlucoseUnit.MMOL
 
-        activity?.let { activity ->
-            OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.temporary_target), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
-                val units = profileFunction.getUnits()
-                val listValues = when (reason) {
-                    rh.gs(app.aaps.core.ui.R.string.eatingsoon)     -> listOf(
-                        ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged },
-                        ValueWithUnit.TETTReason(TT.Reason.EATING_SOON),
-                        ValueWithUnit.fromGlucoseUnit(target, units),
-                        ValueWithUnit.Minute(duration)
-                    )
+    private fun buildState(): TempTargetSheetState {
+        val decimals = if (mmol) 1 else 0
+        fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${decimals}f", v)
+        fun preset(reason: TtReason, label: String, target: Double, dur: Int) =
+            TtPreset(reason, label, target, dur, "${fmt(target)} ${if (mmol) "mmol/L" else "mg/dL"}", "$dur min")
 
-                    rh.gs(app.aaps.core.ui.R.string.activity)       -> listOf(
-                        ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged },
-                        ValueWithUnit.TETTReason(TT.Reason.ACTIVITY),
-                        ValueWithUnit.fromGlucoseUnit(target, units),
-                        ValueWithUnit.Minute(duration)
-                    )
+        return TempTargetSheetState(
+            presets = listOf(
+                preset(TtReason.EATING_SOON, rh.gs(app.aaps.core.ui.R.string.eatingsoon), preferences.get(UnitDoubleKey.OverviewEatingSoonTarget), preferences.get(IntKey.OverviewEatingSoonDuration)),
+                preset(TtReason.ACTIVITY, rh.gs(app.aaps.core.ui.R.string.activity), preferences.get(UnitDoubleKey.OverviewActivityTarget), preferences.get(IntKey.OverviewActivityDuration)),
+                preset(TtReason.HYPO, rh.gs(app.aaps.core.ui.R.string.hypo), preferences.get(UnitDoubleKey.OverviewHypoTarget), preferences.get(IntKey.OverviewHypoDuration))
+            ),
+            initialTarget = preferences.get(UnitDoubleKey.OverviewEatingSoonTarget),
+            initialDuration = preferences.get(IntKey.OverviewEatingSoonDuration),
+            unitStep = if (mmol) 0.1 else 1.0,
+            unitLabel = if (mmol) "mmol/L" else "mg/dL",
+            targetMin = if (mmol) 4.0 else 72.0,
+            targetMax = if (mmol) 15.0 else 270.0,
+            durationStep = 5,
+            decimals = decimals,
+            hasActive = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now()) != null
+        )
+    }
 
-                    rh.gs(app.aaps.core.ui.R.string.hypo)           -> listOf(
-                        ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged },
-                        ValueWithUnit.TETTReason(TT.Reason.HYPOGLYCEMIA),
-                        ValueWithUnit.fromGlucoseUnit(target, units),
-                        ValueWithUnit.Minute(duration)
-                    )
+    private fun start(target: Double, durationMin: Int, reason: TtReason) {
+        if (target <= 0.0 || durationMin <= 0) return
+        val activity = activity ?: return
+        val units = profileFunction.getUnits()
+        val unitLabel = if (mmol) "mmol/L" else "mg/dL"
+        val summary = rh.gs(app.aaps.core.ui.R.string.target_label) + ": " + profileUtil.stringInCurrentUnitsDetect(target) + " " + unitLabel +
+            "\n" + rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationMin)
+        OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.temporary_target), summary, {
+            val ttReason = when (reason) {
+                TtReason.EATING_SOON -> TT.Reason.EATING_SOON
+                TtReason.ACTIVITY    -> TT.Reason.ACTIVITY
+                TtReason.HYPO        -> TT.Reason.HYPOGLYCEMIA
+                TtReason.CUSTOM      -> TT.Reason.CUSTOM
+            }
+            disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
+                TT(
+                    timestamp = dateUtil.now(),
+                    duration = TimeUnit.MINUTES.toMillis(durationMin.toLong()),
+                    reason = ttReason,
+                    lowTarget = profileUtil.convertToMgdl(target, units),
+                    highTarget = profileUtil.convertToMgdl(target, units)
+                ),
+                action = Action.TT,
+                source = Sources.TTDialog,
+                note = null,
+                listValues = listOf(
+                    ValueWithUnit.TETTReason(ttReason),
+                    ValueWithUnit.fromGlucoseUnit(target, units),
+                    ValueWithUnit.Minute(durationMin)
+                )
+            ).subscribe()
+            if (durationMin == 10) preferences.put(BooleanNonKey.ObjectivesTempTargetUsed, true)
+        })
+        dismiss()
+    }
 
-                    rh.gs(app.aaps.core.ui.R.string.manual)         -> listOf(
-                        ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged },
-                        ValueWithUnit.TETTReason(TT.Reason.CUSTOM),
-                        ValueWithUnit.fromGlucoseUnit(target, units),
-                        ValueWithUnit.Minute(duration)
-                    )
-
-                    rh.gs(app.aaps.core.ui.R.string.stoptemptarget) -> listOf(ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged })
-
-                    else                                            -> listOf()
-                }
-                if (target == 0.0 || duration == 0) {
-                    disposable += persistenceLayer.cancelCurrentTemporaryTargetIfAny(
-                        timestamp = eventTime,
-                        action = Action.TT,
-                        source = Sources.TTDialog,
-                        note = null,
-                        listValues = listOf()
-                    ).subscribe()
-                } else {
-                    disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
-                        TT(
-                            timestamp = eventTime,
-                            duration = TimeUnit.MINUTES.toMillis(duration.toLong()),
-                            reason = when (reason) {
-                                rh.gs(app.aaps.core.ui.R.string.eatingsoon) -> TT.Reason.EATING_SOON
-                                rh.gs(app.aaps.core.ui.R.string.activity)   -> TT.Reason.ACTIVITY
-                                rh.gs(app.aaps.core.ui.R.string.hypo)       -> TT.Reason.HYPOGLYCEMIA
-                                else                                        -> TT.Reason.CUSTOM
-                            },
-                            lowTarget = profileUtil.convertToMgdl(target, profileFunction.getUnits()),
-                            highTarget = profileUtil.convertToMgdl(target, profileFunction.getUnits())
-                        ),
-                        action = Action.TT,
-                        source = Sources.TTDialog,
-                        note = null,
-                        listValues = listValues.filterNotNull()
-                    ).subscribe()
-                }
-
-                if (duration == 10) preferences.put(BooleanNonKey.ObjectivesTempTargetUsed, true)
-            })
-        }
-        return true
+    private fun cancelActive() {
+        val activity = activity ?: return
+        OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.temporary_target), rh.gs(app.aaps.core.ui.R.string.stoptemptarget), {
+            disposable += persistenceLayer.cancelCurrentTemporaryTargetIfAny(
+                timestamp = dateUtil.now(),
+                action = Action.TT,
+                source = Sources.TTDialog,
+                note = null,
+                listValues = listOf()
+            ).subscribe()
+        })
+        dismiss()
     }
 
     override fun onResume() {
