@@ -114,4 +114,9 @@
     <string name="autoISF_settings_title">AutoISF settings</string>
     <string name="smb_delivery_settings_title">SMB delivery settings</string>
 
+    <!-- HovorkaMPC -->
+    <string name="hovorka_mpc_name">HovorkaMPC</string>
+    <string name="hovorka_mpc_shortname">HMPC</string>
+    <string name="hovorka_mpc_description">Experimental Hovorka nonlinear model-predictive control (in-silico validated only — not for therapy)</string>
+
 </resources>

@@ -179,6 +179,11 @@ enum class BooleanKey(
         sync = SyncSpec(SyncChannel.Cold, SyncDirection.Bidirectional)
     ),
 
+    HovorkaTddAdaptation("hovorka_tdd_adaptation", false, R.string.hovorka_tdd_adaptation_title, R.string.hovorka_tdd_adaptation_summary),
+    HovorkaImmBank("hovorka_imm_bank", false, R.string.hovorka_imm_bank_title, R.string.hovorka_imm_bank_summary),
+    HovorkaEnableSmb("hovorka_enable_smb", false, R.string.hovorka_enable_smb_title, R.string.hovorka_enable_smb_summary),
+    HovorkaMealDetection("hovorka_meal_detection", false, R.string.hovorka_meal_detection_title, R.string.hovorka_meal_detection_summary),
+
     MaintenanceEnableFabric("enable_fabric2", true, R.string.pref_title_maintenance_enable_fabric, defaultedBySM = true, hideParentScreenIfHidden = true),
 
     // Master-only (not a follower client): unattended settings export backs up the local config, which on a

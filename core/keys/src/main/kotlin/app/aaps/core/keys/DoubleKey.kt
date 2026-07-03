@@ -303,5 +303,15 @@ enum class DoubleKey(
         unitType = UnitType.DOUBLE,
         sync = SyncSpec(SyncChannel.Cold, SyncDirection.Bidirectional)
     ),
+    HovorkaBodyWeight(
+        key = "hovorka_body_weight",
+        defaultValue = 70.0,
+        min = 30.0,
+        max = 250.0,
+        titleResId = R.string.hovorka_body_weight_title,
+        summaryResId = R.string.hovorka_body_weight_summary,
+        unitType = UnitType.DOUBLE,
+        sync = SyncSpec(SyncChannel.Cold, SyncDirection.Bidirectional)
+    ),
 
 }
