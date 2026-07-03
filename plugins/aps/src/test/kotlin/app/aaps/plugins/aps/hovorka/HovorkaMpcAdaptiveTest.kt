@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.hovorka
 
 import com.google.common.truth.Truth.assertThat
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.util.Random
 import kotlin.math.min
@@ -13,6 +14,7 @@ import kotlin.math.min
  */
 class HovorkaMpcAdaptiveTest {
 
+    @Tag("slow")
     @Test fun `adaptation lifts TIR, converges and stays safe`() {
         val rng = Random(2024)
         val days = 10

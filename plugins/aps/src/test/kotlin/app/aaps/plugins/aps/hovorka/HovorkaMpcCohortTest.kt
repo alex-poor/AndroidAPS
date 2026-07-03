@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.hovorka
 
 import com.google.common.truth.Truth.assertThat
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.util.Random
 
@@ -15,6 +16,7 @@ import java.util.Random
  */
 class HovorkaMpcCohortTest {
 
+    @Tag("slow")
     @Test fun `cohort of 20 mismatched patients stays safe`() {
         val nominal = HovorkaModel(HovorkaParams.forWeight(70.0))   // controller's population model
         val rng = Random(2024)

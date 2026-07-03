@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.hovorka
 
 import com.google.common.truth.Truth.assertThat
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.util.Random
 
@@ -11,6 +12,7 @@ import java.util.Random
  */
 class HovorkaMpcSmbTest {
 
+    @Tag("slow")
     @Test fun `SMB lowers the post-meal peak without adding hypo`() {
         val rng = Random(2024)
         val tbrOnly = ArrayList<LoopMetrics>()

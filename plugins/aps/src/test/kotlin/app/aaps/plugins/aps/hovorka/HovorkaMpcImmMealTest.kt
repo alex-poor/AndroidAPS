@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.hovorka
 
 import com.google.common.truth.Truth.assertThat
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.util.Random
 
@@ -12,6 +13,7 @@ import java.util.Random
  */
 class HovorkaMpcImmMealTest {
 
+    @Tag("slow")
     @Test fun `IMM bank estimator keeps the cohort safe`() {
         val nominal = HovorkaModel(HovorkaParams.forWeight(70.0))
         val rng = Random(2024)
@@ -30,6 +32,7 @@ class HovorkaMpcImmMealTest {
         assertThat(metrics.minOf { it.minG }).isGreaterThan(3.0)
     }
 
+    @Tag("slow")
     @Test fun `meal detection reacts to unannounced meals without hypo`() {
         val ctrl = HovorkaModel(HovorkaParams.forWeight(70.0))
         val rng = Random(2024)
