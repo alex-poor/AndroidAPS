@@ -178,6 +178,7 @@ class ProfileFragment : DaggerFragment() {
         profileViewState.value = ProfileViewState(
             loading = false,
             profileName = profileFunction.getProfileName(),
+            dia = String.format(java.util.Locale.getDefault(), "%.1f h", profile.dia),
             dailyBasal = String.format(java.util.Locale.getDefault(), "%.1f U/day", dayU),
             basal = basal, isf = isf, ic = ic, target = target
         )

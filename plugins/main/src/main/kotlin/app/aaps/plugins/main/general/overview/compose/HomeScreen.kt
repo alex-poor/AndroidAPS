@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -23,10 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Restaurant
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -63,12 +59,13 @@ fun HomeScreen(
             .fillMaxSize()
             .background(colors.background)
     ) {
-        TopBar(actions)
+        // No Compose top bar here — the app's own toolbar/tab strip already sits above this fragment.
         Column(
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = AapsSpacing.screenH),
+                .padding(horizontal = AapsSpacing.screenH)
+                .padding(top = 10.dp),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
         ) {
             HeroCard(state, actions)
@@ -78,36 +75,6 @@ fun HomeScreen(
             Box(Modifier.padding(bottom = 4.dp))
         }
         ActionBar(actions)
-    }
-}
-
-@Composable
-private fun TopBar(actions: HomeActions) {
-    val colors = AapsTheme.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.systemBars.only(androidx.compose.foundation.layout.WindowInsetsSides.Top))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        TopIcon(Icons.Rounded.Menu, "Menu", actions.onMore)
-        Text("Overview", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
-        TopIcon(Icons.Rounded.Notifications, "Notifications", actions.onMore)
-        TopIcon(Icons.Rounded.Settings, "Settings", actions.onMore)
-    }
-}
-
-@Composable
-private fun TopIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, cd: String, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .clip(CircleShape)
-            .clickable(onClick = onClick)
-            .padding(8.dp)
-    ) {
-        Icon(icon, contentDescription = cd, tint = AapsTheme.colors.textSecondary, modifier = Modifier.padding(0.dp))
     }
 }
 

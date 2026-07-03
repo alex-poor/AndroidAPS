@@ -66,6 +66,15 @@ fun ProfileView(state: ProfileViewState, onEdit: () -> Unit) {
             }
         }
 
+        if (state.dia.isNotBlank()) {
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Insulin duration (DIA)", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                    Text(state.dia, style = AapsType.listTitle, color = colors.textPrimary)
+                }
+            }
+        }
+
         SegmentedControl(
             ProfileTab.entries.map { it.label },
             ProfileTab.entries.indexOf(tab),

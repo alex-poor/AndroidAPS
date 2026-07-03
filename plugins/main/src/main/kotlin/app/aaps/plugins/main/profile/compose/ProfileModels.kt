@@ -12,6 +12,7 @@ data class ProfileBlock(val time: String, val startSeconds: Int, val value: Stri
 data class ProfileViewState(
     val loading: Boolean = true,
     val profileName: String = "",
+    val dia: String = "",              // insulin duration (DIA) — the profile's 5th value
     val dailyBasal: String = "",
     val basal: List<ProfileBlock> = emptyList(),
     val isf: List<ProfileBlock> = emptyList(),

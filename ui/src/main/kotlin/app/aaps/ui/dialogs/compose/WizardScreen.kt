@@ -74,7 +74,8 @@ fun WizardScreen(
                 .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconBtn(if (confirming) Icons.Rounded.ArrowBack else Icons.Rounded.Close, "Back") {
+            // Single, consistent control: close (X) on the input step, back (←) on the confirm step.
+            IconBtn(if (confirming) Icons.Rounded.ArrowBack else Icons.Rounded.Close, if (confirming) "Back" else "Close") {
                 if (confirming) confirming = false else onCancel()
             }
             Text(
@@ -82,7 +83,6 @@ fun WizardScreen(
                 style = AapsType.title, color = colors.textPrimary,
                 modifier = Modifier.weight(1f).padding(start = 4.dp)
             )
-            if (!confirming) IconBtn(Icons.Rounded.Close, "Close", onCancel)
         }
 
         AnimatedContent(targetState = confirming, transitionSpec = { fadeThrough() }, label = "wizard-step") { onConfirm ->

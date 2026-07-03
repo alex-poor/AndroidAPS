@@ -53,6 +53,7 @@ class YpsoPumpPlugin @Inject constructor(
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
         .mainType(PluginType.PUMP)
+        .fragmentClass(YpsoPumpFragment::class.java.name)
         .pluginIcon(app.aaps.core.ui.R.drawable.ic_generic_icon)
         .pluginName(R.string.ypsopump_name)
         .shortName(R.string.ypsopump_name_short)
