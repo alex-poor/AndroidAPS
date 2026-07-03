@@ -1,9 +1,17 @@
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  ~ UI redesign: the legacy profile editor stays inside this ScrollView; the read-only Compose profile
+  ~ view is an overlay (compose_profile) on top. Its "Edit" button hides the overlay to reveal the editor.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".profile.ProfileFragment">
+
+  <ScrollView
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -369,4 +377,11 @@
 
     </LinearLayout>
 
-</ScrollView>
+  </ScrollView>
+
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/compose_profile"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>

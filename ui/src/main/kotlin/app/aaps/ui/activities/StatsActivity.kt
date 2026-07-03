@@ -51,12 +51,9 @@ class StatsActivity : TranslatedDaggerAppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = rh.gs(R.string.statistics)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.setDisplayShowHomeEnabled(true)
-
+        supportActionBar?.hide()
         setContentView(ComposeView(this).apply {
-            setContent { AapsTheme { StatsScreen(statsState.value, onRange = ::compute) } }
+            setContent { AapsTheme { StatsScreen(statsState.value, onRange = ::compute, onBack = { finish() }) } }
         })
         compute(7)
     }

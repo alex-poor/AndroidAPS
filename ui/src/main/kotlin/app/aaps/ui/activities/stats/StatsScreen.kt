@@ -1,6 +1,7 @@
 package app.aaps.ui.activities.stats
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,7 +40,7 @@ import kotlin.math.roundToInt
  * 5-band stacked bar), and 2×2 stat tiles. Read-only; [onRange] recomputes for the chosen window.
  */
 @Composable
-fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit) {
+fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit) {
     val colors = AapsTheme.colors
     val ranges = listOf(7, 30, 90)
     Column(
@@ -46,8 +50,11 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = AapsSpacing.screenH)
     ) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Statistics", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onBack).padding(8.dp)
+            ) { Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary) }
+            Text("Statistics", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
             SegmentedControl(ranges.map { "${it}d" }, ranges.indexOf(state.rangeDays).coerceAtLeast(0), { onRange(ranges[it]) })
         }
 

@@ -8,7 +8,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.GlucoseUnit
+import app.aaps.plugins.main.profile.compose.ProfileBlock
+import app.aaps.plugins.main.profile.compose.ProfileView
+import app.aaps.plugins.main.profile.compose.ProfileViewState
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
@@ -102,6 +109,9 @@ class ProfileFragment : DaggerFragment() {
     // This property is only valid between onCreateView and onDestroyView.
     private val binding get() = _binding!!
 
+    // ---- Redesigned read-only Profile view (Compose overlay; "Edit" reveals the legacy editor) ----
+    private val profileViewState = mutableStateOf(ProfileViewState())
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = ProfileFragmentBinding.inflate(inflater, container, false)
         return binding.root
@@ -131,6 +141,46 @@ class ProfileFragment : DaggerFragment() {
         val aps = activePlugin.activeAPS
         binding.isfDynamicLabel.visibility = aps.supportsDynamicIsf().toVisibility()
         binding.icDynamicLabel.visibility = aps.supportsDynamicIc().toVisibility()
+
+        // Read-only Compose profile view overlaying the legacy editor; "Edit" hides it to reveal the editor.
+        binding.composeProfile.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        binding.composeProfile.setContent {
+            AapsTheme { ProfileView(profileViewState.value, onEdit = { _binding?.composeProfile?.visibility = View.GONE }) }
+        }
+        buildProfileView()
+    }
+
+    private fun buildProfileView() {
+        val profile = profileFunction.getProfile()
+        if (profile == null) {
+            profileViewState.value = ProfileViewState(loading = false)
+            return
+        }
+        val unitLabel = if (profileFunction.getUnits() == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
+        fun t(sec: Int) = String.format(java.util.Locale.getDefault(), "%02d:%02d", sec / 3600, (sec % 3600) / 60)
+
+        val basalVals = profile.getBasalValues()
+        val basal = basalVals.map { ProfileBlock(t(it.timeAsSeconds), it.timeAsSeconds, String.format(java.util.Locale.getDefault(), "%.2f U/h", it.value), it.value) }
+        var dayU = 0.0
+        basalVals.forEachIndexed { i, v ->
+            val end = if (i + 1 < basalVals.size) basalVals[i + 1].timeAsSeconds else 86400
+            dayU += v.value * (end - v.timeAsSeconds) / 3600.0
+        }
+        val isf = profile.getIsfsMgdlValues().map { ProfileBlock(t(it.timeAsSeconds), it.timeAsSeconds, "${profileUtil.fromMgdlToStringInUnits(it.value)} $unitLabel", it.value) }
+        val ic = profile.getIcsValues().map { ProfileBlock(t(it.timeAsSeconds), it.timeAsSeconds, String.format(java.util.Locale.getDefault(), "%.1f g/U", it.value), it.value) }
+        // Target: sample at each basal boundary, collapsing unchanged consecutive ranges.
+        val target = mutableListOf<ProfileBlock>()
+        basalVals.forEach { v ->
+            val range = "${profileUtil.fromMgdlToStringInUnits(profile.getTargetLowMgdlTimeFromMidnight(v.timeAsSeconds))}–" +
+                "${profileUtil.fromMgdlToStringInUnits(profile.getTargetHighMgdlTimeFromMidnight(v.timeAsSeconds))} $unitLabel"
+            if (target.lastOrNull()?.value != range) target.add(ProfileBlock(t(v.timeAsSeconds), v.timeAsSeconds, range, 0.0))
+        }
+        profileViewState.value = ProfileViewState(
+            loading = false,
+            profileName = profileFunction.getProfileName(),
+            dailyBasal = String.format(java.util.Locale.getDefault(), "%.1f U/day", dayU),
+            basal = basal, isf = isf, ic = ic, target = target
+        )
     }
 
     fun build() {
@@ -347,6 +397,7 @@ class ProfileFragment : DaggerFragment() {
             build()
         }
         updateGUI()
+        buildProfileView()
     }
 
     @Synchronized
