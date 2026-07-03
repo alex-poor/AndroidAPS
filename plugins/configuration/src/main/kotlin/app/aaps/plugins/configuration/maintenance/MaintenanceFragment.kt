@@ -9,6 +9,7 @@ import androidx.core.text.toSpanned
 import androidx.fragment.app.FragmentActivity
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
+import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.core.interfaces.logging.AAPSLogger
@@ -71,6 +72,7 @@ class MaintenanceFragment : DaggerFragment() {
     @Inject lateinit var cloudStorageManager: CloudStorageManager
     @Inject lateinit var cloudDirectoryDialog: CloudDirectoryDialog
     @Inject lateinit var exportOptionsDialog: ExportOptionsDialog
+    @Inject lateinit var config: Config
 
     private val disposable = CompositeDisposable()
     private var inMenu = false
@@ -80,9 +82,39 @@ class MaintenanceFragment : DaggerFragment() {
     // This property is only valid between onCreateView and onDestroyView.
     private val binding get() = _binding!!
 
+    // ---- Redesigned Maintenance (Compose overlay; "More options" reveals the legacy screen) ----
+    private val maintState = androidx.compose.runtime.mutableStateOf(app.aaps.plugins.configuration.maintenance.compose.MaintenanceUiState())
+    private var composeOverlay: androidx.compose.ui.platform.ComposeView? = null
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        _binding = MaintenanceFragmentBinding.inflate(inflater, container, false)
-        return binding.root
+        val legacyRoot = MaintenanceFragmentBinding.inflate(inflater, container, false).also { _binding = it }.root
+        val frame = android.widget.FrameLayout(requireContext())
+        val mp = android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+        )
+        frame.addView(legacyRoot, mp)
+        val overlay = androidx.compose.ui.platform.ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                app.aaps.core.compose.theme.AapsTheme {
+                    app.aaps.plugins.configuration.maintenance.compose.MaintenanceScreen(
+                        state = maintState.value,
+                        onExport = { importExportPrefs.verifyStoragePermissions(this@MaintenanceFragment) { importExportPrefs.exportSharedPreferences(this@MaintenanceFragment) } },
+                        onImport = { importExportPrefs.verifyStoragePermissions(this@MaintenanceFragment) { importExportPrefs.importSharedPreferences(requireActivity() as FragmentActivity) } },
+                        onExportLogs = { maintenancePlugin.sendLogs() },
+                        onMore = { visibility = View.GONE }
+                    )
+                }
+            }
+        }
+        composeOverlay = overlay
+        frame.addView(overlay, mp)
+        maintState.value = app.aaps.plugins.configuration.maintenance.compose.MaintenanceUiState(
+            version = config.VERSION_NAME,
+            buildInfo = "${config.FLAVOR} ${config.BUILD_TYPE}".trim()
+        )
+        return frame
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -278,6 +310,8 @@ class MaintenanceFragment : DaggerFragment() {
         val isLocked = protectionCheck.isLocked(PREFERENCES)
         binding.mainLayout.visibility = isLocked.not().toVisibility()
         binding.unlock.visibility = isLocked.toVisibility()
+        // Redesign overlay is only shown once unlocked; when locked, reveal the legacy unlock prompt underneath.
+        composeOverlay?.visibility = isLocked.not().toVisibility()
         
         // Update storage error state when UI becomes available
         if (!isLocked) {

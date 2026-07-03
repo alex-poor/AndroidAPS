@@ -68,6 +68,7 @@ class HovorkaMpcPlugin @Inject constructor(
 ) : PluginBase(
     PluginDescription()
         .mainType(PluginType.APS)
+        .fragmentClass("app.aaps.plugins.aps.compose.AlgorithmFragment")
         .pluginName(R.string.hovorka_mpc_name)
         .shortName(R.string.hovorka_mpc_shortname)
         .preferencesId(PluginDescription.PREFERENCE_SCREEN)

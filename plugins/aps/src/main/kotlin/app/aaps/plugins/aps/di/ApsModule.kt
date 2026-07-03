@@ -3,6 +3,7 @@ package app.aaps.plugins.aps.di
 import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.autotune.Autotune
 import app.aaps.plugins.aps.OpenAPSFragment
+import app.aaps.plugins.aps.compose.AlgorithmFragment
 import app.aaps.plugins.aps.autotune.AutotunePlugin
 import app.aaps.plugins.aps.loop.LoopPlugin
 import dagger.Binds
@@ -21,6 +22,7 @@ import dagger.android.ContributesAndroidInjector
 abstract class ApsModule {
 
     @ContributesAndroidInjector abstract fun contributesOpenAPSFragment(): OpenAPSFragment
+    @ContributesAndroidInjector abstract fun contributesAlgorithmFragment(): AlgorithmFragment
 
     @Module
     interface Bindings {

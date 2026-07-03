@@ -75,8 +75,30 @@ class ObjectivesFragment : DaggerFragment() {
     // onDestroyView.
     private val binding get() = _binding!!
 
-    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
-        ObjectivesFragmentBinding.inflate(inflater, container, false).also { _binding = it }.root
+    // ---- Redesigned Objectives journey (Compose overlay; "Manage & verify" reveals the legacy list) ----
+    private val objState = androidx.compose.runtime.mutableStateOf(app.aaps.plugins.constraints.objectives.compose.ObjectivesUiState())
+    private var composeOverlay: androidx.compose.ui.platform.ComposeView? = null
+
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        val legacyRoot = ObjectivesFragmentBinding.inflate(inflater, container, false).also { _binding = it }.root
+        val frame = android.widget.FrameLayout(requireContext())
+        val mp = android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+        )
+        frame.addView(legacyRoot, mp)
+        val overlay = androidx.compose.ui.platform.ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                app.aaps.core.compose.theme.AapsTheme {
+                    app.aaps.plugins.constraints.objectives.compose.ObjectivesJourney(objState.value, onManage = { visibility = View.GONE })
+                }
+            }
+        }
+        composeOverlay = overlay
+        frame.addView(overlay, mp)
+        return frame
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -89,6 +111,32 @@ class ObjectivesFragment : DaggerFragment() {
             scrollToCurrentObjective()
         }
         scrollToCurrentObjective()
+        buildObjectivesState()
+    }
+
+    private fun buildObjectivesState() {
+        val objectives = objectivesPlugin.objectives
+        var currentIndex = objectives.indexOfFirst { !it.isStarted || !it.isAccomplished }
+        if (currentIndex < 0) currentIndex = objectives.size
+        val completed = objectives.count { it.isAccomplished }
+        val items = objectives.mapIndexed { i, o ->
+            val stateInt = when {
+                o.isAccomplished -> 0
+                i == currentIndex || o.isStarted -> 1
+                else -> 2
+            }
+            val progress = o.tasks.filter { !it.shouldBeIgnored() }.let { tasks ->
+                if (tasks.isEmpty()) "" else "${tasks.count { it.isCompleted() }} of ${tasks.size} steps done"
+            }
+            app.aaps.plugins.constraints.objectives.compose.ObjItem(
+                number = i + 1,
+                title = rh.gs(o.objective),
+                gate = if (o.gate != 0) rh.gs(o.gate) else "",
+                state = stateInt,
+                progress = if (stateInt == 1) progress else ""
+            )
+        }
+        objState.value = app.aaps.plugins.constraints.objectives.compose.ObjectivesUiState(completed = completed, total = objectives.size, items = items)
     }
 
     override fun onResume() {
@@ -96,7 +144,7 @@ class ObjectivesFragment : DaggerFragment() {
         disposable += rxBus
             .toObservable(EventObjectivesUpdateGui::class.java)
             .observeOn(aapsSchedulers.main)
-            .subscribe({ updateGUI() }, fabricPrivacy::logException)
+            .subscribe({ updateGUI(); buildObjectivesState() }, fabricPrivacy::logException)
         startUpdateTimer()
     }
 
