@@ -211,7 +211,9 @@ class HovorkaMpcPlugin @Inject constructor(
             timestamp = now,
             bg = glucoseStatus.glucose,
             targetBG = controlTargetMmol * MGDL_PER_MMOL,
-            eventualBG = model.glucoseMgdl(ekf.x),
+            // eventualBG = the MPC's forward projection to the horizon under its optimised plan (falls with
+            // IOB, rises with carbs) — NOT the current estimate (which just tracks CGM and never varied).
+            eventualBG = decision.eventualMmol * MGDL_PER_MMOL,
             reason = StringBuilder(reasonStr),
             duration = TBR_DURATION_MIN,
             rate = rateUhr,
