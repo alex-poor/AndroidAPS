@@ -1,6 +1,7 @@
 package app.aaps.plugins.configuration.configBuilder.compose
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -31,7 +35,7 @@ import app.aaps.core.compose.theme.AapsType
  * toggleable general plugins. Toggling reuses `ConfigBuilder.performPluginSwitch` in the fragment.
  */
 @Composable
-fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) -> Unit) {
+fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) -> Unit, onOpenPrefs: (index: Int) -> Unit) {
     val colors = AapsTheme.colors
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
@@ -80,6 +84,28 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
                     }
                 }
             }
+        }
+
+        if (state.prefs.isNotEmpty()) {
+            Text("SETTINGS", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            state.prefs.groupBy { it.group }.forEach { (group, rows) ->
+                Text(group, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp, top = 4.dp))
+                AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap)) {
+                    Column {
+                        rows.forEachIndexed { i, p ->
+                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                            Row(
+                                Modifier.fillMaxWidth().clickable { onOpenPrefs(p.index) }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(p.name, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+                                Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
+                            }
+                        }
+                    }
+                }
+            }
+            Box(Modifier.height(24.dp))
         }
     }
 }

@@ -10,8 +10,13 @@ data class ConfigSummary(val label: String, val value: String, val ok: Boolean)
 @Immutable
 data class ConfigToggle(val index: Int, val name: String, val sub: String, val enabled: Boolean)
 
+/** A plugin that has a settings screen — tapping opens its (search-enabled) preferences. Keyed by [index]. */
+@Immutable
+data class PrefEntry(val index: Int, val name: String, val group: String)
+
 @Immutable
 data class ConfigUiState(
     val summary: List<ConfigSummary> = emptyList(),
-    val plugins: List<ConfigToggle> = emptyList()
+    val plugins: List<ConfigToggle> = emptyList(),
+    val prefs: List<PrefEntry> = emptyList()
 )

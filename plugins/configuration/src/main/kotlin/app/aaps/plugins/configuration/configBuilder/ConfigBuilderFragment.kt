@@ -14,11 +14,13 @@ import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.configuration.ConfigBuilder
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
+import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.utils.Translator
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigScreen
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigSummary
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigToggle
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigUiState
+import app.aaps.plugins.configuration.configBuilder.compose.PrefEntry
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.protection.ProtectionCheck.Protection.PREFERENCES
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -52,6 +54,7 @@ class ConfigBuilderFragment : DaggerFragment() {
     // ---- Redesigned Config Builder (Compose overlay) ----
     private val configState = mutableStateOf(ConfigUiState())
     private var generalPlugins: List<PluginBase> = emptyList()
+    private var prefPlugins: List<PluginBase> = emptyList()
     private var inMenu = false
     private var queryingProtection = false
     private var _binding: ConfigbuilderFragmentBinding? = null
@@ -73,9 +76,16 @@ class ConfigBuilderFragment : DaggerFragment() {
 
         binding.composeConfig.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         binding.composeConfig.setContent {
-            AapsTheme { ConfigScreen(state = configState.value, onToggle = ::onPluginToggle) }
+            AapsTheme { ConfigScreen(state = configState.value, onToggle = ::onPluginToggle, onOpenPrefs = ::onOpenPrefs) }
         }
         buildConfigState()
+    }
+
+    private fun onOpenPrefs(index: Int) {
+        val plugin = prefPlugins.getOrNull(index) ?: return
+        startActivity(android.content.Intent(activity, uiInteraction.preferencesActivity).also {
+            it.putExtra(UiInteraction.PLUGIN_NAME, plugin.javaClass.simpleName)
+        })
     }
 
     private fun buildConfigState() {
@@ -87,7 +97,24 @@ class ConfigBuilderFragment : DaggerFragment() {
         }
         generalPlugins = activePlugin.getSpecificPluginsVisibleInList(PluginType.GENERAL)
         val plugins = generalPlugins.mapIndexed { i, p -> ConfigToggle(i, p.name, "", p.isEnabled(PluginType.GENERAL)) }
-        configState.value = ConfigUiState(summary, plugins)
+
+        // Plugins that expose a settings screen → grouped, tappable rows opening their (search-enabled) prefs.
+        prefPlugins = activePlugin.getPluginsList().filter {
+            it.preferencesId != PluginDescription.PREFERENCE_NONE && it.pluginDescription.pluginName != -1 && !it.pluginDescription.neverVisible
+        }
+        val prefs = prefPlugins.mapIndexed { i, p -> PrefEntry(i, p.name, groupLabel(p.getType())) }
+
+        configState.value = ConfigUiState(summary, plugins, prefs)
+    }
+
+    private fun groupLabel(type: PluginType): String = when (type) {
+        PluginType.GENERAL     -> "General"
+        PluginType.LOOP, PluginType.APS, PluginType.CONSTRAINTS, PluginType.SENSITIVITY -> "Loop & algorithm"
+        PluginType.PUMP        -> "Pump"
+        PluginType.BGSOURCE, PluginType.SMOOTHING -> "CGM & data"
+        PluginType.INSULIN     -> "Insulin"
+        PluginType.PROFILE     -> "Profile"
+        PluginType.SYNC        -> "Connections & sync"
     }
 
     private fun onPluginToggle(index: Int, enabled: Boolean) {
