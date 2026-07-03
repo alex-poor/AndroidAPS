@@ -1,73 +1,97 @@
 package app.aaps.ui.activities
 
 import android.os.Bundle
-import androidx.fragment.app.Fragment
-import androidx.fragment.app.FragmentTransaction
-import app.aaps.core.interfaces.configuration.Config
-import app.aaps.core.interfaces.plugin.ActivePlugin
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.data.model.BS
+import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.resources.ResourceHelper
+import app.aaps.core.interfaces.rx.AapsSchedulers
+import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
-import app.aaps.core.ui.extensions.toVisibility
-import app.aaps.ui.R
-import app.aaps.ui.activities.fragments.TreatmentsBolusCarbsFragment
-import app.aaps.ui.activities.fragments.TreatmentsCareportalFragment
-import app.aaps.ui.activities.fragments.TreatmentsExtendedBolusesFragment
-import app.aaps.ui.activities.fragments.TreatmentsProfileSwitchFragment
-import app.aaps.ui.activities.fragments.TreatmentsRunningModeFragment
-import app.aaps.ui.activities.fragments.TreatmentsTempTargetFragment
-import app.aaps.ui.activities.fragments.TreatmentsTemporaryBasalsFragment
-import app.aaps.ui.activities.fragments.TreatmentsUserEntryFragment
-import app.aaps.ui.databinding.TreatmentsFragmentBinding
-import com.google.android.material.tabs.TabLayout
+import app.aaps.ui.activities.history.HistoryItem
+import app.aaps.ui.activities.history.HistoryKind
+import app.aaps.ui.activities.history.HistoryScreen
+import app.aaps.ui.activities.history.HistoryUiState
+import io.reactivex.rxjava3.core.Single
+import io.reactivex.rxjava3.disposables.CompositeDisposable
+import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 
+/**
+ * Redesigned History timeline. UI is Compose ([HistoryScreen]); a unified, day-grouped, read-only list
+ * of boluses / carbs / therapy events over the last 14 days, merged from the persistence layer off the
+ * main thread. (Edit/delete of individual treatments is a later pass — see the redesign notes.)
+ */
 class TreatmentsActivity : TranslatedDaggerAppCompatActivity() {
 
-    @Inject lateinit var config: Config
-    @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var rh: ResourceHelper
+    @Inject lateinit var persistenceLayer: PersistenceLayer
+    @Inject lateinit var dateUtil: DateUtil
+    @Inject lateinit var aapsSchedulers: AapsSchedulers
+    @Inject lateinit var fabricPrivacy: FabricPrivacy
 
-    private lateinit var binding: TreatmentsFragmentBinding
+    private val disposable = CompositeDisposable()
+    private val historyState = mutableStateOf(HistoryUiState())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = TreatmentsFragmentBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        // Use index, TabItems crashes with an id
-        val showEbTab = !activePlugin.activePump.isFakingTempsByExtendedBoluses && activePlugin.activePump.pumpDescription.isExtendedBolusCapable
-        binding.treatmentsTabs.getTabAt(1)?.view?.visibility = showEbTab.toVisibility()
-
-        setFragment(TreatmentsBolusCarbsFragment())
-        setSupportActionBar(binding.toolbar)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.title = rh.gs(R.string.carbs_and_bolus)
-
-        binding.treatmentsTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab) {
-                val fragment = when (tab.position) {
-                    0    -> TreatmentsBolusCarbsFragment::class.java
-                    1    -> TreatmentsExtendedBolusesFragment::class.java
-                    2    -> TreatmentsTemporaryBasalsFragment::class.java
-                    3    -> TreatmentsTempTargetFragment::class.java
-                    4    -> TreatmentsProfileSwitchFragment::class.java
-                    5    -> TreatmentsCareportalFragment::class.java
-                    6    -> TreatmentsRunningModeFragment::class.java
-                    else -> TreatmentsUserEntryFragment::class.java
-                }
-                setFragment(fragment.getDeclaredConstructor().newInstance())
-                supportActionBar?.title = tab.contentDescription
-            }
-
-            override fun onTabUnselected(tab: TabLayout.Tab) {}
-            override fun onTabReselected(tab: TabLayout.Tab) {}
+        supportActionBar?.hide()
+        setContentView(ComposeView(this).apply {
+            setContent { AapsTheme { HistoryScreen(historyState.value, onBack = { finish() }) } }
         })
+        disposable += Single.fromCallable { buildHistory() }
+            .subscribeOn(aapsSchedulers.io)
+            .observeOn(aapsSchedulers.main)
+            .subscribe({ historyState.value = it }, fabricPrivacy::logException)
     }
 
-    private fun setFragment(selectedFragment: Fragment) {
-        supportFragmentManager.beginTransaction()
-            .replace(R.id.fragment_container, selectedFragment)
-            .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)
-            .commit()
+    private fun dayLabel(ts: Long, now: Long): String = when (dateUtil.dateString(ts)) {
+        dateUtil.dateString(now)                    -> "Today"
+        dateUtil.dateString(now - 86_400_000L)      -> "Yesterday"
+        else                                        -> dateUtil.dateString(ts)
+    }
+
+    private fun eventTitle(type: Any): String =
+        type.toString().replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }
+
+    private fun buildHistory(): HistoryUiState {
+        val now = dateUtil.now()
+        val from = now - 14L * 86_400_000L
+        val items = mutableListOf<HistoryItem>()
+
+        persistenceLayer.getBolusesFromTimeToTime(from, now, false).forEach { bs ->
+            if (!bs.isValid || bs.type == BS.Type.PRIMING) return@forEach
+            val smb = bs.type == BS.Type.SMB
+            items += HistoryItem(
+                bs.timestamp, dayLabel(bs.timestamp, now), dateUtil.timeString(bs.timestamp),
+                if (smb) HistoryKind.SMB else HistoryKind.BOLUS,
+                if (smb) "SMB" else "Bolus", bs.notes ?: "",
+                rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bs.amount)
+            )
+        }
+        persistenceLayer.getCarbsFromTimeToTimeExpanded(from, now, false).forEach { ca ->
+            if (!ca.isValid) return@forEach
+            items += HistoryItem(
+                ca.timestamp, dayLabel(ca.timestamp, now), dateUtil.timeString(ca.timestamp),
+                HistoryKind.CARBS, "Carbs", ca.notes ?: "", "${ca.amount.toInt()} g"
+            )
+        }
+        persistenceLayer.getTherapyEventDataFromToTime(from, now).blockingGet().forEach { te ->
+            if (!te.isValid) return@forEach
+            items += HistoryItem(
+                te.timestamp, dayLabel(te.timestamp, now), dateUtil.timeString(te.timestamp),
+                HistoryKind.EVENT, eventTitle(te.type), te.note ?: "", ""
+            )
+        }
+        items.sortByDescending { it.timestamp }
+        return HistoryUiState(loading = false, items = items)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        disposable.clear()
     }
 }
