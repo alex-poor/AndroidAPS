@@ -492,13 +492,17 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         val gs = glucoseStatusProvider.glucoseStatusData
         val profile = profileFunction.getProfile()
         val bgMgdl = lastBg?.recalculated
-        // Colour the BG value against the PROFILE TARGET BAND (not the low/high alarm thresholds —
-        // those remain for the alerts system only). Value, trend and state line share this colour.
+        // Colour the BG value against the display HYPO/HYPER thresholds (Overview Low/High marks —
+        // the same thresholds AAPS uses for BG colouring elsewhere), NOT the tighter profile target
+        // band, so a BG just above target isn't alarmingly amber. The state line below still describes
+        // position vs the target band (informational).
+        val lowMarkMgdl = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
+        val highMarkMgdl = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
         val bgColor = when {
-            profile == null || bgMgdl == null    -> AapsSemantic.inRange
-            bgMgdl > profile.getTargetHighMgdl() -> AapsSemantic.high   // amber
-            bgMgdl < profile.getTargetLowMgdl()  -> AapsSemantic.low    // red
-            else                                 -> AapsSemantic.inRange // green
+            bgMgdl == null        -> AapsSemantic.inRange
+            bgMgdl > highMarkMgdl -> AapsSemantic.high   // amber (hyper)
+            bgMgdl < lowMarkMgdl  -> AapsSemantic.low    // red (hypo)
+            else                  -> AapsSemantic.inRange // green
         }
 
         // Loop mode → pill label / color / looping
