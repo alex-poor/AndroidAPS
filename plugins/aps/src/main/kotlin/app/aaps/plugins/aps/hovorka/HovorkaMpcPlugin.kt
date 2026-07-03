@@ -172,9 +172,9 @@ class HovorkaMpcPlugin @Inject constructor(
         // maxBolus, so an SMB can never push IOB past maxIOB) and both hypo suspends inside the MPC.
         val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
             constraintsChecker.isClosedLoopAllowed().value()
+        val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
         val maxSmbU = if (smbAllowed) {
             val maxIob = constraintsChecker.getMaxIOBAllowed().value()
-            val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
             val maxBolus = constraintsChecker.getMaxBolusAllowed().value()
             max(0.0, min(min(maxBolus, SMB_ABS_CAP_U), maxIob - iobNow))
         } else 0.0
@@ -199,9 +199,23 @@ class HovorkaMpcPlugin @Inject constructor(
         // 3b: the SMB inherits BOTH hypo backstops — the est.G suspend inside decide() (already zeroes
         // decision.smbU) AND this raw-CGM suspend. Round to 2 dp; a dropped bolus fails closed downstream.
         val smbU = if (rawHypoSuspend) 0.0 else round(decision.smbU * 100.0) / 100.0
+        // Prototype #1: mass-balance FLOOR on the reported projection. The nonlinear model rollout
+        // (decision.eventualMmol) can crater far below what insulin/carb mass balance allows — missing
+        // counter-regulation and renal loss at the post-meal peak make a carb-MATCHED bolus mis-project a
+        // deep hypo (observed eventualBG 1.2 on a normal dinner; verified across all calibrations in
+        // hovorka-mpc/). Floor the reported value at the standard bolus-wizard identity
+        //   eventual = currentBG − IOB·ISF + COB·(ISF/IC)
+        // which reads ~current for a matched dose. This is DISPLAY + safety-reporting only — the TBR control
+        // law is unchanged (TBR-only, near-minimal already, so the crater's basal effect was minor and safe).
+        val isfMmol = isfMgdl / MGDL_PER_MMOL
+        val cobG = iobCobCalculator.getCobInfo("HovorkaEventual").displayCob ?: 0.0
+        val carbRiseMmol = if (icGPerU > 0.0) cobG * isfMmol / icGPerU else 0.0
+        val eventualLinearMmol = (rawCgmMmol - iobNow * isfMmol + carbRiseMmol).coerceIn(EVENTUAL_MIN_MMOL, EVENTUAL_MAX_MMOL)
+        val reportedEventualMmol = max(decision.eventualMmol, eventualLinearMmol)
+        val mbNote = " | eventualMB=%.1f (IOB %.1f, COB %.0f)".format(eventualLinearMmol, iobNow, cobG)
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, decision.reason)
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -211,9 +225,9 @@ class HovorkaMpcPlugin @Inject constructor(
             timestamp = now,
             bg = glucoseStatus.glucose,
             targetBG = controlTargetMmol * MGDL_PER_MMOL,
-            // eventualBG = the MPC's forward projection to the horizon under its optimised plan (falls with
-            // IOB, rises with carbs) — NOT the current estimate (which just tracks CGM and never varied).
-            eventualBG = decision.eventualMmol * MGDL_PER_MMOL,
+            // eventualBG = the MPC's forward projection under its optimised plan, FLOORED at the mass-balance
+            // identity (Prototype #1) so it can't report an unphysical post-meal crater.
+            eventualBG = reportedEventualMmol * MGDL_PER_MMOL,
             reason = StringBuilder(reasonStr),
             duration = TBR_DURATION_MIN,
             rate = rateUhr,
@@ -365,5 +379,7 @@ class HovorkaMpcPlugin @Inject constructor(
         const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
         const val HYPO_SUSPEND_MMOL = 3.9        // at/below this RAW CGM value, force a hard 0 U/hr suspend
         const val SMB_ABS_CAP_U = 1.5            // 3b: absolute per-tick microbolus cap (further bounded by maxIOB/maxBolus)
+        const val EVENTUAL_MIN_MMOL = 1.5        // #1: sanity clamp on the mass-balance eventual (bad COB/IOB)
+        const val EVENTUAL_MAX_MMOL = 30.0
     }
 }
