@@ -44,6 +44,9 @@ data class HomeUiState(
     // Supplies strip
     val supplies: List<Supply> = emptyList(),
 
+    // Recent carb entries (last few hours) — shown in the COB-tap "undo carbs" sheet
+    val recentCarbs: List<CarbEntry> = emptyList(),
+
     // Graph range control (hours shown) — mirrors overviewData.rangeToDisplay
     val graphRangeHours: Int = 6,
 
@@ -61,5 +64,15 @@ data class HomeUiState(
         val label: String,
         val value: String,
         val dotColor: Color
+    )
+
+    /** One recent carb record — presentation strings plus the id/timestamp/amount the undo needs. */
+    @Immutable
+    data class CarbEntry(
+        val id: Long,
+        val time: String,      // "10:32"
+        val grams: String,     // "20 g"
+        val timestamp: Long,   // for the removal confirmation + audit log
+        val amount: Int        // grams, for the audit log
     )
 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Calculate
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.WaterDrop
@@ -62,6 +63,7 @@ fun HomeScreen(
 ) {
     val colors = AapsTheme.colors
     var showDetails by remember { mutableStateOf(false) }
+    var showCarbs by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -77,7 +79,7 @@ fun HomeScreen(
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
-                HeroCard(state, actions)
+                HeroCard(state, actions, onCobClick = { showCarbs = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
                 DetailsHandle { showDetails = true }
@@ -86,11 +88,12 @@ fun HomeScreen(
             ActionBar(actions)
         }
         if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
+        if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
     }
 }
 
 @Composable
-private fun HeroCard(state: HomeUiState, actions: HomeActions) {
+private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit) {
     val colors = AapsTheme.colors
     val bgColor = state.bgColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.textPrimary
     AapsCard(shape = AapsShape.hero) {
@@ -144,7 +147,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions) {
             )
             Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = actions.onIob)
-                HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = actions.onCob)
+                HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
                 HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
             }
         }
@@ -274,6 +277,52 @@ private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
 }
 
 @Composable
+private fun CarbsUndoSheet(
+    carbs: List<HomeUiState.CarbEntry>,
+    onDelete: (HomeUiState.CarbEntry) -> Unit,
+    onClose: () -> Unit
+) {
+    val colors = AapsTheme.colors
+    Box(Modifier.fillMaxSize()) {
+        // scrim
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color(0x99060810))
+                .clickable(onClick = onClose)
+        )
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
+            SheetSurface(title = "Recent carbs", onClose = onClose) {
+                if (carbs.isEmpty()) {
+                    Text("No carb entries in the last few hours.", style = AapsType.body, color = colors.textSecondary)
+                } else {
+                    Text("Remove a mistaken or duplicate entry — this asks you to confirm.", style = AapsType.caption, color = colors.textTertiary)
+                    AapsCard(Modifier.fillMaxWidth()) {
+                        Column {
+                            carbs.forEachIndexed { i, c ->
+                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(c.grams, style = AapsType.listTitle, color = colors.textPrimary)
+                                        Text(c.time, style = AapsType.caption, color = colors.textTertiary)
+                                    }
+                                    RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) })
+                                }
+                            }
+                        }
+                    }
+                }
+                Box(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
 private fun DetailRow(label: String, value: String) {
     val colors = AapsTheme.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -294,11 +343,9 @@ private fun ActionBar(actions: HomeActions) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Two primary actions for a closed loop: announce Carbs, or calculate a dose with the Wizard.
+        // A raw manual bolus (type-the-units, no calc) is the rare case — it lives in the "+" menu.
         ActionBarButton("Carbs", Icons.Rounded.Restaurant, actions.onCarbs, Modifier.weight(1f))
-        ActionBarButton(
-            "Bolus", Icons.Rounded.WaterDrop, actions.onBolus, Modifier.weight(1f),
-            container = colors.inRange.copy(alpha = 0.14f), content = colors.inRange
-        )
         ActionBarButton("Wizard", Icons.Rounded.Calculate, actions.onWizard, Modifier.weight(1.4f), emphasized = true)
         MoreMenu(actions)
     }
@@ -311,13 +358,14 @@ private fun MoreMenu(actions: HomeActions) {
     Box {
         RoundIconButton(Icons.Rounded.Add, "More actions", onClick = { expanded = true })
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // Only actions that are NOT primary on the bottom bar (Carbs/Wizard live there).
+            DropdownMenuItem(
+                text = { Text("Bolus (manual)", color = colors.textPrimary) },
+                onClick = { expanded = false; actions.onBolus() }
+            )
             DropdownMenuItem(
                 text = { Text("Temp target", color = colors.textPrimary) },
                 onClick = { expanded = false; actions.onTempTarget() }
-            )
-            DropdownMenuItem(
-                text = { Text("Bolus wizard", color = colors.textPrimary) },
-                onClick = { expanded = false; actions.onWizard() }
             )
             DropdownMenuItem(
                 text = { Text("Calibrate CGM", color = colors.textPrimary) },

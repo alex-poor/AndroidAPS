@@ -29,6 +29,7 @@ import app.aaps.core.data.model.RM
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
+import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.graph.data.GraphViewWithCleanup
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
@@ -193,6 +194,9 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
 
     // ---- Redesigned Home (Compose overlay) ----
     private val homeState = mutableStateOf(HomeUiState())
+    // Recent carb records for the COB-tap undo sheet. Computed off the UI thread in updateIobCob()
+    // (which already reads persistence there) and read synchronously by buildHomeState().
+    private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
     private var homeGraph: GraphView? = null
 
     private var _binding: OverviewFragmentBinding? = null
@@ -465,10 +469,37 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             onProfile = { uiInteraction.runProfileViewerDialog(childFragmentManager, dateUtil.now(), UiInteraction.Mode.RUNNING_PROFILE) },
             onIob = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.iob), iobDialogText()) } },
             onCob = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
+            onDeleteCarb = { entry -> bolusProtected { removeCarbEntry(entry) } },
             onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } },
             // graph range: reuse the existing EventScale path (persists RangeToDisplay + refreshes)
             onRange = { hours -> rxBus.send(EventScale(hours)) },
             onCalibration = { bolusProtected { uiInteraction.runCalibrationDialog(childFragmentManager) } }
+        )
+    }
+
+    /**
+     * Undo a recent carb entry from the COB-tap sheet. Confirms first, then reuses the SAME
+     * `persistenceLayer.invalidateCarbs` path (with UEL audit log) as the legacy Treatments screen —
+     * no bypass. The next iobCob refresh rebuilds the hero + sheet, so the removed entry disappears.
+     */
+    private fun removeCarbEntry(entry: HomeUiState.CarbEntry) {
+        val activity = activity ?: return
+        OKDialog.showConfirmation(
+            activity,
+            rh.gs(app.aaps.core.ui.R.string.removerecord),
+            rh.gs(app.aaps.core.ui.R.string.carbs) + ": " + entry.grams + "\n" +
+                rh.gs(app.aaps.core.ui.R.string.date) + ": " + dateUtil.dateAndTimeString(entry.timestamp),
+            Runnable {
+                disposable += persistenceLayer.invalidateCarbs(
+                    entry.id,
+                    action = Action.CARBS_REMOVED,
+                    source = Sources.Overview,
+                    listValues = listOf(
+                        ValueWithUnit.Timestamp(entry.timestamp),
+                        ValueWithUnit.Gram(entry.amount)
+                    )
+                ).subscribe()
+            }
         )
     }
 
@@ -607,6 +638,7 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             basal = basalText,
             basalSub = basalSubText,
             supplies = supplies,
+            recentCarbs = recentCarbs,
             graphRangeHours = overviewData.rangeToDisplay,
             algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
             sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
@@ -1251,6 +1283,20 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
         val iobDialogText = iobDialogText()
         val displayText = iobCobCalculator.getCobInfo("Overview COB").displayText(rh, decimalFormatter)
         val lastCarbsTime = persistenceLayer.getNewestCarbs()?.timestamp ?: 0L
+        // Recent carb entries for the COB-tap undo sheet (last 6h, newest first). Off the UI thread here.
+        recentCarbs = persistenceLayer.getCarbsFromTimeNotExpanded(dateUtil.now() - 6 * 60 * 60 * 1000L, false)
+            .blockingGet()
+            .filter { it.amount > 0 }
+            .take(10)
+            .map { ca ->
+                HomeUiState.CarbEntry(
+                    id = ca.id,
+                    time = dateUtil.timeString(ca.timestamp),
+                    grams = rh.gs(app.aaps.core.objects.R.string.format_carbs, ca.amount.toInt()),
+                    timestamp = ca.timestamp,
+                    amount = ca.amount.toInt()
+                )
+            }
         runOnUiThread {
             _binding ?: return@runOnUiThread
             binding.infoLayout.iob.text = iobText
@@ -1274,6 +1320,11 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
                 }
             }
             binding.infoLayout.cob.text = cobText
+            // Also refresh the redesigned Compose hero so its IOB/COB reflect a just-entered treatment
+            // within ~1s (this event fires debounced after the iobCob recalc). Previously the hero only
+            // rebuilt in refreshAll() — up to 60s / next CGM tick later — so a fresh carb entry looked
+            // like it hadn't registered, tempting a duplicate entry.
+            buildHomeState()
         }
     }
 
