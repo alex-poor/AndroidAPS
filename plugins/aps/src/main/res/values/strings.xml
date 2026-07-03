@@ -233,4 +233,6 @@
     <string name="hovorka_imm_bank_summary">Run 8 parallel models spanning fast↔slow carb absorption and pick the best-fitting each cycle (CamAPS-style), instead of one fixed model. Experimental — on its own it is about the same as the single model; it mainly prepares for meal detection and microbolus (SMB). Off = single model.</string>
     <string name="hovorka_enable_smb_title">Microbolus (SMB) — EXPERIMENTAL, delivers insulin</string>
     <string name="hovorka_enable_smb_summary">When a temp basal cannot lower a post-meal peak fast enough, deliver a small immediate correction bolus (a fraction of the deficit, bounded by max IOB / max bolus). Requires SMB objective. Highest-risk feature; forced to zero on any hypo. Off = temp-basal only.</string>
+    <string name="hovorka_meal_detection_title">Unannounced-meal detection — EXPERIMENTAL</string>
+    <string name="hovorka_meal_detection_summary">Detect meals you did not enter: when glucose rises faster than known insulin and carbs explain, infer the carbs and react earlier (best paired with SMB). Biased hard against false positives — off around lows and for a while after, and while announced carbs are still active. Off = only announced carbs are used.</string>
 </resources>

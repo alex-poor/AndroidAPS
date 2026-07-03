@@ -118,6 +118,12 @@ class HovorkaMpcPlugin @Inject constructor(
                     summary = R.string.hovorka_enable_smb_summary, title = R.string.hovorka_enable_smb_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaMealDetection,
+                    summary = R.string.hovorka_meal_detection_summary, title = R.string.hovorka_meal_detection_title
+                )
+            )
         }
     }
 
@@ -299,6 +305,14 @@ class HovorkaMpcPlugin @Inject constructor(
         val ekf: GlucoseEstimator =
             if (preferences.get(BooleanKey.HovorkaImmBank)) HovorkaImmBank(model.p, nominalBasalMuMin)
             else HovorkaEkf(model, model.steadyState(nominalBasalMuMin))
+        // Bayesian unannounced-meal detector (off by default): reconstructed each tick from history like the
+        // rest of the estimator (stateless). Infers carbs from the innovation and injects them so SMB/MPC
+        // react; all its output still rides the SMB gates + both hypo suspends. Most useful with SMB enabled.
+        val detector = if (preferences.get(BooleanKey.HovorkaMealDetection))
+            HovorkaMealDetector(preferences.get(DoubleKey.HovorkaBodyWeight)) else null
+        val tz = java.util.TimeZone.getDefault()
+        fun minuteOfDay(ts: Long): Int = (((ts + tz.getOffset(ts)) / 60000L) % 1440L).toInt()
+        var lastCarbMin = -100000
         // index events by minute offset from start
         fun minOf(ts: Long) = ((ts - start) / 60000L).toInt()
         val bolusAt = HashMap<Int, Double>()
@@ -318,13 +332,21 @@ class HovorkaMpcPlugin @Inject constructor(
         val totalMin = ((now - start) / 60000L).toInt()
         var bgIdx = 0
         for (m in 0 until totalMin) {
-            carbAt[m]?.let { ekf.meal(it) }
+            carbAt[m]?.let { ekf.meal(it); lastCarbMin = m }              // announced carbs → suppress detector
             bolusAt[m]?.let { ekf.bolus(it) }                             // U bolus -> SC insulin comp
             val uMuMin = basalUhrAt(start + m * 60000L) * 1000.0 / 60.0
             ekf.predict(uMuMin, 1.0)
             // apply any CGM reading landing in this minute
             while (bgIdx < bg.size && minOf(bg[bgIdx].timestamp) <= m) {
-                ekf.update(bg[bgIdx].value / MGDL_PER_MMOL); bgIdx++
+                val gMeas = bg[bgIdx].value / MGDL_PER_MMOL
+                val priorG = ekf.glucoseMmol()                           // one-step prediction, pre-update
+                ekf.update(gMeas)
+                if (detector != null) {                                  // recover unannounced carbs from the innovation
+                    val announcedActive = (m - lastCarbMin) in 0..90
+                    val dCho = detector.update(gMeas - priorG, gMeas, minuteOfDay(bg[bgIdx].timestamp), announcedActive)
+                    if (dCho > 0.0) ekf.meal(dCho)
+                }
+                bgIdx++
             }
         }
         return ekf
