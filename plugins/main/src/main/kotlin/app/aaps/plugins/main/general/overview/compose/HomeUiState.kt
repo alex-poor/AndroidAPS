@@ -44,6 +44,9 @@ data class HomeUiState(
     // Supplies strip
     val supplies: List<Supply> = emptyList(),
 
+    // Graph range control (hours shown) — mirrors overviewData.rangeToDisplay
+    val graphRangeHours: Int = 6,
+
     // Details sheet
     val algorithmName: String = "",
     val sensitivity: String = "",

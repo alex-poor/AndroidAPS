@@ -465,7 +465,10 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             onProfile = { uiInteraction.runProfileViewerDialog(childFragmentManager, dateUtil.now(), UiInteraction.Mode.RUNNING_PROFILE) },
             onIob = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.iob), iobDialogText()) } },
             onCob = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
-            onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } }
+            onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } },
+            // graph range: reuse the existing EventScale path (persists RangeToDisplay + refreshes)
+            onRange = { hours -> rxBus.send(EventScale(hours)) },
+            onCalibration = { bolusProtected { uiInteraction.runCalibrationDialog(childFragmentManager) } }
         )
     }
 
@@ -604,6 +607,7 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             basal = basalText,
             basalSub = basalSubText,
             supplies = supplies,
+            graphRangeHours = overviewData.rangeToDisplay,
             algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
             sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
             profileName = profileFunction.getProfileName(),

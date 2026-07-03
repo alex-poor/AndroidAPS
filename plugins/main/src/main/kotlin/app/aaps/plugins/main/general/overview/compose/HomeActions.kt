@@ -15,5 +15,7 @@ data class HomeActions(
     val onProfile: () -> Unit = {},
     val onIob: () -> Unit = {},
     val onCob: () -> Unit = {},
-    val onBasal: () -> Unit = {}
+    val onBasal: () -> Unit = {},
+    val onRange: (hours: Int) -> Unit = {},   // graph range segmented control
+    val onCalibration: () -> Unit = {}        // "+" overflow → calibrate CGM
 )
