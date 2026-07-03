@@ -163,12 +163,15 @@ class HovorkaMpcPlugin @Inject constructor(
             return
         }
 
-        // 3b SMB gating (all must hold; else maxSmbU=0 → the MPC emits no bolus): our pref AND AAPS's
-        // isSMBModeEnabled (encodes Objective 8 + SMB-enabled + tempBasalFallback). The per-tick cap is
-        // bounded by the maxIOB HEADROOM (authoritative AAPS IOB) and the pump/pref maxBolus — so an SMB
-        // can never push IOB past maxIOB. HIGHEST-RISK path; off by default (HovorkaEnableSmb=false).
+        // 3b SMB gating. This plugin's SMB is controlled by its OWN pref (HovorkaEnableSmb, default OFF),
+        // which is an explicit opt-in. We deliberately do NOT use constraintsChecker.isSMBModeEnabled() here:
+        // that bundles the Objectives Objective-8 staged-unlock gate (an educational block, not a safety
+        // mechanism) AND oref's own SMB settings (irrelevant to this APS but would otherwise gate it). We
+        // keep the ONE genuine safety constraint from that bundle — closed-loop-allowed (no autonomous bolus
+        // in open loop) — and preserve the real dosing limits below (per-tick maxIOB HEADROOM + pump/pref
+        // maxBolus, so an SMB can never push IOB past maxIOB) and both hypo suspends inside the MPC.
         val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
-            constraintsChecker.isSMBModeEnabled().value()
+            constraintsChecker.isClosedLoopAllowed().value()
         val maxSmbU = if (smbAllowed) {
             val maxIob = constraintsChecker.getMaxIOBAllowed().value()
             val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
