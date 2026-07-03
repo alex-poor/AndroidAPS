@@ -21,6 +21,7 @@ enum class BooleanKey(
     HovorkaTddAdaptation("hovorka_tdd_adaptation", false),
     HovorkaImmBank("hovorka_imm_bank", false),
     HovorkaEnableSmb("hovorka_enable_smb", false),
+    HovorkaMealDetection("hovorka_meal_detection", false),
     GeneralSetupWizardProcessed("startupwizard_processed", false),
     OverviewKeepScreenOn("keep_screen_on", false, calculatedDefaultValue = true),
     OverviewShowTreatmentButton("show_treatment_button", false, defaultedBySM = true, hideParentScreenIfHidden = true),
