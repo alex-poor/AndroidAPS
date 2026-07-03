@@ -227,6 +227,10 @@
     <string name="hovorka_mpc_description">Experimental Hovorka nonlinear model-predictive control (in-silico validated only — not for therapy)</string>
     <string name="hovorka_body_weight_title">Body weight (kg)</string>
     <string name="hovorka_body_weight_summary">Patient body weight — parameterises the Hovorka physiological model</string>
+    <string name="hovorka_carb_absorption_title">Carb absorption time-to-peak (min)</string>
+    <string name="hovorka_carb_absorption_summary">How long your meals take to peak in the blood. The default (40) suits fast carbs; raise it if you eat slowly-absorbing meals (fat/protein) and the loop lets you run high after eating. Higher = the controller expects a longer, later glucose rise.</string>
+    <string name="hovorka_correction_tau_title">High-glucose correction speed (min)</string>
+    <string name="hovorka_correction_tau_summary">How fast the controller aims to bring high glucose back to target. LOWER = more decisive correction when high. 60 (default) is modestly more decisive than the original ~120; 20 is the in-silico optimum (aggressive — validate open-loop first); set 120 for the original gentle behaviour.</string>
     <string name="hovorka_tdd_adaptation_title">Adaptive TDD (learn from recent days)</string>
     <string name="hovorka_tdd_adaptation_summary">Slowly move the operating basal the controller is shaped around, based on the last week of enacted insulin and glucose outcomes (bounded, safety-first). Off = use the profile basal as-is.</string>
     <string name="hovorka_imm_bank_title">IMM Kalman bank (identify carb absorption)</string>

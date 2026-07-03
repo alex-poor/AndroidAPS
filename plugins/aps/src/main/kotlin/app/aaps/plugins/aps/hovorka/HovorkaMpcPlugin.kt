@@ -102,6 +102,18 @@ class HovorkaMpcPlugin @Inject constructor(
                 )
             )
             addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaCarbAbsorptionMin,
+                    dialogMessage = R.string.hovorka_carb_absorption_summary, title = R.string.hovorka_carb_absorption_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaCorrectionTauMin,
+                    dialogMessage = R.string.hovorka_correction_tau_summary, title = R.string.hovorka_correction_tau_title
+                )
+            )
+            addPreference(
                 AdaptiveSwitchPreference(
                     ctx = context, booleanKey = BooleanKey.HovorkaTddAdaptation,
                     summary = R.string.hovorka_tdd_adaptation_summary, title = R.string.hovorka_tdd_adaptation_title
@@ -148,7 +160,10 @@ class HovorkaMpcPlugin @Inject constructor(
         // their basal/profile-target — instead of population weight-only params. Cached (calibration heavy).
         val isfMgdl = profile.getProfileIsfMgdl()
         val icGPerU = profile.getIc()
-        val model = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol)
+        // carb absorption time-to-peak (min) is a physiological property the profile ISF/IC do NOT capture;
+        // default 40 (fast), raise for slow (fat/protein) meals so the controller expects a longer rise.
+        val carbAbsorptionMin = preferences.get(DoubleKey.HovorkaCarbAbsorptionMin)
+        val model = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol, carbAbsorptionMin)
         val maxBasalUhr = constraintsChecker.getMaxBasalAllowed(profile).value()
         val maxBasalMuMin = maxBasalUhr * 1000.0 / 60.0
         // 2d: adapt the OPERATING basal (the MPC's nominal / floor centre) from recent daily outcomes if
@@ -186,6 +201,7 @@ class HovorkaMpcPlugin @Inject constructor(
         val mpc = HovorkaMpc(
             rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin,
+            refTauFastMin = preferences.get(DoubleKey.HovorkaCorrectionTauMin),
             enableSmb = smbAllowed, maxSmbU = maxSmbU
         )
         val decision = mpc.decide(ekf.x)
@@ -248,12 +264,12 @@ class HovorkaMpcPlugin @Inject constructor(
     private var cachedModel: HovorkaModel? = null
     private var cachedKey: String = ""
 
-    private fun personalizedModel(w: Double, isfMgdl: Double, icGPerU: Double, basalUhr: Double, targetMmol: Double): HovorkaModel {
-        val key = "%.1f/%.1f/%.2f/%.4f/%.2f".format(w, isfMgdl, icGPerU, basalUhr, targetMmol)
+    private fun personalizedModel(w: Double, isfMgdl: Double, icGPerU: Double, basalUhr: Double, targetMmol: Double, carbAbsorptionMin: Double): HovorkaModel {
+        val key = "%.1f/%.1f/%.2f/%.4f/%.2f/%.1f".format(w, isfMgdl, icGPerU, basalUhr, targetMmol, carbAbsorptionMin)
         if (key != cachedKey || cachedModel == null) {
-            cachedModel = HovorkaModel(HovorkaParams.personalize(w, isfMgdl, icGPerU, basalUhr, targetMmol))
+            cachedModel = HovorkaModel(HovorkaParams.personalize(w, isfMgdl, icGPerU, basalUhr, targetMmol, tMaxGmin = carbAbsorptionMin))
             cachedKey = key
-            aapsLogger.debug(LTag.APS, "HovorkaMPC personalised: W=$w ISF=$isfMgdl IC=$icGPerU basal=$basalUhr target=$targetMmol")
+            aapsLogger.debug(LTag.APS, "HovorkaMPC personalised: W=$w ISF=$isfMgdl IC=$icGPerU basal=$basalUhr target=$targetMmol tMaxG=$carbAbsorptionMin")
         }
         return cachedModel!!
     }
