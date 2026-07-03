@@ -4,10 +4,21 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.plugin.PluginType
+import app.aaps.core.interfaces.aps.Loop
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.configuration.ConfigBuilder
 import app.aaps.core.interfaces.plugin.ActivePlugin
+import app.aaps.core.interfaces.plugin.PluginBase
+import app.aaps.core.interfaces.utils.Translator
+import app.aaps.plugins.configuration.configBuilder.compose.ConfigScreen
+import app.aaps.plugins.configuration.configBuilder.compose.ConfigSummary
+import app.aaps.plugins.configuration.configBuilder.compose.ConfigToggle
+import app.aaps.plugins.configuration.configBuilder.compose.ConfigUiState
 import app.aaps.core.interfaces.protection.ProtectionCheck
 import app.aaps.core.interfaces.protection.ProtectionCheck.Protection.PREFERENCES
 import app.aaps.core.interfaces.rx.AapsSchedulers
@@ -33,9 +44,14 @@ class ConfigBuilderFragment : DaggerFragment() {
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var config: Config
     @Inject lateinit var uiInteraction: UiInteraction
+    @Inject lateinit var loop: Loop
+    @Inject lateinit var translator: Translator
 
     private var disposable: CompositeDisposable = CompositeDisposable()
     private val pluginViewHolders = ArrayList<ConfigBuilder.PluginViewHolderInterface>()
+    // ---- Redesigned Config Builder (Compose overlay) ----
+    private val configState = mutableStateOf(ConfigUiState())
+    private var generalPlugins: List<PluginBase> = emptyList()
     private var inMenu = false
     private var queryingProtection = false
     private var _binding: ConfigbuilderFragmentBinding? = null
@@ -54,6 +70,30 @@ class ConfigBuilderFragment : DaggerFragment() {
         inMenu = parentClass == uiInteraction.singleFragmentActivity
         updateProtectedUi()
         binding.unlock.setOnClickListener { queryProtection() }
+
+        binding.composeConfig.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        binding.composeConfig.setContent {
+            AapsTheme { ConfigScreen(state = configState.value, onToggle = ::onPluginToggle) }
+        }
+        buildConfigState()
+    }
+
+    private fun buildConfigState() {
+        val summary = buildList {
+            (activePlugin.activeBgSource as? PluginBase)?.let { add(ConfigSummary("CGM", it.name, true)) }
+            (activePlugin.activePump as? PluginBase)?.let { add(ConfigSummary("Pump", it.name, it.isEnabled())) }
+            if (config.APS) (activePlugin.activeAPS as? PluginBase)?.let { add(ConfigSummary("Algorithm", it.name, it.isEnabled())) }
+            add(ConfigSummary("Loop", translator.translate(loop.runningMode), loop.runningMode.isClosedLoopOrLgs()))
+        }
+        generalPlugins = activePlugin.getSpecificPluginsVisibleInList(PluginType.GENERAL)
+        val plugins = generalPlugins.mapIndexed { i, p -> ConfigToggle(i, p.name, "", p.isEnabled(PluginType.GENERAL)) }
+        configState.value = ConfigUiState(summary, plugins)
+    }
+
+    private fun onPluginToggle(index: Int, enabled: Boolean) {
+        val plugin = generalPlugins.getOrNull(index) ?: return
+        configBuilder.performPluginSwitch(plugin, enabled, PluginType.GENERAL)
+        buildConfigState()
     }
 
     @Synchronized
@@ -65,8 +105,10 @@ class ConfigBuilderFragment : DaggerFragment() {
             .observeOn(aapsSchedulers.main)
             .subscribe({
                            for (pluginViewHolder in pluginViewHolders) pluginViewHolder.update(this.requireActivity())
+                           if (_binding != null) buildConfigState()
                        }, fabricPrivacy::logException)
         updateGUI()
+        if (_binding != null) buildConfigState()
     }
 
     @Synchronized
