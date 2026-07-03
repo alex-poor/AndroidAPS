@@ -134,12 +134,23 @@ class HovorkaMpc(
             }
         }
         val smbNote = if (smbU > 0.0) " | SMB %.2fU".format(smbU) else ""
+        // eventualBG: glucose at the END of the horizon under the OPTIMISED plan (the whole basal sequence)
+        // plus any SMB — a genuine forward projection, NOT the current estimate. It drops below current when
+        // IOB dominates, and rises above it with carbs on board (announced or meal-detected). This is the
+        // MPC's own prediction of where its plan lands glucose.
+        var es = if (smbU > 0.0) stateEstimate.copyOf().also { it[5] += smbU * 1000.0 } else stateEstimate.copyOf()
+        for (i in 0 until steps) {
+            val u = seq[min(seq.size - 1, i / segLen)]
+            repeat(stepMin) { es = model.step(es, u, 1.0) }
+        }
+        val eventualMmol = model.glucoseMmol(es)
+
         val seqNote = seq.joinToString(",") { "%.2f".format(it * 60 / 1000) }
-        val reason = "G=%.1f→target %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f) | seq[%s]%s%s".format(
-            g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)],
+        val reason = "G=%.1f→target %.1f | eventual %.1f | ref[+30m]=%.1f | u*=%.2f→%.2f U/hr (nominal %.2f) | seq[%s]%s%s".format(
+            g0, targetMmol, eventualMmol, ref[min(ref.size - 1, 30 / stepMin)],
             bestU * 60 / 1000, finalU * 60 / 1000, nominalBasalMuPerMin * 60 / 1000, seqNote,
             if (hypoSuspended) " | HYPO-SUSPEND G≤%.1f".format(hypoSuspendMmol) else "", smbNote)
-        return Decision(finalU, finalU * 60.0 / 1000.0, reason, g0, ref, smbU)
+        return Decision(finalU, finalU * 60.0 / 1000.0, reason, g0, ref, smbU, eventualMmol)
     }
 
     /** Predicted glucose (mmol/L) [minutes] ahead at constant basal u, no bolus (SMB trigger test). */
@@ -240,6 +251,7 @@ class HovorkaMpc(
         val reason: String,
         val glucoseMmol: Double,
         val reference: DoubleArray,
-        val smbU: Double = 0.0            // 3b: immediate microbolus (U) to deliver alongside the TBR
+        val smbU: Double = 0.0,           // 3b: immediate microbolus (U) to deliver alongside the TBR
+        val eventualMmol: Double = 0.0    // predicted glucose at horizon-end under the optimised plan (forward projection)
     )
 }
