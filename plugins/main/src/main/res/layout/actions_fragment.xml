@@ -1,10 +1,18 @@
-<androidx.core.widget.NestedScrollView
+<!--
+  ~ UI redesign: legacy actions kept intact inside this NestedScrollView (bindings + updateGui still
+  ~ run); the new Compose Actions screen is an opaque overlay (compose_actions) drawn on top.
+-->
+<FrameLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".general.actions.ActionsFragment">
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
 
     <LinearLayout
         android:id="@+id/buttons_layout"
@@ -392,4 +400,11 @@
 
     </LinearLayout>
 
-</androidx.core.widget.NestedScrollView>
+    </androidx.core.widget.NestedScrollView>
+
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/compose_actions"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>

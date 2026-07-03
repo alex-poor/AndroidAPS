@@ -6,8 +6,18 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.RM
+import app.aaps.plugins.main.general.actions.compose.ActionId
+import app.aaps.plugins.main.general.actions.compose.ActionsScreen
+import app.aaps.plugins.main.general.actions.compose.ActionsUiState
+import app.aaps.plugins.main.general.actions.compose.EventAction
+import app.aaps.plugins.main.general.actions.compose.TherapyAction
+import app.aaps.plugins.main.general.actions.compose.ToolAction
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
@@ -81,6 +91,9 @@ class ActionsFragment : DaggerFragment() {
 
     private val pumpCustomActions = HashMap<String, CustomAction>()
     private val pumpCustomButtons = ArrayList<SingleClickButton>()
+
+    // ---- Redesigned Actions (Compose overlay) ----
+    private val actionsState = mutableStateOf(ActionsUiState())
 
     private var _binding: ActionsFragmentBinding? = null
 
@@ -191,6 +204,97 @@ class ActionsFragment : DaggerFragment() {
         }
 
         preferences.put(BooleanNonKey.ObjectivesActionsUsed, true)
+
+        // ---- Redesigned Actions (Compose overlay on top of the legacy layout) ----
+        binding.composeActions.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        binding.composeActions.setContent {
+            AapsTheme { ActionsScreen(state = actionsState.value, onAction = ::onAction) }
+        }
+    }
+
+    private fun buildActionsState(): ActionsUiState {
+        val pump = activePlugin.activePump
+        val profile = profileFunction.getProfile()
+        val now = dateUtil.now()
+        val notClient = !config.AAPSCLIENT
+        val notDisconnected = loop.runningMode != RM.Mode.DISCONNECTED_PUMP
+
+        val therapy = buildList {
+            if (profile != null && loop.runningMode.isLoopRunning())
+                add(TherapyAction(ActionId.TEMP_TARGET, "Temp Target"))
+            if (pump.pumpDescription.isTempBasalCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && notClient) {
+                val active = processedTbrEbData.getTempBasalIncludingConvertedExtended(now)
+                if (active != null) add(TherapyAction(ActionId.TEMP_BASAL_CANCEL, "Temp Basal", active.toStringShort(rh), cancelable = true))
+                else add(TherapyAction(ActionId.TEMP_BASAL, "Temp Basal"))
+            }
+            if (pump.pumpDescription.isExtendedBolusCapable && pump.isInitialized() && !pump.isSuspended() && notDisconnected && !pump.isFakingTempsByExtendedBoluses && notClient) {
+                val eb = persistenceLayer.getExtendedBolusActiveAt(now)
+                if (eb != null) add(TherapyAction(ActionId.EXTENDED_BOLUS_CANCEL, "Extended Bolus", eb.toStringMedium(dateUtil, rh), cancelable = true))
+                else add(TherapyAction(ActionId.EXTENDED_BOLUS, "Extended Bolus"))
+            }
+            if (activePlugin.activeProfileSource.profile != null && pump.pumpDescription.isSetBasalProfileCapable && pump.isInitialized() && notDisconnected && !pump.isSuspended())
+                add(TherapyAction(ActionId.PROFILE_SWITCH, "Profile Switch", profileFunction.getProfileName()))
+        }
+
+        val events = buildList {
+            if (pump.pumpDescription.isRefillingCapable && pump.isInitialized()) add(EventAction(ActionId.FILL, "Prime/Fill"))
+            add(EventAction(ActionId.SENSOR_INSERT, "Sensor"))
+            if (pump.pumpDescription.isBatteryReplaceable || pump.isBatteryChangeLoggingEnabled()) add(EventAction(ActionId.BATTERY_CHANGE, "Battery"))
+            add(EventAction(ActionId.BG_CHECK, "BG Check"))
+            add(EventAction(ActionId.NOTE, "Note"))
+            add(EventAction(ActionId.EXERCISE, "Exercise"))
+            add(EventAction(ActionId.ANNOUNCEMENT, "Announce"))
+            add(EventAction(ActionId.QUESTION, "Question"))
+        }
+
+        val tools = buildList {
+            add(ToolAction(ActionId.SITE_ROTATION, "Site rotation"))
+            if (profile != null) add(ToolAction(ActionId.HISTORY, "History browser"))
+            if (pump.pumpDescription.supportsTDDs) add(ToolAction(ActionId.TDD, "Total daily dose"))
+        }
+
+        return ActionsUiState(therapy, events, tools)
+    }
+
+    /** Dispatch a Compose Action to the SAME protected dialog / careportal / command-queue path. */
+    private fun onAction(id: ActionId) {
+        val activity = activity ?: return
+        fun bolusProtected(run: () -> Unit) = protectionCheck.queryProtection(activity, ProtectionCheck.Protection.BOLUS, UIRunnable { run() })
+        fun care(type: UiInteraction.EventType, titleRes: Int) = uiInteraction.runCareDialog(childFragmentManager, type, titleRes)
+        when (id) {
+            ActionId.TEMP_TARGET   -> bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) }
+            ActionId.TEMP_BASAL    -> bolusProtected { uiInteraction.runTempBasalDialog(childFragmentManager) }
+            ActionId.TEMP_BASAL_CANCEL -> if (processedTbrEbData.getTempBasalIncludingConvertedExtended(dateUtil.now()) != null) {
+                uel.log(Action.CANCEL_TEMP_BASAL, Sources.Actions)
+                commandQueue.cancelTempBasal(enforceNew = true, callback = object : Callback() {
+                    override fun run() { if (!result.success) uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.temp_basal_delivery_error), app.aaps.core.ui.R.raw.boluserror) }
+                })
+            }
+
+            ActionId.EXTENDED_BOLUS -> bolusProtected {
+                OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.extended_bolus), rh.gs(R.string.ebstopsloop), { uiInteraction.runExtendedBolusDialog(childFragmentManager) }, null)
+            }
+
+            ActionId.EXTENDED_BOLUS_CANCEL -> if (persistenceLayer.getExtendedBolusActiveAt(dateUtil.now()) != null) {
+                uel.log(Action.CANCEL_EXTENDED_BOLUS, Sources.Actions)
+                commandQueue.cancelExtended(object : Callback() {
+                    override fun run() { if (!result.success) uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.extendedbolusdeliveryerror), app.aaps.core.ui.R.raw.boluserror) }
+                })
+            }
+
+            ActionId.PROFILE_SWITCH -> bolusProtected { uiInteraction.runProfileSwitchDialog(childFragmentManager) }
+            ActionId.FILL          -> bolusProtected { uiInteraction.runFillDialog(childFragmentManager) }
+            ActionId.SENSOR_INSERT -> care(UiInteraction.EventType.SENSOR_INSERT, app.aaps.core.ui.R.string.cgm_sensor_insert)
+            ActionId.BATTERY_CHANGE -> care(UiInteraction.EventType.BATTERY_CHANGE, app.aaps.core.ui.R.string.pump_battery_change)
+            ActionId.BG_CHECK      -> care(UiInteraction.EventType.BGCHECK, app.aaps.core.ui.R.string.careportal_bgcheck)
+            ActionId.NOTE          -> care(UiInteraction.EventType.NOTE, app.aaps.core.ui.R.string.careportal_note)
+            ActionId.EXERCISE      -> care(UiInteraction.EventType.EXERCISE, app.aaps.core.ui.R.string.careportal_exercise)
+            ActionId.ANNOUNCEMENT  -> care(UiInteraction.EventType.ANNOUNCEMENT, app.aaps.core.ui.R.string.careportal_announcement)
+            ActionId.QUESTION      -> care(UiInteraction.EventType.QUESTION, app.aaps.core.ui.R.string.careportal_question)
+            ActionId.SITE_ROTATION -> uiInteraction.runSiteRotationDialog(childFragmentManager)
+            ActionId.HISTORY       -> startActivity(Intent(context, uiInteraction.historyBrowseActivity))
+            ActionId.TDD           -> startActivity(Intent(context, uiInteraction.tddStatsActivity))
+        }
     }
 
     @Synchronized
@@ -303,6 +407,7 @@ class ActionsFragment : DaggerFragment() {
         }
         checkPumpCustomActions()
 
+        actionsState.value = buildActionsState()
     }
 
     private fun checkPumpCustomActions() {
