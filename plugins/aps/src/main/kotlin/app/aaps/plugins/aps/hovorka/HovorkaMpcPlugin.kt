@@ -242,19 +242,22 @@ class HovorkaMpcPlugin @Inject constructor(
         // 3b: the SMB inherits BOTH hypo backstops — the est.G suspend inside decide() (already zeroes
         // decision.smbU) AND this raw-CGM suspend. Round to 2 dp; a dropped bolus fails closed downstream.
         val smbU = if (rawHypoSuspend) 0.0 else round(decision.smbU * 100.0) / 100.0
-        // Prototype #1: mass-balance FLOOR on the reported projection. The nonlinear model rollout
-        // (decision.eventualMmol) can crater far below what insulin/carb mass balance allows — missing
-        // counter-regulation and renal loss at the post-meal peak make a carb-MATCHED bolus mis-project a
-        // deep hypo (observed eventualBG 1.2 on a normal dinner; verified across all calibrations in
-        // hovorka-mpc/). Floor the reported value at the standard bolus-wizard identity
+        // Report the multi-hour eventual from the IOB/COB mass-balance identity (bolus-wizard):
         //   eventual = currentBG − IOB·ISF + COB·(ISF/IC)
-        // which reads ~current for a matched dose. This is DISPLAY + safety-reporting only — the TBR control
-        // law is unchanged (TBR-only, near-minimal already, so the crater's basal effect was minor and safe).
+        // and NOT the Hovorka rollout (decision.eventualMmol). As a standalone multi-hour prediction the
+        // nonlinear rollout is unreliable in BOTH directions: it craters far too LOW after a carb-matched
+        // meal bolus (the original eventualBG=1.2 bug — no counter-regulation, renal loss at the peak), and
+        // it over-recovers far too HIGH during a genuine fall (it assumes EGP pulls glucose back to target
+        // once basal suspends — it masked a real hypo as "eventual 5.7" at BG 3.1 with 1.0U IOB, 2026-07-05).
+        // Mass balance is correct in both regimes, so neither max() (hides real lows) nor min() (reinstates
+        // the crater) works — report MB directly. The model still drives ALL dosing (basal + SMB); this is
+        // the DISPLAY / predictive-alarm value only. AAPS's own predictive-low alerts key off eventualBG, so
+        // an honest MB here restores that warning. The model's rollout stays visible in the reason string.
         val isfMmol = isfMgdl / MGDL_PER_MMOL
         val cobG = iobCobCalculator.getCobInfo("HovorkaEventual").displayCob ?: 0.0
         val carbRiseMmol = if (icGPerU > 0.0) cobG * isfMmol / icGPerU else 0.0
         val eventualLinearMmol = (rawCgmMmol - iobNow * isfMmol + carbRiseMmol).coerceIn(EVENTUAL_MIN_MMOL, EVENTUAL_MAX_MMOL)
-        val reportedEventualMmol = max(decision.eventualMmol, eventualLinearMmol)
+        val reportedEventualMmol = eventualLinearMmol
         val mbNote = " | eventualMB=%.1f (IOB %.1f, COB %.0f)".format(eventualLinearMmol, iobNow, cobG)
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
@@ -269,8 +272,8 @@ class HovorkaMpcPlugin @Inject constructor(
             timestamp = now,
             bg = glucoseStatus.glucose,
             targetBG = controlTargetMmol * MGDL_PER_MMOL,
-            // eventualBG = the MPC's forward projection under its optimised plan, FLOORED at the mass-balance
-            // identity (Prototype #1) so it can't report an unphysical post-meal crater.
+            // eventualBG = IOB/COB mass-balance projection (see above) — honest in both the post-meal-crater
+            // and the genuine-fall cases, unlike the model rollout. Drives display + AAPS predictive alarms.
             eventualBG = reportedEventualMmol * MGDL_PER_MMOL,
             reason = StringBuilder(reasonStr),
             duration = TBR_DURATION_MIN,
