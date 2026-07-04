@@ -2,11 +2,15 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.TE
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
@@ -14,6 +18,7 @@ import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -25,24 +30,30 @@ import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DecimalFormatter
-import app.aaps.core.interfaces.utils.SafeParse
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogTreatmentBinding
+import app.aaps.ui.dialogs.compose.TreatmentSheet
+import app.aaps.ui.dialogs.compose.TreatmentSheetState
 import com.google.common.base.Joiner
+import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
-import java.text.DecimalFormat
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
 
-class TreatmentDialog : DialogFragmentWithDate() {
+/**
+ * Redesigned Treatment (Bolus + Carbs) dialog. UI is Compose ([TreatmentSheet]); [submit] runs the
+ * SAME constraint + `OKDialog` confirmation + record / `commandQueue.bolus` path as before. Only
+ * insulin + carbs are used (the legacy dialog ignored event-time/notes); follower mode records only.
+ */
+class TreatmentDialog : DaggerDialogFragment() {
 
+    @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var activePlugin: ActivePlugin
@@ -56,101 +67,52 @@ class TreatmentDialog : DialogFragmentWithDate() {
     @Inject lateinit var decimalFormatter: DecimalFormatter
 
     private var queryingProtection = false
-    private var _binding: DialogTreatmentBinding? = null
-
     private val disposable = CompositeDisposable()
 
-    // This property is only valid between onCreateView and onDestroyView.
-    private val binding get() = _binding!!
-
-    private val textWatcher: TextWatcher = object : TextWatcher {
-        override fun afterTextChanged(s: Editable) {}
-        override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
-        override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
-            validateInputs()
-        }
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
-    private fun validateInputs() {
-        val maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble()
-        val maxInsulin = constraintChecker.getMaxBolusAllowed().value()
-        if (SafeParse.stringToInt(binding.carbs.text) > maxCarbs) {
-            binding.carbs.value = 0.0
-            ToastUtils.warnToast(context, R.string.carbs_constraint_applied)
-        }
-        if (SafeParse.stringToDouble(binding.insulin.text) > maxInsulin) {
-            binding.insulin.value = 0.0
-            ToastUtils.warnToast(context, R.string.bolus_constraint_applied)
-        }
-    }
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
 
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("carbs", binding.carbs.value)
-        savedInstanceState.putDouble("insulin", binding.insulin.value)
-    }
-
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        onCreateViewGeneral()
-        _binding = DialogTreatmentBinding.inflate(inflater, container, false)
-        return binding.root
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        if (config.AAPSCLIENT) {
-            binding.recordOnly.isChecked = true
-            binding.recordOnly.isEnabled = false
-        }
-        val maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble()
-        val maxInsulin = constraintChecker.getMaxBolusAllowed().value()
-        val pumpDescription = activePlugin.activePump.pumpDescription
-        binding.carbs.setParams(
-            savedInstanceState?.getDouble("carbs")
-                ?: 0.0, 0.0, maxCarbs, 1.0, DecimalFormat("0"), false, binding.okcancel.ok, textWatcher
+        val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
+        val state = TreatmentSheetState(
+            maxInsulin = constraintChecker.getMaxBolusAllowed().value(),
+            insulinStep = bolusStep,
+            insulinDecimals = if (bolusStep < 0.1) 2 else 1,
+            maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble(),
+            recordOnly = config.AAPSCLIENT
         )
-        binding.insulin.setParams(
-            savedInstanceState?.getDouble("insulin")
-                ?: 0.0,
-            0.0,
-            maxInsulin,
-            pumpDescription.bolusStep,
-            decimalFormatter.pumpSupportedBolusFormat(activePlugin.activePump.pumpDescription.bolusStep),
-            false,
-            binding.okcancel.ok,
-            textWatcher
-        )
-        binding.recordOnlyLayout.visibility = View.GONE
-        binding.insulinLabel.labelFor = binding.insulin.editTextId
-        binding.carbsLabel.labelFor = binding.carbs.editTextId
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { TreatmentSheet(state = state, onDeliver = ::submit, onClose = { dismiss() }) } }
+        }
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        _binding = null
+        disposable.clear()
     }
 
-    override fun submit(): Boolean {
-        if (_binding == null) return false
+    private fun submit(insulin: Double, carbs: Double) {
         val pumpDescription = activePlugin.activePump.pumpDescription
-        val insulin = SafeParse.stringToDouble(binding.insulin.text)
-        val carbs = SafeParse.stringToInt(binding.carbs.text)
-        val recordOnlyChecked = binding.recordOnly.isChecked
+        val carbsInt = carbs.toInt()
+        val recordOnlyChecked = config.AAPSCLIENT
         val actions: LinkedList<String?> = LinkedList()
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
-        val carbsAfterConstraints = constraintChecker.applyCarbsConstraints(ConstraintObject(carbs, aapsLogger)).value()
+        val carbsAfterConstraints = constraintChecker.applyCarbsConstraints(ConstraintObject(carbsInt, aapsLogger)).value()
 
         if (insulinAfterConstraints > 0) {
             actions.add(
-                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolus(insulinAfterConstraints, activePlugin.activePump.pumpDescription.bolusStep)
-                    .formatColor(
-                        context, rh,
-                        app.aaps.core.ui.R.attr.bolusColor
-                    )
+                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolus(insulinAfterConstraints, pumpDescription.bolusStep)
+                    .formatColor(context, rh, app.aaps.core.ui.R.attr.bolusColor)
             )
             if (recordOnlyChecked)
                 actions.add(rh.gs(app.aaps.core.ui.R.string.bolus_recorded_only).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
@@ -165,7 +127,7 @@ class TreatmentDialog : DialogFragmentWithDate() {
                     context, rh, app.aaps.core.ui.R.attr.carbsColor
                 )
             )
-            if (carbsAfterConstraints != carbs)
+            if (carbsAfterConstraints != carbsInt)
                 actions.add(rh.gs(R.string.carbs_constraint_applied).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
         }
         if (insulinAfterConstraints > 0 || carbsAfterConstraints > 0) {
@@ -229,7 +191,7 @@ class TreatmentDialog : DialogFragmentWithDate() {
             activity?.let { activity ->
                 OKDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.overview_treatment_label), rh.gs(app.aaps.core.ui.R.string.no_action_selected))
             }
-        return true
+        dismiss()
     }
 
     override fun onResume() {

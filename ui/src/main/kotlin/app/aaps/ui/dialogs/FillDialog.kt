@@ -1,10 +1,17 @@
 package app.aaps.ui.dialogs
 
+import android.content.Context
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentManager
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -13,6 +20,7 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
+import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -22,28 +30,39 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
-import app.aaps.core.interfaces.utils.SafeParse
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogFillBinding
+import app.aaps.ui.dialogs.compose.FillInputs
+import app.aaps.ui.dialogs.compose.FillSheet
+import app.aaps.ui.dialogs.compose.FillSheetState
 import com.google.common.base.Joiner
+import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
 
-class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
+/**
+ * Redesigned Prime / Fill dialog. UI is Compose ([FillSheet]); [submit] runs the SAME constraint +
+ * `OKDialog` confirmation + prime-`commandQueue.bolus` + site/insulin-change persistence + site-rotation
+ * path as the legacy dialog. Event time is `dateUtil.now()` (the legacy sheet had no time offset input).
+ */
+class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
 
+    @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
     @Inject lateinit var rh: ResourceHelper
+    @Inject lateinit var ctx: Context
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var uel: UserEntryLogger
@@ -51,73 +70,54 @@ class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var decimalFormatter: DecimalFormatter
+    @Inject lateinit var preferences: Preferences
+    @Inject lateinit var dateUtil: DateUtil
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
-    private var _binding: DialogFillBinding? = null
 
-    // This property is only valid between onCreateView and onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("fill_insulin_amount", binding.fillInsulinAmount.value)
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        onCreateViewGeneral()
-        _binding = DialogFillBinding.inflate(inflater, container, false)
-        return binding.root
-    }
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        val maxInsulin = constraintChecker.getMaxBolusAllowed().value()
         val bolusStep = activePlugin.activePump.pumpDescription.bolusStep
-        binding.fillInsulinAmount.setParams(
-            savedInstanceState?.getDouble("fill_insulin_amount")
-                ?: 0.0, 0.0, maxInsulin, bolusStep, decimalFormatter.pumpSupportedBolusFormat(activePlugin.activePump.pumpDescription.bolusStep), true, binding.okcancel.ok
+        val state = FillSheetState(
+            maxInsulin = constraintChecker.getMaxBolusAllowed().value(),
+            insulinStep = bolusStep,
+            insulinDecimals = if (bolusStep < 0.1) 2 else 1,
+            presets = listOf(
+                preferences.get(DoubleKey.ActionsFillButton1),
+                preferences.get(DoubleKey.ActionsFillButton2),
+                preferences.get(DoubleKey.ActionsFillButton3)
+            ).filter { it > 0 },
+            showNotes = preferences.get(BooleanKey.OverviewShowNotesInDialogs)
         )
-        val amount1 = preferences.get(DoubleKey.ActionsFillButton1)
-        if (amount1 > 0) {
-            binding.fillPresetButton1.visibility = View.VISIBLE
-            binding.fillPresetButton1.text = decimalFormatter.toPumpSupportedBolus(amount1, activePlugin.activePump.pumpDescription.bolusStep) // + "U");
-            binding.fillPresetButton1.setOnClickListener { binding.fillInsulinAmount.value = amount1 }
-        } else {
-            binding.fillPresetButton1.visibility = View.GONE
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { FillSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) } }
         }
-        val amount2 = preferences.get(DoubleKey.ActionsFillButton2)
-        if (amount2 > 0) {
-            binding.fillPresetButton2.visibility = View.VISIBLE
-            binding.fillPresetButton2.text = decimalFormatter.toPumpSupportedBolus(amount2, activePlugin.activePump.pumpDescription.bolusStep) // + "U");
-            binding.fillPresetButton2.setOnClickListener { binding.fillInsulinAmount.value = amount2 }
-        } else {
-            binding.fillPresetButton2.visibility = View.GONE
-        }
-        val amount3 = preferences.get(DoubleKey.ActionsFillButton3)
-        if (amount3 > 0) {
-            binding.fillPresetButton3.visibility = View.VISIBLE
-            binding.fillPresetButton3.text = decimalFormatter.toPumpSupportedBolus(amount3, activePlugin.activePump.pumpDescription.bolusStep) // + "U");
-            binding.fillPresetButton3.setOnClickListener { binding.fillInsulinAmount.value = amount3 }
-        } else {
-            binding.fillPresetButton3.visibility = View.GONE
-        }
-        binding.fillLabel.labelFor = binding.fillInsulinAmount.editTextId
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        _binding = null
+        disposable.clear()
     }
 
-    override fun submit(): Boolean {
-        if (_binding == null) return false
-        val insulin = SafeParse.stringToDouble(binding.fillInsulinAmount.text)
+    private fun submit(inputs: FillInputs) {
+        val insulin = inputs.insulin
         val actions: LinkedList<String?> = LinkedList()
+
+        var eventTime = dateUtil.now()
+        eventTime -= eventTime % 1000
 
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
         if (insulinAfterConstraints > 0) {
@@ -132,21 +132,17 @@ class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
                     rh.gs(app.aaps.core.ui.R.string.bolus_constraint_applied_warn, insulin, insulinAfterConstraints).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor)
                 )
         }
-        val siteChange = binding.fillCatheterChange.isChecked
+        val siteChange = inputs.siteChange
         if (siteChange)
             actions.add(rh.gs(R.string.record_pump_site_change).formatColor(context, rh, app.aaps.core.ui.R.attr.actionsConfirmColor))
-        val insulinChange = binding.fillCartridgeChange.isChecked
+        val insulinChange = inputs.insulinChange
         if (insulinChange)
             actions.add(rh.gs(R.string.record_insulin_cartridge_change).formatColor(context, rh, app.aaps.core.ui.R.attr.actionsConfirmColor))
-        val notes: String = binding.notesLayout.notes.text.toString()
+        val notes: String = inputs.notes
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
-        eventTime -= eventTime % 1000
 
-        if (eventTimeChanged)
-            actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
-
-        if (insulinAfterConstraints > 0 || binding.fillCatheterChange.isChecked || binding.fillCartridgeChange.isChecked) {
+        if (insulinAfterConstraints > 0 || siteChange || insulinChange) {
             activity?.let { activity ->
                 OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.prime_fill), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
                     if (insulinAfterConstraints > 0) {
@@ -168,9 +164,8 @@ class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
                             action = Action.SITE_CHANGE, source = Sources.FillDialog,
                             note = notes,
                             listValues = listOf(
-                                ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged },
                                 ValueWithUnit.TEType(TE.Type.CANNULA_CHANGE)
-                            ).filterNotNull()
+                            )
                         ).subscribe()
                         if (preferences.get(BooleanKey.SiteRotationManagePump)) {
                             SiteRotationDialog().also { srd ->
@@ -195,9 +190,8 @@ class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
                             action = Action.RESERVOIR_CHANGE, source = Sources.FillDialog,
                             note = notes,
                             listValues = listOf(
-                                ValueWithUnit.Timestamp(eventTime).takeIf { eventTimeChanged },
                                 ValueWithUnit.TEType(TE.Type.INSULIN_CHANGE)
-                            ).filterNotNull()
+                            )
                         ).subscribe()
                 }, null)
             }
@@ -207,7 +201,6 @@ class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
             }
         }
         dismiss()
-        return true
     }
 
     private fun requestPrimeBolus(insulin: Double, notes: String) {
@@ -233,7 +226,7 @@ class FillDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
                 val cancelFail = {
                     queryingProtection = false
                     aapsLogger.debug(LTag.APS, "Dialog canceled on resume protection: ${this.javaClass.simpleName}")
-                    ToastUtils.warnToast(activity, R.string.dialog_canceled)
+                    ToastUtils.warnToast(ctx, R.string.dialog_canceled)
                     dismiss()
                 }
                 protectionCheck.queryProtection(activity, ProtectionCheck.Protection.BOLUS, { queryingProtection = false }, cancelFail, cancelFail)

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,11 +19,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.Restaurant
-import androidx.compose.material.icons.rounded.WaterDrop
+import androidx.compose.material.icons.rounded.Vaccines
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -185,8 +185,44 @@ private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         supplies.forEach { s ->
-            StatusPill(label = s.label, value = s.value, dotColor = s.dotColor)
+            if (s.fraction != null) SupplyRingPill(s) else StatusPill(label = s.label, value = s.value, dotColor = s.dotColor)
         }
+    }
+}
+
+/**
+ * A supply pill whose leading indicator is a depleting COUNTDOWN ring (life remaining) rather than a
+ * plain dot — so the sensor's time-to-expiry reads at a glance. The ring drains and recolors (green →
+ * amber → red) as [HomeUiState.Supply.fraction] falls to 0.
+ */
+@Composable
+private fun SupplyRingPill(s: HomeUiState.Supply) {
+    val colors = AapsTheme.colors
+    Row(
+        Modifier.clip(AapsShape.pill).background(colors.controlFill).padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        CountdownRing(s.fraction ?: 0f, s.dotColor)
+        Text(s.label, style = AapsType.caption, color = colors.textSecondary)
+        Text(s.value, style = AapsType.listTitle, color = s.dotColor)
+    }
+}
+
+@Composable
+private fun CountdownRing(fraction: Float, color: androidx.compose.ui.graphics.Color, size: androidx.compose.ui.unit.Dp = 14.dp) {
+    val track = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.15f)
+    androidx.compose.foundation.Canvas(Modifier.size(size)) {
+        val stroke = this.size.minDimension * 0.20f
+        val inset = stroke / 2f
+        val arcSize = androidx.compose.ui.geometry.Size(this.size.width - stroke, this.size.height - stroke)
+        val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+        drawArc(track, -90f, 360f, false, topLeft = topLeft, size = arcSize, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+        drawArc(
+            color, -90f, 360f * fraction.coerceIn(0f, 1f), false,
+            topLeft = topLeft, size = arcSize,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        )
     }
 }
 
@@ -343,10 +379,13 @@ private fun ActionBar(actions: HomeActions) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Two primary actions for a closed loop: announce Carbs, or calculate a dose with the Wizard.
+        // Two primary actions for a closed loop: announce Carbs, or bolus (the wizard-calculated dose).
         // A raw manual bolus (type-the-units, no calc) is the rare case — it lives in the "+" menu.
         ActionBarButton("Carbs", Icons.Rounded.Restaurant, actions.onCarbs, Modifier.weight(1f))
-        ActionBarButton("Wizard", Icons.Rounded.Calculate, actions.onWizard, Modifier.weight(1.4f), emphasized = true)
+        ActionBarButton(
+            "Bolus", Icons.Rounded.Vaccines, actions.onWizard, Modifier.weight(1.4f),
+            container = colors.inRange, content = colors.onAccent
+        )
         MoreMenu(actions)
     }
 }

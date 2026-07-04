@@ -2,13 +2,20 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
+import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -17,22 +24,28 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.core.interfaces.utils.SafeParse
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogExtendedbolusBinding
+import app.aaps.ui.dialogs.compose.ExtendedBolusInputs
+import app.aaps.ui.dialogs.compose.ExtendedBolusSheet
+import app.aaps.ui.dialogs.compose.ExtendedBolusSheetState
 import com.google.common.base.Joiner
-import java.text.DecimalFormat
+import dagger.android.support.DaggerDialogFragment
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
 
-class ExtendedBolusDialog : DialogFragmentWithDate() {
+/**
+ * Redesigned Extended Bolus dialog. UI is Compose ([ExtendedBolusSheet]); [submit] runs the SAME
+ * constraint + `OKDialog` confirmation + `commandQueue.extendedBolus` path as before.
+ */
+class ExtendedBolusDialog : DaggerDialogFragment() {
 
+    @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var constraintChecker: ConstraintsChecker
@@ -43,57 +56,38 @@ class ExtendedBolusDialog : DialogFragmentWithDate() {
     @Inject lateinit var uiInteraction: UiInteraction
 
     private var queryingProtection = false
-    private var _binding: DialogExtendedbolusBinding? = null
 
-    // This property is only valid between onCreateView and onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("insulin", binding.insulin.value)
-        savedInstanceState.putDouble("duration", binding.duration.value)
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        onCreateViewGeneral()
-        _binding = DialogExtendedbolusBinding.inflate(inflater, container, false)
-        return binding.root
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
 
         val pumpDescription = activePlugin.activePump.pumpDescription
-
-        val maxInsulin = constraintChecker.getMaxExtendedBolusAllowed().value()
         val extendedStep = pumpDescription.extendedBolusStep
-        binding.insulin.setParams(
-            savedInstanceState?.getDouble("insulin")
-                ?: extendedStep, extendedStep, maxInsulin, extendedStep, DecimalFormat("0.00"), false, binding.okcancel.ok
+        val state = ExtendedBolusSheetState(
+            maxInsulin = constraintChecker.getMaxExtendedBolusAllowed().value(),
+            insulinStep = extendedStep,
+            insulinDecimals = 2,
+            durationStep = pumpDescription.extendedBolusDurationStep,
+            maxDuration = pumpDescription.extendedBolusMaxDuration
         )
-
-        val extendedDurationStep = pumpDescription.extendedBolusDurationStep
-        val extendedMaxDuration = pumpDescription.extendedBolusMaxDuration
-        binding.duration.setParams(
-            savedInstanceState?.getDouble("duration")
-                ?: extendedDurationStep, extendedDurationStep, extendedMaxDuration, extendedDurationStep, DecimalFormat("0"), false, binding.okcancel.ok
-        )
-        binding.insulinLabel.labelFor = binding.insulin.editTextId
-        binding.durationLabel.labelFor = binding.duration.editTextId
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { ExtendedBolusSheet(state = state, onSubmit = ::submit, onClose = { dismiss() }) } }
+        }
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
-
-    override fun submit(): Boolean {
-        if (_binding == null) return false
-        val insulin = SafeParse.stringToDouble(binding.insulin.text)
-        val durationInMinutes = binding.duration.value.toInt()
+    private fun submit(inputs: ExtendedBolusInputs) {
+        val insulin = inputs.insulin
+        val durationInMinutes = inputs.durationMin
         val actions: LinkedList<String> = LinkedList()
         val insulinAfterConstraint = constraintChecker.applyExtendedBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
         actions.add(rh.gs(app.aaps.core.ui.R.string.format_insulin_units, insulinAfterConstraint))
@@ -119,7 +113,7 @@ class ExtendedBolusDialog : DialogFragmentWithDate() {
                 })
             }, null)
         }
-        return true
+        dismiss()
     }
 
     override fun onResume() {

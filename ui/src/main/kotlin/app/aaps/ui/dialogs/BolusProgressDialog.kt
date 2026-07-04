@@ -2,11 +2,19 @@ package app.aaps.ui.dialogs
 
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.logging.AAPSLogger
@@ -22,12 +30,19 @@ import app.aaps.core.interfaces.rx.events.EventOverviewBolusProgress
 import app.aaps.core.interfaces.rx.events.EventOverviewBolusStopDeliveryEnabled
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
-import app.aaps.ui.databinding.DialogBolusprogressBinding
+import app.aaps.ui.dialogs.compose.BolusProgressSheet
 import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 
+/**
+ * Live bolus-delivery progress dialog. UI is Compose ([BolusProgressSheet]) — the EXACT rxBus
+ * progress/dismiss/stop-enable lifecycle, the [BolusProgressData] state, the cancel path
+ * (`commandQueue.cancelAllBoluses`) and the show/dismiss contract are unchanged from the legacy
+ * XML dialog; only the rendering was swapped. Compose state ([percent]/[status]/[stopEnabled])
+ * is what the rxBus subscribers now update instead of the old view binding.
+ */
 class BolusProgressDialog : DaggerDialogFragment() {
 
     @Inject lateinit var aapsLogger: AAPSLogger
@@ -42,47 +57,56 @@ class BolusProgressDialog : DaggerDialogFragment() {
     private var running = true
     private var helpActivity: TranslatedDaggerAppCompatActivity? = null
 
+    // Compose-backed view state — updated by the rxBus subscribers below (replaces the XML binding).
+    private var percent by mutableIntStateOf(0)
+    private var status by mutableStateOf("")
+    private var stopEnabled by mutableStateOf(true)
+    private var stopVisible by mutableStateOf(true)
+
     fun setHelperActivity(activity: TranslatedDaggerAppCompatActivity): BolusProgressDialog {
         helpActivity = activity
         return this
     }
 
-    private var _binding: DialogBolusprogressBinding? = null
-
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
+    private fun onStopClicked() {
+        aapsLogger.debug(LTag.UI, "Stop bolus delivery button pressed")
+        BolusProgressData.stopPressed = true
+        stopVisible = false
+        uel.log(Action.CANCEL_BOLUS, Sources.Overview, BolusProgressData.status)
+        commandQueue.cancelAllBoluses(BolusProgressData.id)
+    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
         dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
         isCancelable = false
         dialog?.setCanceledOnTouchOutside(false)
-        context?.theme?.applyStyle(app.aaps.core.ui.R.style.AppTheme_NoActionBar, true)
 
-        _binding = DialogBolusprogressBinding.inflate(inflater, container, false)
-        return binding.root
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        binding.title.text = rh.gs(app.aaps.core.ui.R.string.goingtodeliver, BolusProgressData.insulin)
-        binding.stop.setOnClickListener {
-            aapsLogger.debug(LTag.UI, "Stop bolus delivery button pressed")
-            BolusProgressData.stopPressed = true
-            binding.stopPressed.visibility = View.VISIBLE
-            binding.stop.visibility = View.INVISIBLE
-            uel.log(Action.CANCEL_BOLUS, Sources.Overview, BolusProgressData.status)
-            commandQueue.cancelAllBoluses(BolusProgressData.id)
-        }
-        binding.progressbar.max = 100
-        binding.status.text = BolusProgressData.status
-        binding.progressbar.progress = BolusProgressData.percent
+        status = BolusProgressData.status
+        percent = BolusProgressData.percent
+        stopEnabled = true
+        stopVisible = true
         BolusProgressData.stopPressed = false
+
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                AapsTheme {
+                    BolusProgressSheet(
+                        percent = percent,
+                        status = status,
+                        onStop = { if (stopEnabled && stopVisible) onStopClicked() }
+                    )
+                }
+            }
+        }
     }
 
     override fun onStart() {
         super.onStart()
         dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
     override fun onResume() {
@@ -97,7 +121,7 @@ class BolusProgressDialog : DaggerDialogFragment() {
         disposable += rxBus
             .toObservable(EventPumpStatusChanged::class.java)
             .observeOn(aapsSchedulers.main)
-            .subscribe { binding.status.text = it.getStatus(requireContext()) }
+            .subscribe { status = it.getStatus(requireContext()) }
         disposable += rxBus
             .toObservable(EventDismissBolusProgressIfRunning::class.java)
             .observeOn(aapsSchedulers.main)
@@ -111,10 +135,10 @@ class BolusProgressDialog : DaggerDialogFragment() {
             .observeOn(aapsSchedulers.main)
             .subscribe {
                 aapsLogger.debug(LTag.UI, "Status: ${BolusProgressData.status} Percent: ${BolusProgressData.percent}")
-                binding.status.text = BolusProgressData.status
-                binding.progressbar.progress = BolusProgressData.percent
+                status = BolusProgressData.status
+                percent = BolusProgressData.percent
                 if (BolusProgressData.percent == 100) {
-                    binding.stop.visibility = View.INVISIBLE
+                    stopVisible = false
                     scheduleDismiss()
                 }
             }
@@ -123,7 +147,7 @@ class BolusProgressDialog : DaggerDialogFragment() {
             .observeOn(aapsSchedulers.main)
             .subscribe {
                 aapsLogger.debug(LTag.UI, "StopDeliveryButton enabled=${it.isEnabled}")
-                binding.stop.isEnabled = it.isEnabled
+                stopEnabled = it.isEnabled
             }
     }
 
@@ -152,7 +176,6 @@ class BolusProgressDialog : DaggerDialogFragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         disposable.clear()
-        _binding = null
     }
 
     private fun scheduleDismiss() {

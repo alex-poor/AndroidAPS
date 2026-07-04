@@ -1,12 +1,15 @@
 package app.aaps.ui.dialogs
 
 import android.os.Bundle
-import android.text.Spanned
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -19,18 +22,24 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.HardLimits
-import app.aaps.core.objects.R
 import app.aaps.core.objects.extensions.getCustomizedName
 import app.aaps.core.objects.extensions.pureProfileFromJson
 import app.aaps.core.objects.profile.ProfileSealed
-import app.aaps.core.ui.extensions.toVisibility
-import app.aaps.core.utils.HtmlHelper
-import app.aaps.ui.databinding.DialogProfileviewerBinding
+import app.aaps.ui.dialogs.compose.ProfileViewerCategory
+import app.aaps.ui.dialogs.compose.ProfileViewerRow
+import app.aaps.ui.dialogs.compose.ProfileViewerSheet
+import app.aaps.ui.dialogs.compose.ProfileViewerState
 import dagger.android.support.DaggerDialogFragment
 import org.json.JSONObject
-import java.text.DecimalFormat
+import java.util.Locale
 import javax.inject.Inject
 
+/**
+ * Redesigned read-only Profile viewer. UI is Compose ([ProfileViewerSheet]); this fragment keeps the
+ * legacy public API — same argument keys ("time", "mode", "customProfile", "customProfileName",
+ * "customProfile2") + [UiInteraction.Mode] handling — so `uiInteraction.runProfileViewerDialog`
+ * callers are unaffected. Presentation only, no submit.
+ */
 class ProfileViewerDialog : DaggerDialogFragment() {
 
     @Inject lateinit var rh: ResourceHelper
@@ -51,16 +60,14 @@ class ProfileViewerDialog : DaggerDialogFragment() {
     private var customProfileJson2: String = ""
     private var customProfileName: String = ""
 
-    private var _binding: DialogProfileviewerBinding? = null
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
+    }
 
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         // load data from bundle
         (savedInstanceState ?: arguments)?.let { bundle ->
             time = bundle.getLong("time", 0)
@@ -76,109 +83,15 @@ class ProfileViewerDialog : DaggerDialogFragment() {
         isCancelable = true
         dialog?.setCanceledOnTouchOutside(false)
 
-        _binding = DialogProfileviewerBinding.inflate(inflater, container, false)
-        return binding.root
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        binding.closeLayout.close.setOnClickListener { dismiss() }
-
-        val profile: ProfileSealed?
-        val profile2: ProfileSealed?
-        val profileName: String?
-        val date: String?
-        when (mode) {
-            UiInteraction.Mode.RUNNING_PROFILE -> {
-                val eps = persistenceLayer.getEffectiveProfileSwitchActiveAt(time)
-                if (eps == null) {
-                    dismiss()
-                    return
-                }
-                profile = ProfileSealed.EPS(eps, activePlugin)
-                profile2 = null
-                profileName = eps.originalCustomizedName
-                date = dateUtil.dateAndTimeString(eps.timestamp)
-                binding.dateLayout.visibility = View.VISIBLE
-            }
-
-            UiInteraction.Mode.CUSTOM_PROFILE  -> {
-                profile = pureProfileFromJson(JSONObject(customProfileJson), dateUtil)?.let { ProfileSealed.Pure(it, activePlugin) }
-                profile2 = null
-                profileName = customProfileName
-                date = ""
-                binding.dateLayout.visibility = View.GONE
-            }
-
-            UiInteraction.Mode.PROFILE_COMPARE -> {
-                profile = pureProfileFromJson(JSONObject(customProfileJson), dateUtil)?.let { ProfileSealed.Pure(it, activePlugin) }
-                profile2 = pureProfileFromJson(JSONObject(customProfileJson2), dateUtil)?.let { ProfileSealed.Pure(it, activePlugin) }
-                profileName = customProfileName
-                binding.headerIcon.setImageResource(R.drawable.ic_compare_profiles)
-                date = ""
-                binding.dateLayout.visibility = View.GONE
-            }
-
-            UiInteraction.Mode.DB_PROFILE      -> {
-                val profileList = persistenceLayer.getProfileSwitches()
-                profile = if (profileList.isNotEmpty()) ProfileSealed.PS(profileList[0], activePlugin) else null
-                profile2 = null
-                profileName = if (profileList.isNotEmpty()) profileList[0].getCustomizedName(decimalFormatter) else null
-                date = if (profileList.isNotEmpty()) dateUtil.dateAndTimeString(profileList[0].timestamp) else null
-                binding.dateLayout.visibility = View.VISIBLE
-            }
+        val state = buildState()
+        if (state == null) {
+            dismiss()
+            return View(requireContext())
         }
-        binding.noProfile.visibility = View.VISIBLE
-
-        if (mode == UiInteraction.Mode.PROFILE_COMPARE)
-            profile?.let { profile1 ->
-                profile2?.let { profile2 ->
-                    binding.units.text = profileFunction.getUnits().asText
-                    binding.dia.text = HtmlHelper.fromHtml(formatColors("", profile1.dia, profile2.dia, DecimalFormat("0.00"), rh.gs(app.aaps.core.interfaces.R.string.shorthour)))
-                    val profileNames = profileName!!.split("\n").toTypedArray()
-                    binding.activeProfile.text = HtmlHelper.fromHtml(formatColors(profileNames[0], profileNames[1]))
-                    binding.date.text = date
-                    binding.ic.text = ics(profile1, profile2)
-                    binding.isf.text = isfs(profile1, profile2)
-                    binding.basal.text = basals(profile1, profile2)
-                    binding.target.text = targets(profile1, profile2)
-                    binding.basalGraph.show(profile1, profile2)
-                    binding.isfGraph.show(profile1, profile2)
-                    binding.icGraph.show(profile1, profile2)
-                    binding.targetGraph.show(profile1, profile2)
-                }
-
-                binding.noProfile.visibility = View.GONE
-                val validity = profile1.isValid("ProfileViewDialog", activePlugin.activePump, config, rh, rxBus, hardLimits, false)
-                binding.invalidProfile.text = rh.gs(app.aaps.core.ui.R.string.invalid_profile) + "\n" + validity.reasons.joinToString(separator = "\n")
-                binding.invalidProfile.visibility = validity.isValid.not().toVisibility()
-            }
-        else
-            profile?.let {
-                binding.units.text = it.units.asText
-                binding.dia.text = rh.gs(app.aaps.core.ui.R.string.format_hours, it.dia)
-                binding.activeProfile.text = profileName
-                binding.date.text = date
-                binding.ic.text = it.getIcList(rh, dateUtil)
-                binding.isf.text = it.getIsfList(rh, dateUtil)
-                binding.basal.text = "∑ " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, it.baseBasalSum()) + "\n" + it.getBasalList(rh, dateUtil)
-                binding.target.text = it.getTargetList(rh, dateUtil)
-                binding.basalGraph.show(it)
-                binding.isfGraph.show(it)
-                binding.icGraph.show(it)
-                binding.targetGraph.show(it)
-
-                binding.noProfile.visibility = View.GONE
-                val validity = it.isValid("ProfileViewDialog", activePlugin.activePump, config, rh, rxBus, hardLimits, false)
-                binding.invalidProfile.text = rh.gs(app.aaps.core.ui.R.string.invalid_profile) + "\n" + validity.reasons.joinToString(separator = "\n")
-                binding.invalidProfile.visibility = validity.isValid.not().toVisibility()
-            }
-    }
-
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { ProfileViewerSheet(state = state, onClose = { dismiss() }) } }
+        }
     }
 
     override fun onSaveInstanceState(bundle: Bundle) {
@@ -191,119 +104,147 @@ class ProfileViewerDialog : DaggerDialogFragment() {
             bundle.putString("customProfile2", customProfileJson2)
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
-
-    private fun formatColors(label: String, value1: Double, value2: Double, format: DecimalFormat, units: String): String {
-        return formatColors(label, format.format(value1), format.format(value2), units)
-    }
-
-    private fun formatColors(label: String, text1: String, text2: String, units: String): String {
-        var s = "<font color='${rh.gac(context, app.aaps.core.ui.R.attr.defaultTextColor)}'>$label</font>"
-        s += "    "
-        s += "<font color='${rh.gac(context, app.aaps.core.ui.R.attr.tempBasalColor)}'>$text1</font>"
-        s += "    "
-        s += "<font color='${rh.gac(context, app.aaps.core.ui.R.attr.examinedProfileColor)}'>$text2</font>"
-        s += "    "
-        s += "<font color='${rh.gac(context, app.aaps.core.ui.R.attr.defaultTextColor)}'>$units</font>"
-        return s
-    }
-
-    private fun formatColors(text1: String, text2: String): String {
-        var s = "<font color='${rh.gac(context, app.aaps.core.ui.R.attr.tempBasalColor)}'>$text1</font>"
-        s += "<BR/>"
-        s += "<font color='${rh.gac(context, app.aaps.core.ui.R.attr.examinedProfileColor)}'>$text2</font>"
-        return s
-    }
-
-    private fun basals(profile1: Profile, profile2: Profile): Spanned {
-        var prev1 = -1.0
-        var prev2 = -1.0
-        val s = StringBuilder()
-        for (hour in 0..23) {
-            val val1 = profile1.getBasalTimeFromMidnight(hour * 60 * 60)
-            val val2 = profile2.getBasalTimeFromMidnight(hour * 60 * 60)
-            if (val1 != prev1 || val2 != prev2) {
-                s.append(formatColors(dateUtil.formatHHMM(hour * 60 * 60), val1, val2, DecimalFormat("0.00"), " " + rh.gs(app.aaps.core.ui.R.string.profile_ins_units_per_hour)))
-                s.append("<br>")
+    /** Extract the same values the legacy dialog displayed into a presentation-only [ProfileViewerState]. */
+    private fun buildState(): ProfileViewerState? {
+        val profile: ProfileSealed?
+        val profile2: ProfileSealed?
+        var profileName: String?
+        var date: String? = null
+        when (mode) {
+            UiInteraction.Mode.RUNNING_PROFILE -> {
+                val eps = persistenceLayer.getEffectiveProfileSwitchActiveAt(time) ?: return null
+                profile = ProfileSealed.EPS(eps, activePlugin)
+                profile2 = null
+                profileName = eps.originalCustomizedName
+                date = dateUtil.dateAndTimeString(eps.timestamp)
             }
-            prev1 = val1
-            prev2 = val2
+
+            UiInteraction.Mode.CUSTOM_PROFILE  -> {
+                profile = pureProfileFromJson(JSONObject(customProfileJson), dateUtil)?.let { ProfileSealed.Pure(it, activePlugin) }
+                profile2 = null
+                profileName = customProfileName
+            }
+
+            UiInteraction.Mode.PROFILE_COMPARE -> {
+                profile = pureProfileFromJson(JSONObject(customProfileJson), dateUtil)?.let { ProfileSealed.Pure(it, activePlugin) }
+                profile2 = pureProfileFromJson(JSONObject(customProfileJson2), dateUtil)?.let { ProfileSealed.Pure(it, activePlugin) }
+                profileName = customProfileName
+            }
+
+            UiInteraction.Mode.DB_PROFILE      -> {
+                val profileList = persistenceLayer.getProfileSwitches()
+                profile = if (profileList.isNotEmpty()) ProfileSealed.PS(profileList[0], activePlugin) else null
+                profile2 = null
+                profileName = if (profileList.isNotEmpty()) profileList[0].getCustomizedName(decimalFormatter) else null
+                date = if (profileList.isNotEmpty()) dateUtil.dateAndTimeString(profileList[0].timestamp) else null
+            }
         }
-        s.append(
-            formatColors(
-                "    ∑ ",
-                profile1.baseBasalSum(),
-                profile2.baseBasalSum(),
-                DecimalFormat("0.00"),
-                rh.gs(app.aaps.core.ui.R.string.insulin_unit_shortname)
-            )
+        if (profile == null) return null
+
+        val unitsLabel = profileFunction.getUnits().asText
+        val validity = profile.isValid("ProfileViewDialog", activePlugin.activePump, config, rh, rxBus, hardLimits, false)
+        val invalid = if (validity.isValid) null
+        else rh.gs(app.aaps.core.ui.R.string.invalid_profile) + "\n" + validity.reasons.joinToString(separator = "\n")
+
+        val compare = mode == UiInteraction.Mode.PROFILE_COMPARE && profile2 != null
+
+        // PROFILE_COMPARE keeps both names (legacy split "name\nname2").
+        var name2: String? = null
+        if (compare) {
+            val names = (profileName ?: "").split("\n")
+            profileName = names.getOrElse(0) { "" }
+            name2 = names.getOrElse(1) { "" }
+        }
+
+        return ProfileViewerState(
+            name = profileName ?: "",
+            name2 = name2,
+            dia = rh.gs(app.aaps.core.ui.R.string.format_hours, profile.dia),
+            dailyBasal = fmtU(profile.baseBasalSum()),
+            dailyBasal2 = if (compare) fmtU(profile2!!.baseBasalSum()) else null,
+            date = date,
+            unitsLabel = unitsLabel,
+            invalid = invalid,
+            compare = compare,
+            basal = ProfileViewerCategory("Basal", basalRows(profile, profile2, compare)),
+            isf = ProfileViewerCategory("ISF", isfRows(profile, profile2, compare, unitsLabel)),
+            ic = ProfileViewerCategory("Carb ratio", icRows(profile, profile2, compare)),
+            target = ProfileViewerCategory("Target", targetRows(profile, profile2, compare, unitsLabel))
         )
-        return HtmlHelper.fromHtml(s.toString())
     }
 
-    private fun ics(profile1: Profile, profile2: Profile): Spanned {
+    private fun hhmm(sec: Int) = dateUtil.formatHHMM(sec)
+    private fun fmtU(v: Double) = String.format(Locale.getDefault(), "%.2f U/h", v)
+
+    private fun basalRows(p1: Profile, p2: Profile?, compare: Boolean): List<ProfileViewerRow> {
+        val rows = mutableListOf<ProfileViewerRow>()
         var prev1 = -1.0
         var prev2 = -1.0
-        val s = StringBuilder()
         for (hour in 0..23) {
-            val val1 = profile1.getIcTimeFromMidnight(hour * 60 * 60)
-            val val2 = profile2.getIcTimeFromMidnight(hour * 60 * 60)
-            if (val1 != prev1 || val2 != prev2) {
-                s.append(formatColors(dateUtil.formatHHMM(hour * 60 * 60), val1, val2, DecimalFormat("0.0"), " " + rh.gs(app.aaps.core.ui.R.string.profile_carbs_per_unit)))
-                s.append("<br>")
+            val sec = hour * 3600
+            val v1 = p1.getBasalTimeFromMidnight(sec)
+            val v2 = if (compare) p2!!.getBasalTimeFromMidnight(sec) else -1.0
+            if (v1 != prev1 || (compare && v2 != prev2)) {
+                rows.add(ProfileViewerRow(hhmm(sec), fmtU(v1), if (compare) fmtU(v2) else null))
             }
-            prev1 = val1
-            prev2 = val2
+            prev1 = v1; prev2 = v2
         }
-        return HtmlHelper.fromHtml(s.delete(s.length - 4, s.length).toString())
+        return rows
     }
 
-    private fun isfs(profile1: Profile, profile2: Profile): Spanned {
+    private fun icRows(p1: Profile, p2: Profile?, compare: Boolean): List<ProfileViewerRow> {
+        val rows = mutableListOf<ProfileViewerRow>()
         var prev1 = -1.0
         var prev2 = -1.0
-        val units = profileFunction.getUnits()
-        val s = StringBuilder()
         for (hour in 0..23) {
-            val val1 = profileUtil.fromMgdlToUnits(profile1.getIsfMgdlTimeFromMidnight(hour * 60 * 60))
-            val val2 = profileUtil.fromMgdlToUnits(profile2.getIsfMgdlTimeFromMidnight(hour * 60 * 60))
-            if (val1 != prev1 || val2 != prev2) {
-                s.append(formatColors(dateUtil.formatHHMM(hour * 60 * 60), val1, val2, DecimalFormat("0.0"), units.asText + " " + rh.gs(app.aaps.core.ui.R.string.profile_per_unit)))
-                s.append("<br>")
+            val sec = hour * 3600
+            val v1 = p1.getIcTimeFromMidnight(sec)
+            val v2 = if (compare) p2!!.getIcTimeFromMidnight(sec) else -1.0
+            if (v1 != prev1 || (compare && v2 != prev2)) {
+                rows.add(ProfileViewerRow(hhmm(sec), fmtG(v1), if (compare) fmtG(v2) else null))
             }
-            prev1 = val1
-            prev2 = val2
+            prev1 = v1; prev2 = v2
         }
-        return HtmlHelper.fromHtml(s.delete(s.length - 4, s.length).toString())
+        return rows
     }
 
-    private fun targets(profile1: Profile, profile2: Profile): Spanned {
-        var prev1l = -1.0
-        var prev1h = -1.0
-        var prev2l = -1.0
-        var prev2h = -1.0
-        val units = profileFunction.getUnits()
-        val s = StringBuilder()
+    private fun isfRows(p1: Profile, p2: Profile?, compare: Boolean, units: String): List<ProfileViewerRow> {
+        val rows = mutableListOf<ProfileViewerRow>()
+        var prev1 = -1.0
+        var prev2 = -1.0
         for (hour in 0..23) {
-            val val1l = profile1.getTargetLowMgdlTimeFromMidnight(hour * 60 * 60)
-            val val1h = profile1.getTargetHighMgdlTimeFromMidnight(hour * 60 * 60)
-            val val2l = profile2.getTargetLowMgdlTimeFromMidnight(hour * 60 * 60)
-            val val2h = profile2.getTargetHighMgdlTimeFromMidnight(hour * 60 * 60)
-            val txt1 =
-                dateUtil.formatHHMM(hour * 60 * 60) + " " + profileUtil.fromMgdlToStringInUnits(val1l) + " - " + profileUtil.fromMgdlToStringInUnits(val1h) + " " + units.asText
-            val txt2 =
-                dateUtil.formatHHMM(hour * 60 * 60) + " " + profileUtil.fromMgdlToStringInUnits(val2l) + " - " + profileUtil.fromMgdlToStringInUnits(val2h) + " " + units.asText
-            if (val1l != prev1l || val1h != prev1h || val2l != prev2l || val2h != prev2h) {
-                s.append(formatColors(txt1, txt2))
-                s.append("<br>")
+            val sec = hour * 3600
+            val v1 = profileUtil.fromMgdlToUnits(p1.getIsfMgdlTimeFromMidnight(sec))
+            val v2 = if (compare) profileUtil.fromMgdlToUnits(p2!!.getIsfMgdlTimeFromMidnight(sec)) else -1.0
+            if (v1 != prev1 || (compare && v2 != prev2)) {
+                rows.add(ProfileViewerRow(hhmm(sec), "${fmt1(v1)} $units", if (compare) "${fmt1(v2)} $units" else null))
             }
-            prev1l = val1l
-            prev1h = val1h
-            prev2l = val2l
-            prev2h = val2h
+            prev1 = v1; prev2 = v2
         }
-        return HtmlHelper.fromHtml(s.delete(s.length - 4, s.length).toString())
+        return rows
     }
+
+    private fun targetRows(p1: Profile, p2: Profile?, compare: Boolean, units: String): List<ProfileViewerRow> {
+        val rows = mutableListOf<ProfileViewerRow>()
+        var prev1l = -1.0; var prev1h = -1.0
+        var prev2l = -1.0; var prev2h = -1.0
+        for (hour in 0..23) {
+            val sec = hour * 3600
+            val v1l = p1.getTargetLowMgdlTimeFromMidnight(sec)
+            val v1h = p1.getTargetHighMgdlTimeFromMidnight(sec)
+            val v2l = if (compare) p2!!.getTargetLowMgdlTimeFromMidnight(sec) else -1.0
+            val v2h = if (compare) p2!!.getTargetHighMgdlTimeFromMidnight(sec) else -1.0
+            val changed = v1l != prev1l || v1h != prev1h || (compare && (v2l != prev2l || v2h != prev2h))
+            if (changed) {
+                val t1 = "${profileUtil.fromMgdlToStringInUnits(v1l)} - ${profileUtil.fromMgdlToStringInUnits(v1h)} $units"
+                val t2 = if (compare) "${profileUtil.fromMgdlToStringInUnits(v2l)} - ${profileUtil.fromMgdlToStringInUnits(v2h)} $units" else null
+                rows.add(ProfileViewerRow(hhmm(sec), t1, t2))
+            }
+            prev1l = v1l; prev1h = v1h; prev2l = v2l; prev2h = v2h
+        }
+        return rows
+    }
+
+    private fun fmt1(v: Double) = String.format(Locale.getDefault(), "%.1f", v)
+    private fun fmtG(v: Double) = String.format(Locale.getDefault(), "%.1f g/U", v)
 }

@@ -1,9 +1,15 @@
 package app.aaps.ui.dialogs
 
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
@@ -15,13 +21,15 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.sync.XDripBroadcast
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.utils.HtmlHelper
-import app.aaps.ui.databinding.DialogCalibrationBinding
+import app.aaps.ui.dialogs.compose.CalibrationSheet
+import app.aaps.ui.dialogs.compose.CalibrationSheetState
 import com.google.common.base.Joiner
-import java.text.DecimalFormat
+import dagger.android.support.DaggerDialogFragment
 import java.util.LinkedList
 import javax.inject.Inject
 
-class CalibrationDialog : DialogFragmentWithDate() {
+/** Redesigned Calibration dialog. UI is Compose ([CalibrationSheet]); the send path is unchanged. */
+class CalibrationDialog : DaggerDialogFragment() {
 
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var profileUtil: ProfileUtil
@@ -29,56 +37,39 @@ class CalibrationDialog : DialogFragmentWithDate() {
     @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
 
-    private var _binding: DialogCalibrationBinding? = null
-
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("bg", binding.bg.value)
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        onCreateViewGeneral()
-        _binding = DialogCalibrationBinding.inflate(inflater, container, false)
-        return binding.root
-    }
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        val units = profileUtil.units
+        val mmol = profileUtil.units == GlucoseUnit.MMOL
         val bg = profileUtil.fromMgdlToUnits(glucoseStatusProvider.glucoseStatusData?.glucose ?: 0.0)
-        if (units == GlucoseUnit.MMOL)
-            binding.bg.setParams(
-                savedInstanceState?.getDouble("bg")
-                    ?: bg, 2.0, 30.0, 0.1, DecimalFormat("0.0"), false, binding.okcancel.ok
-            )
-        else
-            binding.bg.setParams(
-                savedInstanceState?.getDouble("bg")
-                    ?: bg, 36.0, 500.0, 1.0, DecimalFormat("0"), false, binding.okcancel.ok
-            )
-        binding.units.text = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
-        binding.bgLabel.labelFor = binding.bg.editTextId
+        val state = CalibrationSheetState(
+            initial = bg,
+            min = if (mmol) 2.0 else 36.0,
+            max = if (mmol) 30.0 else 500.0,
+            step = if (mmol) 0.1 else 1.0,
+            decimals = if (mmol) 1 else 0,
+            unitLabel = if (mmol) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
+        )
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { CalibrationSheet(state = state, onSend = ::submit, onClose = { dismiss() }) } }
+        }
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
-
-    override fun submit(): Boolean {
-        if (_binding == null) return false
+    private fun submit(bg: Double) {
         val units = profileUtil.units
         val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
         val actions: LinkedList<String?> = LinkedList()
-        val bg = binding.bg.value
         actions.add(rh.gs(app.aaps.core.ui.R.string.bg_label) + ": " + profileUtil.stringInCurrentUnitsDetect(bg) + " " + unitLabel)
         if (bg > 0) {
             activity?.let { activity ->
@@ -91,6 +82,6 @@ class CalibrationDialog : DialogFragmentWithDate() {
             activity?.let { activity ->
                 OKDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.calibration), rh.gs(app.aaps.core.ui.R.string.no_action_selected))
             }
-        return true
+        dismiss()
     }
 }

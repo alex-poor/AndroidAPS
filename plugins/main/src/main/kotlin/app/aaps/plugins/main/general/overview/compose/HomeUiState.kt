@@ -63,7 +63,10 @@ data class HomeUiState(
     data class Supply(
         val label: String,
         val value: String,
-        val dotColor: Color
+        val dotColor: Color,
+        // When set (0f..1f) the pill draws a depleting countdown RING instead of a plain dot — used by
+        // the sensor to show life remaining at a glance. null = plain dot (cannula/reservoir/battery).
+        val fraction: Float? = null
     )
 
     /** One recent carb record — presentation strings plus the id/timestamp/amount the undo needs. */

@@ -2,14 +2,21 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
+import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.plugin.ActivePlugin
@@ -20,22 +27,29 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.core.interfaces.utils.SafeParse
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogTempbasalBinding
+import app.aaps.ui.dialogs.compose.TempBasalInputs
+import app.aaps.ui.dialogs.compose.TempBasalSheet
+import app.aaps.ui.dialogs.compose.TempBasalSheetState
 import com.google.common.base.Joiner
-import java.text.DecimalFormat
+import dagger.android.support.DaggerDialogFragment
 import java.util.LinkedList
 import javax.inject.Inject
 import kotlin.math.abs
 
-class TempBasalDialog : DialogFragmentWithDate() {
+/**
+ * Redesigned Temp Basal dialog. UI is Compose ([TempBasalSheet]); [submit] runs the SAME constraint +
+ * `OKDialog` confirmation + `commandQueue.tempBasalPercent` / `tempBasalAbsolute` path as the legacy
+ * dialog. The pump decides which modes are offered (percent / absolute).
+ */
+class TempBasalDialog : DaggerDialogFragment() {
 
+    @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var constraintChecker: ConstraintsChecker
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var profileFunction: ProfileFunction
@@ -47,84 +61,64 @@ class TempBasalDialog : DialogFragmentWithDate() {
     @Inject lateinit var uiInteraction: UiInteraction
 
     private var queryingProtection = false
-    private var isPercentPump = true
-    private var _binding: DialogTempbasalBinding? = null
 
-    // This property is only valid between onCreateView and onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("duration", binding.duration.value)
-        savedInstanceState.putDouble("basalPercentInput", binding.basalPercentInput.value)
-        savedInstanceState.putDouble("basalAbsoluteInput", binding.basalAbsoluteInput.value)
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        onCreateViewGeneral()
-        _binding = DialogTempbasalBinding.inflate(inflater, container, false)
-        return binding.root
-    }
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-
-        val pumpDescription = activePlugin.activePump.pumpDescription
-        val profile = profileFunction.getProfile() ?: return
-
-        val maxTempPercent = pumpDescription.maxTempPercent.toDouble()
-        val tempPercentStep = pumpDescription.tempPercentStep.toDouble()
-
-        binding.basalPercentInput.setParams(
-            savedInstanceState?.getDouble("basalPercentInput")
-                ?: 100.0, 0.0, maxTempPercent, tempPercentStep, DecimalFormat("0"), true, binding.okcancel.ok
-        )
-
-        binding.basalAbsoluteInput.setParams(
-            savedInstanceState?.getDouble("basalAbsoluteInput")
-                ?: profile.getBasal(), 0.0, pumpDescription.maxTempAbsolute, pumpDescription.tempAbsoluteStep, DecimalFormat("0.00"), true, binding.okcancel.ok
-        )
-
-        val tempDurationStep = pumpDescription.tempDurationStep.toDouble()
-        val tempMaxDuration = pumpDescription.tempMaxDuration.toDouble()
-        binding.duration.setParams(
-            savedInstanceState?.getDouble("duration")
-                ?: tempDurationStep, tempDurationStep, tempMaxDuration, tempDurationStep, DecimalFormat("0"), false, binding.okcancel.ok
-        )
-
-        isPercentPump = pumpDescription.tempBasalStyle and PumpDescription.PERCENT == PumpDescription.PERCENT
-        if (isPercentPump) {
-            binding.percentLayout.visibility = View.VISIBLE
-            binding.absoluteLayout.visibility = View.GONE
-        } else {
-            binding.percentLayout.visibility = View.GONE
-            binding.absoluteLayout.visibility = View.VISIBLE
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { TempBasalSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) } }
         }
-        binding.basalPercentLabel.labelFor = binding.basalPercentInput.editTextId
-        binding.basalAbsoluteLabel.labelFor = binding.basalAbsoluteInput.editTextId
-        binding.durationLabel.labelFor = binding.duration.editTextId
     }
 
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
+    private fun buildState(): TempBasalSheetState {
+        val pumpDescription = activePlugin.activePump.pumpDescription
+        val profile = profileFunction.getProfile()
+        val isPercentPump = pumpDescription.tempBasalStyle and PumpDescription.PERCENT == PumpDescription.PERCENT
+        val isAbsolutePump = pumpDescription.tempBasalStyle and PumpDescription.ABSOLUTE == PumpDescription.ABSOLUTE
+        val tempDurationStep = pumpDescription.tempDurationStep.toDouble()
+        return TempBasalSheetState(
+            percentAllowed = isPercentPump,
+            absoluteAllowed = isAbsolutePump,
+            defaultIsPercent = isPercentPump,
+            percentDefault = 100.0,
+            percentMax = pumpDescription.maxTempPercent.toDouble(),
+            percentStep = pumpDescription.tempPercentStep.toDouble(),
+            absoluteDefault = profile?.getBasal() ?: 0.0,
+            absoluteMax = pumpDescription.maxTempAbsolute,
+            absoluteStep = pumpDescription.tempAbsoluteStep,
+            absoluteDecimals = 2,
+            durationDefault = tempDurationStep,
+            durationMax = pumpDescription.tempMaxDuration.toDouble(),
+            durationStep = tempDurationStep
+        )
     }
 
-    override fun submit(): Boolean {
-        if (_binding == null) return false
+    private fun submit(inputs: TempBasalInputs) {
         var percent = 0
         var absolute = 0.0
-        val durationInMinutes = binding.duration.value.toInt()
-        val profile = profileFunction.getProfile() ?: return false
+        val durationInMinutes = inputs.durationMin
+        val profile = profileFunction.getProfile() ?: return
+        val isPercentPump = inputs.isPercent
         val actions: LinkedList<String> = LinkedList()
         if (isPercentPump) {
-            val basalPercentInput = SafeParse.stringToInt(binding.basalPercentInput.text)
+            val basalPercentInput = inputs.value.toInt()
             percent = constraintChecker.applyBasalPercentConstraints(ConstraintObject(basalPercentInput, aapsLogger), profile).value()
             actions.add(rh.gs(app.aaps.core.ui.R.string.tempbasal_label) + ": $percent%")
             actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationInMinutes))
             if (percent != basalPercentInput) actions.add(rh.gs(app.aaps.core.ui.R.string.constraint_applied))
         } else {
-            val basalAbsoluteInput = SafeParse.stringToDouble(binding.basalAbsoluteInput.text)
+            val basalAbsoluteInput = inputs.value
             absolute = constraintChecker.applyBasalConstraints(ConstraintObject(basalAbsoluteInput, aapsLogger), profile).value()
             actions.add(rh.gs(app.aaps.core.ui.R.string.tempbasal_label) + ": " + rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, absolute))
             actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, durationInMinutes))
@@ -161,7 +155,7 @@ class TempBasalDialog : DialogFragmentWithDate() {
                 }
             })
         }
-        return true
+        dismiss()
     }
 
     override fun onResume() {

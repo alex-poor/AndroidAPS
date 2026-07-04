@@ -602,7 +602,27 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             ageDays(TE.Type.CANNULA_CHANGE)?.let {
                 add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsSemantic.inRange))
             }
-            ageDays(TE.Type.SENSOR_CHANGE)?.let { add(HomeUiState.Supply("Sensor", it, AapsSemantic.inRange)) }
+            // Sensor: show a depleting countdown to EXPIRY (not just elapsed age). Life assumed 10 d
+            // (Dexcom G6); expiry = last SENSOR_CHANGE + life. Ring fraction = life remaining.
+            persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.SENSOR_CHANGE)?.let { te ->
+                val lifeMs = TimeUnit.DAYS.toMillis(10)
+                val remaining = te.timestamp + lifeMs - now
+                val fraction = (remaining.toFloat() / lifeMs).coerceIn(0f, 1f)
+                val remH = TimeUnit.MILLISECONDS.toHours(remaining)
+                val label = when {
+                    remaining <= 0 -> "Expired"
+                    remH >= 24     -> "${remH / 24}d ${remH % 24}h"
+                    remH >= 1      -> "${remH}h"
+                    else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
+                }
+                val color = when {
+                    remaining <= 0 -> AapsSemantic.low
+                    remH < 12      -> AapsSemantic.low
+                    remH < 48      -> AapsSemantic.high
+                    else           -> AapsSemantic.inRange
+                }
+                add(HomeUiState.Supply("Sensor", label, color, fraction = fraction))
+            }
             val res = pump.reservoirLevel
             if (res > 0) add(
                 HomeUiState.Supply(

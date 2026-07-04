@@ -2,11 +2,15 @@ package app.aaps.ui.dialogs
 
 import android.content.Context
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -20,6 +24,7 @@ import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.iob.IobCobCalculator
+import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.profile.ProfileUtil
@@ -30,32 +35,44 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.HardLimits
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogCarbsBinding
+import app.aaps.ui.dialogs.compose.CarbTt
+import app.aaps.ui.dialogs.compose.CarbsInputs
+import app.aaps.ui.dialogs.compose.CarbsSheet
+import app.aaps.ui.dialogs.compose.CarbsSheetState
 import com.google.common.base.Joiner
+import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
-import java.text.DecimalFormat
 import java.util.LinkedList
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlin.math.ceil
-import kotlin.math.max
 
-class CarbsDialog : DialogFragmentWithDate() {
+/**
+ * Redesigned Carbs dialog. UI is Compose ([CarbsSheet]); [submit] runs the SAME constraint +
+ * `OKDialog` confirmation + temp-target / carbs-`commandQueue.bolus` + automation-reminder path as
+ * the legacy dialog. Event time is expressed as the minutes offset (as before); the notes + duration
+ * (extended carbs) + TT presets + eat/bolus reminders are all preserved.
+ */
+class CarbsDialog : DaggerDialogFragment() {
 
+    @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var ctx: Context
     @Inject lateinit var rh: ResourceHelper
+    @Inject lateinit var preferences: Preferences
     @Inject lateinit var constraintChecker: ConstraintsChecker
     @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var iobCobCalculator: IobCobCalculator
@@ -67,181 +84,68 @@ class CarbsDialog : DialogFragmentWithDate() {
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var decimalFormatter: DecimalFormatter
+    @Inject lateinit var dateUtil: DateUtil
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
 
-    private val textWatcher: TextWatcher = object : TextWatcher {
-        override fun afterTextChanged(s: Editable) {
-            _binding?.let {
-                validateInputs()
-            }
-        }
-
-        override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
-        override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {}
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
-    private fun validateInputs() {
-        val maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble()
-        val time = binding.time.value.toInt()
-        if (time > 12 * 60 || time < -7 * 24 * 60) {
-            binding.time.value = 0.0
-            ToastUtils.warnToast(ctx, app.aaps.core.ui.R.string.constraint_applied)
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
+
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { CarbsSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) } }
         }
-        if (binding.duration.value > 10) {
-            binding.duration.value = 0.0
-            ToastUtils.warnToast(ctx, app.aaps.core.ui.R.string.constraint_applied)
-        }
-        if (binding.carbs.value.toInt() > maxCarbs) {
-            binding.carbs.value = 0.0
-            ToastUtils.warnToast(ctx, R.string.carbs_constraint_applied)
-        }
-    }
-
-    private var _binding: DialogCarbsBinding? = null
-
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
-
-    override fun onSaveInstanceState(savedInstanceState: Bundle) {
-        super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("time", binding.time.value)
-        savedInstanceState.putDouble("duration", binding.duration.value)
-        savedInstanceState.putDouble("carbs", binding.carbs.value)
-    }
-
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        onCreateViewGeneral()
-        _binding = DialogCarbsBinding.inflate(inflater, container, false)
-        binding.time.setOnValueChangedListener { timeOffset: Double ->
-            run {
-                val newTime = eventTimeOriginal + timeOffset.toLong() * 1000 * 60
-                updateDateTime(newTime)
-            }
-        }
-        return binding.root
-    }
-
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
-        if (preferences.get(BooleanKey.OverviewUseBolusReminder)) {
-            glucoseStatusProvider.glucoseStatusData?.let { glucoseStatus ->
-                if (glucoseStatus.glucose + 3 * glucoseStatus.delta < 70.0)
-                    binding.bolusReminder.visibility = View.VISIBLE
-            }
-        }
-        val maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble()
-        binding.time.setParams(
-            savedInstanceState?.getDouble("time")
-                ?: 0.0, -7 * 24 * 60.0, 12 * 60.0, 5.0, DecimalFormat("0"), false, binding.okcancel.ok, textWatcher
-        )
-
-        binding.duration.setParams(
-            savedInstanceState?.getDouble("duration")
-                ?: 0.0, 0.0, HardLimits.MAX_CARBS_DURATION_HOURS.toDouble(), 1.0, DecimalFormat("0"), false, binding.okcancel.ok, textWatcher
-        )
-
-        binding.carbs.setParams(
-            savedInstanceState?.getDouble("carbs")
-                ?: 0.0, -maxCarbs, maxCarbs, 1.0, DecimalFormat("0"), false, binding.okcancel.ok, textWatcher
-        )
-        val plus1text = toSignedString(preferences.get(IntKey.OverviewCarbsButtonIncrement1))
-        binding.plus1.text = plus1text
-        binding.plus1.contentDescription = rh.gs(app.aaps.core.ui.R.string.carbs) + " " + plus1text
-        binding.plus1.setOnClickListener {
-            binding.carbs.value = max(0.0, binding.carbs.value + preferences.get(IntKey.OverviewCarbsButtonIncrement1))
-            validateInputs()
-            binding.carbs.announceValue()
-        }
-
-        val plus2text = toSignedString(preferences.get(IntKey.OverviewCarbsButtonIncrement2))
-        binding.plus2.text = plus2text
-        binding.plus2.contentDescription = rh.gs(app.aaps.core.ui.R.string.carbs) + " " + plus2text
-        binding.plus2.setOnClickListener {
-            binding.carbs.value = max(0.0, binding.carbs.value + preferences.get(IntKey.OverviewCarbsButtonIncrement2))
-            validateInputs()
-            binding.carbs.announceValue()
-        }
-        val plus3text = toSignedString(preferences.get(IntKey.OverviewCarbsButtonIncrement3))
-        binding.plus3.text = plus3text
-        binding.plus3.contentDescription = rh.gs(app.aaps.core.ui.R.string.carbs) + " " + plus3text
-        binding.plus3.setOnClickListener {
-            binding.carbs.value = max(0.0, binding.carbs.value + preferences.get(IntKey.OverviewCarbsButtonIncrement3))
-            validateInputs()
-            binding.carbs.announceValue()
-        }
-
-        setOnValueChangedListener { eventTime: Long ->
-            run {
-                val timeOffset = ((eventTime - eventTimeOriginal) / (1000 * 60)).toDouble()
-                if (_binding != null) binding.time.value = timeOffset
-            }
-        }
-
-        iobCobCalculator.ads.actualBg()?.let { bgReading ->
-
-            if (bgReading.recalculated < 72) {
-
-                val activeTT = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
-                val hypoTTDuration = preferences.get(IntKey.OverviewHypoDuration)
-
-                var shouldAutoCheckHypo = true
-
-                if (activeTT != null) {
-
-                    val activeTarget = activeTT.highTarget
-                    val now = System.currentTimeMillis()
-                    val remainingDurationMin =
-                        ((activeTT.timestamp + activeTT.duration) - now) / 60000
-
-                    // Prevent auto-checking HypoTT when:
-                    // 1. Active TT target is above normal target
-                    // 2. Active TT lasts longer than the hypoTT preset
-                    if (activeTarget > Constants.NORMAL_TARGET_MGDL && remainingDurationMin > hypoTTDuration) {
-                        shouldAutoCheckHypo = false
-                    }
-                }
-
-                if (shouldAutoCheckHypo) {
-                    binding.hypoTt.isChecked = true
-                }
-            }
-        }
-        binding.hypoTt.setOnClickListener {
-            binding.activityTt.isChecked = false
-            binding.eatingSoonTt.isChecked = false
-        }
-        binding.activityTt.setOnClickListener {
-            binding.hypoTt.isChecked = false
-            binding.eatingSoonTt.isChecked = false
-        }
-        binding.eatingSoonTt.setOnClickListener {
-            binding.hypoTt.isChecked = false
-            binding.activityTt.isChecked = false
-        }
-        binding.durationLabel.labelFor = binding.duration.editTextId
-        binding.timeLabel.labelFor = binding.time.editTextId
-        binding.carbsLabel.labelFor = binding.carbs.editTextId
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         disposable.clear()
-        _binding = null
     }
 
-    private fun toSignedString(value: Int): String {
-        return if (value > 0) "+$value" else value.toString()
+    private fun buildState(): CarbsSheetState {
+        val maxCarbs = constraintChecker.getMaxCarbsAllowed().value().toDouble()
+        // Auto-select a Hypo temp target when BG is low (mirrors the legacy pre-check).
+        var autoHypo = false
+        iobCobCalculator.ads.actualBg()?.let { bgReading ->
+            if (bgReading.recalculated < 72) {
+                val activeTT = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
+                val hypoTTDuration = preferences.get(IntKey.OverviewHypoDuration)
+                var shouldAutoCheckHypo = true
+                if (activeTT != null) {
+                    val remainingDurationMin = ((activeTT.timestamp + activeTT.duration) - System.currentTimeMillis()) / 60000
+                    if (activeTT.highTarget > Constants.NORMAL_TARGET_MGDL && remainingDurationMin > hypoTTDuration) shouldAutoCheckHypo = false
+                }
+                autoHypo = shouldAutoCheckHypo
+            }
+        }
+        val showBolusReminder = preferences.get(BooleanKey.OverviewUseBolusReminder) &&
+            (glucoseStatusProvider.glucoseStatusData?.let { it.glucose + 3 * it.delta < 70.0 } ?: false)
+        return CarbsSheetState(
+            maxCarbs = maxCarbs,
+            quickIncrements = listOf(
+                preferences.get(IntKey.OverviewCarbsButtonIncrement1),
+                preferences.get(IntKey.OverviewCarbsButtonIncrement2),
+                preferences.get(IntKey.OverviewCarbsButtonIncrement3)
+            ),
+            maxDurationHours = HardLimits.MAX_CARBS_DURATION_HOURS.toInt(),
+            autoHypoTt = autoHypo,
+            showBolusReminder = showBolusReminder
+        )
     }
 
-    override fun submit(): Boolean {
-        if (_binding == null) return false
-        val carbs = binding.carbs.value.toInt()
+    private fun submit(inputs: CarbsInputs) {
+        val carbs = inputs.carbs
         var carbsAfterConstraints = constraintChecker.applyCarbsConstraints(ConstraintObject(carbs, aapsLogger)).value()
         val units = profileUtil.units
         val cob = iobCobCalculator.ads.getLastAutosensData("carbsDialog", aapsLogger, dateUtil)?.cob ?: 0.0
@@ -253,74 +157,44 @@ class CarbsDialog : DialogFragmentWithDate() {
         val hypoTT = preferences.get(UnitDoubleKey.OverviewHypoTarget)
         val actions: LinkedList<String?> = LinkedList()
         val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
-        val useAlarm = binding.alarmCheckBox.isChecked
-        val remindBolus = binding.bolusReminderCheckBox.isChecked
+        val useAlarm = inputs.useAlarm
+        val remindBolus = inputs.remindBolus
 
-        val activitySelected = binding.activityTt.isChecked
+        val eventTimeOriginal = dateUtil.nowWithoutMilliseconds()
+        val timeOffset = inputs.timeOffsetMin
+        val eventTime = eventTimeOriginal + timeOffset.toLong() * 1000 * 60
+        val eventTimeChanged = timeOffset != 0
+        val duration = inputs.durationHours
+        val notes = inputs.notes
+
+        val activitySelected = inputs.tt == CarbTt.ACTIVITY
         if (activitySelected)
-            actions.add(
-                rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(activityTT) + " " + unitLabel + " (" + rh.gs(
-                    app.aaps.core.ui.R.string.format_mins,
-                    activityTTDuration
-                ) + ")").formatColor(
-                    context,
-                    rh,
-                    app.aaps.core.ui.R.attr.tempTargetConfirmation
-                )
-            )
-        val eatingSoonSelected = binding.eatingSoonTt.isChecked
+            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(activityTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, activityTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
+        val eatingSoonSelected = inputs.tt == CarbTt.EATING_SOON
         if (eatingSoonSelected)
-            actions.add(
-                rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(eatingSoonTT) + " " + unitLabel + " (" + rh.gs(
-                    app.aaps.core.ui.R.string.format_mins,
-                    eatingSoonTTDuration
-                ) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation)
-            )
-        val hypoSelected = binding.hypoTt.isChecked
+            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(eatingSoonTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, eatingSoonTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
+        val hypoSelected = inputs.tt == CarbTt.HYPO
         if (hypoSelected)
-            actions.add(
-                rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(hypoTT) + " " + unitLabel + " (" + rh.gs(
-                    app.aaps.core.ui.R.string.format_mins,
-                    hypoTTDuration
-                ) + ")").formatColor(
-                    context,
-                    rh,
-                    app.aaps.core.ui.R.attr.tempTargetConfirmation
-                )
-            )
+            actions.add(rh.gs(R.string.temp_target_short) + ": " + (decimalFormatter.to1Decimal(hypoTT) + " " + unitLabel + " (" + rh.gs(app.aaps.core.ui.R.string.format_mins, hypoTTDuration) + ")").formatColor(context, rh, app.aaps.core.ui.R.attr.tempTargetConfirmation))
 
-        val timeOffset = binding.time.value.toInt()
         if (useAlarm && carbs > 0 && timeOffset > 0)
             actions.add(rh.gs(app.aaps.core.ui.R.string.alarminxmin, timeOffset).formatColor(context, rh, app.aaps.core.ui.R.attr.infoColor))
-        val duration = binding.duration.value.toInt()
         if (duration > 0)
             actions.add(rh.gs(app.aaps.core.ui.R.string.duration) + ": " + duration + rh.gs(app.aaps.core.interfaces.R.string.shorthour))
         if (carbsAfterConstraints > 0) {
-            actions.add(
-                rh.gs(app.aaps.core.ui.R.string.carbs) + ": " + "<font color='" + rh.gac(
-                    context,
-                    app.aaps.core.ui.R.attr.carbsColor
-                ) + "'>" + rh.gs(app.aaps.core.objects.R.string.format_carbs, carbsAfterConstraints) + "</font>"
-            )
+            actions.add(rh.gs(app.aaps.core.ui.R.string.carbs) + ": " + "<font color='" + rh.gac(context, app.aaps.core.ui.R.attr.carbsColor) + "'>" + rh.gs(app.aaps.core.objects.R.string.format_carbs, carbsAfterConstraints) + "</font>")
             if (carbsAfterConstraints != carbs)
                 actions.add("<font color='" + rh.gac(context, app.aaps.core.ui.R.attr.warningColor) + "'>" + rh.gs(R.string.carbs_constraint_applied) + "</font>")
         }
         if (carbsAfterConstraints < 0) {
             if (carbsAfterConstraints < -cob) carbsAfterConstraints = ceil(-cob).toInt()
             if (timeOffset != 0) carbsAfterConstraints = 0
-            actions.add(
-                rh.gs(app.aaps.core.ui.R.string.carbs) + ": " + "<font color='" + rh.gac(
-                    context,
-                    app.aaps.core.ui.R.attr.warningColor
-                ) + "'>" + rh.gs(app.aaps.core.objects.R.string.format_carbs, carbsAfterConstraints) + "</font>"
-            )
+            actions.add(rh.gs(app.aaps.core.ui.R.string.carbs) + ": " + "<font color='" + rh.gac(context, app.aaps.core.ui.R.attr.warningColor) + "'>" + rh.gs(app.aaps.core.objects.R.string.format_carbs, carbsAfterConstraints) + "</font>")
             if (carbsAfterConstraints != carbs)
                 actions.add("<font color='" + rh.gac(context, app.aaps.core.ui.R.attr.warningColor) + "'>" + rh.gs(R.string.carbs_constraint_applied) + "</font>")
         }
-        val notes = binding.notesLayout.notes.text.toString()
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
-
         if (eventTimeChanged)
             actions.add(rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
 
@@ -401,7 +275,7 @@ class CarbsDialog : DialogFragmentWithDate() {
             activity?.let { activity ->
                 OKDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.carbs), rh.gs(app.aaps.core.ui.R.string.no_action_selected))
             }
-        return true
+        dismiss()
     }
 
     override fun onResume() {

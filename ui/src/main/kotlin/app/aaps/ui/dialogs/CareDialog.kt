@@ -1,13 +1,17 @@
 package app.aaps.ui.dialogs
 
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
 import androidx.annotation.StringRes
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentManager
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
@@ -21,20 +25,31 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.Translator
 import app.aaps.core.keys.BooleanKey
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
-import app.aaps.ui.databinding.DialogCareBinding
+import app.aaps.ui.dialogs.compose.CareInputs
+import app.aaps.ui.dialogs.compose.CareMeter
+import app.aaps.ui.dialogs.compose.CareSheet
+import app.aaps.ui.dialogs.compose.CareSheetState
 import com.google.common.base.Joiner
+import dagger.android.support.DaggerDialogFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
-import java.text.DecimalFormat
 import java.util.LinkedList
 import javax.inject.Inject
 
-class CareDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
+/**
+ * Redesigned generic careportal event dialog. UI is Compose ([CareSheet]); [submit] runs the SAME
+ * `TE` construction + `persistenceLayer.insertPumpTherapyEventIfNewByTimestamp` + `uel.log` /
+ * `OKDialog` confirmation path as the legacy dialog. Which fields are shown (glucose + source /
+ * duration / notes) is derived from the [UiInteraction.EventType] arg, exactly as before.
+ */
+class CareDialog(val fm: FragmentManager) : DaggerDialogFragment() {
 
     @Inject lateinit var rh: ResourceHelper
     @Inject lateinit var profileFunction: ProfileFunction
@@ -42,22 +57,17 @@ class CareDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Inject lateinit var profileUtil: ProfileUtil
+    @Inject lateinit var preferences: Preferences
+    @Inject lateinit var dateUtil: DateUtil
 
     private val disposable = CompositeDisposable()
 
     private var options: UiInteraction.EventType = UiInteraction.EventType.BGCHECK
 
-    //private var valuesWithUnit = mutableListOf<XXXValueWithUnit?>()
     private var valuesWithUnit = mutableListOf<ValueWithUnit?>()
 
     @StringRes
     private var event: Int = app.aaps.core.ui.R.string.none
-
-    private var _binding: DialogCareBinding? = null
-
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
 
     override fun onSaveInstanceState(savedInstanceState: Bundle) {
         super.onSaveInstanceState(savedInstanceState)
@@ -65,109 +75,99 @@ class CareDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
         savedInstanceState.putInt("options", options.ordinal)
     }
 
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        onCreateViewGeneral()
-        _binding = DialogCareBinding.inflate(inflater, container, false)
-        return binding.root
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        dialog?.window?.setGravity(Gravity.BOTTOM)
+        dialog?.window?.setBackgroundDrawableResource(android.R.color.transparent)
     }
 
-    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        super.onViewCreated(view, savedInstanceState)
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)
+        dialog?.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN)
+        isCancelable = true
+        dialog?.setCanceledOnTouchOutside(false)
 
         (savedInstanceState ?: arguments)?.let {
             event = it.getInt("event", app.aaps.core.ui.R.string.error)
             options = UiInteraction.EventType.entries.toTypedArray()[it.getInt("options", 0)]
         }
 
-        binding.icon.setImageResource(
-            when (options) {
-                UiInteraction.EventType.BGCHECK        -> app.aaps.core.objects.R.drawable.ic_cp_bgcheck
-                UiInteraction.EventType.SENSOR_INSERT  -> app.aaps.core.objects.R.drawable.ic_cp_cgm_insert
-                UiInteraction.EventType.BATTERY_CHANGE -> app.aaps.core.objects.R.drawable.ic_cp_pump_battery
-                UiInteraction.EventType.NOTE           -> app.aaps.core.objects.R.drawable.ic_cp_note
-                UiInteraction.EventType.EXERCISE       -> app.aaps.core.objects.R.drawable.ic_cp_exercise
-                UiInteraction.EventType.QUESTION       -> app.aaps.core.objects.R.drawable.ic_cp_question
-                UiInteraction.EventType.ANNOUNCEMENT   -> app.aaps.core.objects.R.drawable.ic_cp_announcement
-            }
-        )
-        binding.title.text = rh.gs(
-            when (options) {
-                UiInteraction.EventType.BGCHECK        -> app.aaps.core.ui.R.string.careportal_bgcheck
-                UiInteraction.EventType.SENSOR_INSERT  -> app.aaps.core.ui.R.string.cgm_sensor_insert
-                UiInteraction.EventType.BATTERY_CHANGE -> app.aaps.core.ui.R.string.pump_battery_change
-                UiInteraction.EventType.NOTE           -> app.aaps.core.ui.R.string.careportal_note
-                UiInteraction.EventType.EXERCISE       -> app.aaps.core.ui.R.string.careportal_exercise
-                UiInteraction.EventType.QUESTION       -> app.aaps.core.ui.R.string.careportal_question
-                UiInteraction.EventType.ANNOUNCEMENT   -> app.aaps.core.ui.R.string.careportal_announcement
-            }
-        )
-
-        when (options) {
-            UiInteraction.EventType.QUESTION,
-            UiInteraction.EventType.ANNOUNCEMENT,
-            UiInteraction.EventType.BGCHECK        -> {
-                binding.durationLayout.visibility = View.GONE
-            }
-
-            UiInteraction.EventType.SENSOR_INSERT,
-            UiInteraction.EventType.BATTERY_CHANGE -> {
-                binding.bgLayout.visibility = View.GONE
-                binding.bgsource.visibility = View.GONE
-                binding.durationLayout.visibility = View.GONE
-            }
-
-            UiInteraction.EventType.NOTE,
-            UiInteraction.EventType.EXERCISE       -> {
-                binding.bgLayout.visibility = View.GONE
-                binding.bgsource.visibility = View.GONE
-            }
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent { AapsTheme { CareSheet(state = buildState(), onSubmit = ::submit, onClose = { dismiss() }) } }
         }
-
-        val bg = profileUtil.fromMgdlToUnits(glucoseStatusProvider.glucoseStatusData?.glucose ?: 0.0)
-        val bgTextWatcher: TextWatcher = object : TextWatcher {
-            override fun afterTextChanged(s: Editable) {}
-            override fun beforeTextChanged(s: CharSequence, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence, start: Int, before: Int, count: Int) {
-                if (binding.sensor.isChecked) binding.meter.isChecked = true
-            }
-        }
-
-        if (profileFunction.getUnits() == GlucoseUnit.MMOL) {
-            binding.bgUnits.text = rh.gs(app.aaps.core.ui.R.string.mmol)
-            binding.bg.setParams(
-                savedInstanceState?.getDouble("bg")
-                    ?: bg, 2.0, 30.0, 0.1, DecimalFormat("0.0"), false, binding.okcancel.ok, bgTextWatcher
-            )
-        } else {
-            binding.bgUnits.text = rh.gs(app.aaps.core.ui.R.string.mgdl)
-            binding.bg.setParams(
-                savedInstanceState?.getDouble("bg")
-                    ?: bg, 36.0, 500.0, 1.0, DecimalFormat("0"), false, binding.okcancel.ok, bgTextWatcher
-            )
-        }
-        binding.duration.setParams(
-            savedInstanceState?.getDouble("duration")
-                ?: 0.0, 0.0, Constants.MAX_PROFILE_SWITCH_DURATION, 10.0, DecimalFormat("0"), false, binding.okcancel.ok
-        )
-        if (options == UiInteraction.EventType.NOTE || options == UiInteraction.EventType.QUESTION || options == UiInteraction.EventType.ANNOUNCEMENT || options == UiInteraction.EventType.EXERCISE)
-            binding.notesLayout.root.visibility = View.VISIBLE // independent to preferences
-        binding.bgLabel.labelFor = binding.bg.editTextId
-        binding.durationLabel.labelFor = binding.duration.editTextId
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        _binding = null
+        disposable.clear()
     }
 
-    override fun submit(): Boolean {
+    private fun buildState(): CareSheetState {
+        // Visibility mirrors the legacy XML-driven dialog exactly:
+        //   glucose + source: BGCHECK, QUESTION, ANNOUNCEMENT
+        //   duration:         NOTE, EXERCISE
+        //   notes:            NOTE, QUESTION, ANNOUNCEMENT, EXERCISE (independent of preferences)
+        val showBg = when (options) {
+            UiInteraction.EventType.BGCHECK,
+            UiInteraction.EventType.QUESTION,
+            UiInteraction.EventType.ANNOUNCEMENT -> true
+
+            else                                 -> false
+        }
+        val showDuration = when (options) {
+            UiInteraction.EventType.NOTE,
+            UiInteraction.EventType.EXERCISE     -> true
+
+            else                                 -> false
+        }
+        val showNotes = when (options) {
+            UiInteraction.EventType.NOTE,
+            UiInteraction.EventType.QUESTION,
+            UiInteraction.EventType.ANNOUNCEMENT,
+            UiInteraction.EventType.EXERCISE     -> true
+
+            else                                 -> preferences.get(BooleanKey.OverviewShowNotesInDialogs)
+        }
+
+        val mmol = profileFunction.getUnits() == GlucoseUnit.MMOL
+        val bgInitial = profileUtil.fromMgdlToUnits(glucoseStatusProvider.glucoseStatusData?.glucose ?: 0.0)
+
+        return CareSheetState(
+            title = rh.gs(
+                when (options) {
+                    UiInteraction.EventType.BGCHECK        -> app.aaps.core.ui.R.string.careportal_bgcheck
+                    UiInteraction.EventType.SENSOR_INSERT  -> app.aaps.core.ui.R.string.cgm_sensor_insert
+                    UiInteraction.EventType.BATTERY_CHANGE -> app.aaps.core.ui.R.string.pump_battery_change
+                    UiInteraction.EventType.NOTE           -> app.aaps.core.ui.R.string.careportal_note
+                    UiInteraction.EventType.EXERCISE       -> app.aaps.core.ui.R.string.careportal_exercise
+                    UiInteraction.EventType.QUESTION       -> app.aaps.core.ui.R.string.careportal_question
+                    UiInteraction.EventType.ANNOUNCEMENT   -> app.aaps.core.ui.R.string.careportal_announcement
+                }
+            ),
+            submitLabel = rh.gs(app.aaps.core.ui.R.string.ok),
+            showBg = showBg,
+            bgInitial = bgInitial,
+            bgMin = if (mmol) 2.0 else 36.0,
+            bgMax = if (mmol) 30.0 else 500.0,
+            bgStep = if (mmol) 0.1 else 1.0,
+            bgDecimals = if (mmol) 1 else 0,
+            bgUnit = if (mmol) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl),
+            showDuration = showDuration,
+            durationMax = Constants.MAX_PROFILE_SWITCH_DURATION,
+            durationStep = 10.0,
+            showNotes = showNotes
+        )
+    }
+
+    private fun submit(inputs: CareInputs) {
         val enteredBy = "AAPS"
         val unitResId = if (profileFunction.getUnits() == GlucoseUnit.MGDL) app.aaps.core.ui.R.string.mgdl else app.aaps.core.ui.R.string.mmol
 
+        var eventTime = dateUtil.nowWithoutMilliseconds()
         eventTime -= eventTime % 1000
+        val eventTimeChanged = false
 
         val therapyEvent = TE(
             timestamp = eventTime,
@@ -187,24 +187,24 @@ class CareDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
         actions.add(rh.gs(R.string.confirm_treatment))
         if (options == UiInteraction.EventType.BGCHECK || options == UiInteraction.EventType.QUESTION || options == UiInteraction.EventType.ANNOUNCEMENT) {
             val meterType =
-                when {
-                    binding.meter.isChecked  -> TE.MeterType.FINGER
-                    binding.sensor.isChecked -> TE.MeterType.SENSOR
-                    else                     -> TE.MeterType.MANUAL
+                when (inputs.meter) {
+                    CareMeter.METER  -> TE.MeterType.FINGER
+                    CareMeter.SENSOR -> TE.MeterType.SENSOR
+                    CareMeter.MANUAL -> TE.MeterType.MANUAL
                 }
             actions.add(rh.gs(R.string.glucose_type) + ": " + translator.translate(meterType))
-            actions.add(rh.gs(app.aaps.core.ui.R.string.bg_label) + ": " + profileUtil.stringInCurrentUnitsDetect(binding.bg.value) + " " + rh.gs(unitResId))
+            actions.add(rh.gs(app.aaps.core.ui.R.string.bg_label) + ": " + profileUtil.stringInCurrentUnitsDetect(inputs.bg) + " " + rh.gs(unitResId))
             therapyEvent.glucoseType = meterType
-            therapyEvent.glucose = binding.bg.value
-            valuesWithUnit.add(ValueWithUnit.fromGlucoseUnit(binding.bg.value, profileFunction.getUnits()))
+            therapyEvent.glucose = inputs.bg
+            valuesWithUnit.add(ValueWithUnit.fromGlucoseUnit(inputs.bg, profileFunction.getUnits()))
             valuesWithUnit.add(ValueWithUnit.TEMeterType(meterType))
         }
         if (options == UiInteraction.EventType.NOTE || options == UiInteraction.EventType.EXERCISE) {
-            actions.add(rh.gs(app.aaps.core.ui.R.string.duration_label) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, binding.duration.value.toInt()))
-            therapyEvent.duration = T.mins(binding.duration.value.toLong()).msecs()
-            valuesWithUnit.add(ValueWithUnit.Minute(binding.duration.value.toInt()).takeIf { binding.duration.value != 0.0 })
+            actions.add(rh.gs(app.aaps.core.ui.R.string.duration_label) + ": " + rh.gs(app.aaps.core.ui.R.string.format_mins, inputs.durationMin))
+            therapyEvent.duration = T.mins(inputs.durationMin.toLong()).msecs()
+            valuesWithUnit.add(ValueWithUnit.Minute(inputs.durationMin).takeIf { inputs.durationMin != 0 })
         }
-        val notes = binding.notesLayout.notes.text.toString()
+        val notes = inputs.notes
         if (notes.isNotEmpty()) {
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
             therapyEvent.note = notes
@@ -235,7 +235,7 @@ class CareDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
                     note = notes,
                     listValues = valuesWithUnit.filterNotNull()
                 ).subscribe()
-                if (therapyEvent.type == TE.Type.SENSOR_CHANGE &&  preferences.get(BooleanKey.SiteRotationManageCgm)) {
+                if (therapyEvent.type == TE.Type.SENSOR_CHANGE && preferences.get(BooleanKey.SiteRotationManageCgm)) {
                     SiteRotationDialog().also { srd ->
                         srd.arguments = Bundle().also { args ->
                             args.putLong("time", therapyEvent.timestamp)
@@ -247,6 +247,6 @@ class CareDialog(val fm: FragmentManager) : DialogFragmentWithDate() {
                 }
             }, null)
         }
-        return true
+        dismiss()
     }
 }
