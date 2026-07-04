@@ -239,4 +239,8 @@
     <string name="hovorka_enable_smb_summary">When a temp basal cannot lower a post-meal peak fast enough, deliver a small immediate correction bolus (a fraction of the deficit, bounded by max IOB / max bolus). Requires SMB objective. Highest-risk feature; forced to zero on any hypo. Off = temp-basal only.</string>
     <string name="hovorka_meal_detection_title">Unannounced-meal detection — EXPERIMENTAL</string>
     <string name="hovorka_meal_detection_summary">Detect meals you did not enter: when glucose rises faster than known insulin and carbs explain, infer the carbs and react earlier (best paired with SMB). Biased hard against false positives — off around lows and for a while after, and while announced carbs are still active. Off = only announced carbs are used.</string>
+    <string name="hovorka_param_id_title">Auto re-tune model from my data — EXPERIMENTAL</string>
+    <string name="hovorka_param_id_summary">Once a day, in the background, check your recent glucose/insulin/carb history and, if your insulin sensitivity has drifted from your profile, gently re-tune the model the controller uses (never more than one bounded step from your profile; the basal you take is unchanged). Only acts when your data clearly shows drift; conservative in the low-glucose direction. You are notified whenever it changes anything, and every run is shown below. Off = model stays exactly as your profile defines it.</string>
+    <string name="hovorka_param_id_status_title">Last model re-tune</string>
+    <string name="hovorka_param_id_status_none">Has not run yet (enable the setting above, then it runs once a day).</string>
 </resources>
