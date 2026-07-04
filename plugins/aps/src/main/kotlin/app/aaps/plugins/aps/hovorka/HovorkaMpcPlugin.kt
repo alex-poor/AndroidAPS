@@ -1,6 +1,7 @@
 package app.aaps.plugins.aps.hovorka
 
 import android.content.Context
+import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceManager
 import androidx.preference.PreferenceScreen
@@ -15,6 +16,7 @@ import app.aaps.core.interfaces.iob.IobCobCalculator
 import app.aaps.plugins.aps.openAPSSMB.GlucoseStatusCalculatorSMB
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.profile.Profile
@@ -22,9 +24,11 @@ import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAPSCalculationFinished
+import app.aaps.core.interfaces.rx.events.EventNewNotification
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
+import app.aaps.core.keys.StringKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.target
 import app.aaps.core.validators.preferences.AdaptiveDoublePreference
@@ -37,6 +41,7 @@ import javax.inject.Singleton
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
+import kotlin.math.roundToInt
 
 /**
  * Hovorka nonlinear-MPC dosing plugin (EXPERIMENTAL, in-silico validated only).
@@ -124,6 +129,21 @@ class HovorkaMpcPlugin @Inject constructor(
                     summary = R.string.hovorka_meal_detection_summary, title = R.string.hovorka_meal_detection_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaParamId,
+                    summary = R.string.hovorka_param_id_summary, title = R.string.hovorka_param_id_title
+                )
+            )
+            // Read-only transparency block: the last re-tune's timestamp, whether it changed anything, and what.
+            addPreference(
+                Preference(context).apply {
+                    title = rh.gs(R.string.hovorka_param_id_status_title)
+                    summary = preferences.get(StringKey.HovorkaParamIdStatus).ifEmpty { rh.gs(R.string.hovorka_param_id_status_none) }
+                    isSelectable = false
+                    isPersistent = false
+                }
+            )
         }
     }
 
@@ -147,7 +167,13 @@ class HovorkaMpcPlugin @Inject constructor(
         // their basal/profile-target — instead of population weight-only params. Cached (calibration heavy).
         val isfMgdl = profile.getProfileIsfMgdl()
         val icGPerU = profile.getIc()
-        val model = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol)
+        val baseModel = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol)
+        // 4: re-identify structural params (insulin sensitivity / EGP / carb-absorption) from recent history —
+        // a daily background re-tune, stateless from the personalise() prior so the model is never more than one
+        // bounded step from the profile. OFF by default; surfaces its result to the UI (reason + settings + a
+        // notification on any change). The basal the user actually takes is unaffected — this only re-tunes the
+        // MODEL the MPC rolls out on.
+        val model = reIdentifiedModel(baseModel, bodyWeightKg, isfMgdl, now)
         val maxBasalUhr = constraintsChecker.getMaxBasalAllowed(profile).value()
         val maxBasalMuMin = maxBasalUhr * 1000.0 / 60.0
         // 2d: adapt the OPERATING basal (the MPC's nominal / floor centre) from recent daily outcomes if
@@ -215,7 +241,8 @@ class HovorkaMpcPlugin @Inject constructor(
         val mbNote = " | eventualMB=%.1f (IOB %.1f, COB %.0f)".format(eventualLinearMmol, iobNow, cobG)
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, decision.reason)
+        val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -255,6 +282,95 @@ class HovorkaMpcPlugin @Inject constructor(
             aapsLogger.debug(LTag.APS, "HovorkaMPC personalised: W=$w ISF=$isfMgdl IC=$icGPerU basal=$basalUhr target=$targetMmol")
         }
         return cachedModel!!
+    }
+
+    // 4 re-identification: daily cache (like 2d). Stateless — recomputed from a trailing window each day, ALWAYS
+    // from the personalise() prior (no compounding), so the re-tuned model can never be more than one bounded
+    // HovorkaParamId step away from the profile.
+    private var reIdCacheDay = -1L
+    private var reIdCacheModel: HovorkaModel? = null
+    private var reIdReasonShort = ""      // short note appended to the MPC reason (loop tab)
+
+    /**
+     * 4: re-identify SI / EGP / carb-absorption from the last [RE_ID_DAYS] days of the user's own logs and, if
+     * the data clearly shows drift, return a re-tuned model; otherwise return [base] unchanged. Runs once per day
+     * (cached). Persists a human-readable status for the settings screen and notifies the user on any change.
+     */
+    private fun reIdentifiedModel(base: HovorkaModel, weightKg: Double, profileIsfMgdl: Double, now: Long): HovorkaModel {
+        if (!preferences.get(BooleanKey.HovorkaParamId)) { reIdReasonShort = ""; return base }
+        val dayKey = now / DAY_MS
+        if (dayKey == reIdCacheDay && reIdCacheModel != null) return reIdCacheModel!!
+        reIdCacheDay = dayKey
+        val samples = try {
+            reconstructIdSamples(now)
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.APS, "HovorkaMPC 4 re-ID reconstruction failed", e); emptyList()
+        }
+        if (samples.size < RE_ID_MIN_SAMPLES) {
+            reIdCacheModel = base; reIdReasonShort = "re-ID: waiting for data"
+            return base
+        }
+        val res = HovorkaParamId(base.p).identify(samples)
+        val model = if (res.accepted) HovorkaModel(res.params) else base
+        reIdCacheModel = model
+        publishReIdResult(res, profileIsfMgdl, now)
+        return model
+    }
+
+    /** Build the 5-min IdSample history (CGM + enacted basal + boluses + carbs) over the re-ID window. */
+    private fun reconstructIdSamples(now: Long): List<IdSample> {
+        val start = now - RE_ID_DAYS * DAY_MS
+        val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
+        if (bg.isEmpty()) return emptyList()
+        val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true)
+        val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
+        val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
+        val profile = profileFunction.getProfile() ?: return emptyList()
+        fun basalUhrAt(ts: Long): Double {
+            val tb = tbrs.lastOrNull { it.timestamp <= ts && ts < it.timestamp + it.duration }
+            val baseB = profile.getBasal(ts)
+            return when { tb == null -> baseB; tb.isAbsolute -> tb.rate; else -> baseB * tb.rate / 100.0 }
+        }
+        val stepMs = 5 * 60_000L
+        val out = ArrayList<IdSample>()
+        var bgIdx = 0
+        var lastCgm = bg.first().value / MGDL_PER_MMOL       // carried forward across short sensor gaps
+        var t = start
+        while (t + stepMs <= now) {
+            val tEnd = t + stepMs
+            while (bgIdx < bg.size && bg[bgIdx].timestamp < tEnd) { lastCgm = bg[bgIdx].value / MGDL_PER_MMOL; bgIdx++ }
+            var bolusU = 0.0; for (b in boluses) if (b.timestamp in t until tEnd) bolusU += b.amount
+            var carbsG = 0.0; for (c in carbs) if (c.timestamp in t until tEnd) carbsG += c.amount
+            out.add(IdSample(lastCgm, basalUhrAt(t + stepMs / 2), bolusU, carbsG))
+            t = tEnd
+        }
+        return out
+    }
+
+    /** Persist a human-readable status for the settings screen + reason, and notify the user on any change. */
+    private fun publishReIdResult(res: IdResult, profileIsfMgdl: Double, now: Long) {
+        val whenStr = dateUtil.dateAndTimeString(now)
+        if (res.accepted) {
+            val siPct = ((res.siMul - 1.0) * 100.0).roundToInt()
+            val egpPct = ((res.egp0Mul - 1.0) * 100.0).roundToInt()
+            val agPct = ((res.agMul - 1.0) * 100.0).roundToInt()
+            val effIsf = profileIsfMgdl * res.siMul          // ISF scales ~with the SI multiplier (approx, for display)
+            val status = ("%s: UPDATED. Insulin sensitivity %+d%% (ISF %.0f→%.0f mg/dL/U approx), " +
+                "endogenous glucose %+d%%, carb absorption %+d%%. Forecast error %.2f→%.2f mmol/L. " +
+                "Model is at most one bounded step from your profile; the basal you take is unchanged.")
+                .format(whenStr, siPct, profileIsfMgdl, effIsf, egpPct, agPct, res.rmsePriorMmol, res.rmseFitMmol)
+            preferences.put(StringKey.HovorkaParamIdStatus, status)
+            reIdReasonShort = "re-ID ISF%+d%%".format(siPct)
+            rxBus.send(EventNewNotification(Notification(RE_ID_NOTIF_ID,
+                "HovorkaMPC re-tuned your model: insulin sensitivity %+d%% (ISF≈%.0f→%.0f mg/dL/U). Basal unchanged. Details in HovorkaMPC settings.".format(siPct, profileIsfMgdl, effIsf),
+                Notification.INFO)))
+            aapsLogger.info(LTag.APS, "HovorkaMPC 4 re-ID: $status")
+        } else {
+            val status = "%s: no change — your profile still matches your data. (%s)".format(whenStr, res.reason)
+            preferences.put(StringKey.HovorkaParamIdStatus, status)
+            reIdReasonShort = "re-ID: no change"
+            aapsLogger.info(LTag.APS, "HovorkaMPC 4 re-ID: $status")
+        }
     }
 
     // 2d adaptive-gain cache: the adapted operating basal is a DAILY quantity, so recompute once per day
@@ -379,6 +495,9 @@ class HovorkaMpcPlugin @Inject constructor(
         const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
         const val HYPO_SUSPEND_MMOL = 3.9        // at/below this RAW CGM value, force a hard 0 U/hr suspend
         const val SMB_ABS_CAP_U = 1.5            // 3b: absolute per-tick microbolus cap (further bounded by maxIOB/maxBolus)
+        const val RE_ID_DAYS = 10L               // 4: trailing window the re-identification fits over
+        const val RE_ID_MIN_SAMPLES = 864        // 4: require ~3 days of 5-min samples before re-tuning
+        const val RE_ID_NOTIF_ID = 4210          // 4: notification id for a model re-tune (INFO; re-usable)
         const val EVENTUAL_MIN_MMOL = 1.5        // #1: sanity clamp on the mass-balance eventual (bad COB/IOB)
         const val EVENTUAL_MAX_MMOL = 30.0
     }
