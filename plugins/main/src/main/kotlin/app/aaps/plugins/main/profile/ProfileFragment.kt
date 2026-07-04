@@ -13,9 +13,15 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.GlucoseUnit
+import app.aaps.plugins.main.profile.compose.CategoryConstraints
+import app.aaps.plugins.main.profile.compose.EditableBlock
 import app.aaps.plugins.main.profile.compose.ProfileBlock
+import app.aaps.plugins.main.profile.compose.ProfileEditState
+import app.aaps.plugins.main.profile.compose.ProfileEditor
+import app.aaps.plugins.main.profile.compose.ProfileEditorCallbacks
 import app.aaps.plugins.main.profile.compose.ProfileView
 import app.aaps.plugins.main.profile.compose.ProfileViewState
+import app.aaps.plugins.main.profile.ui.ProfileBlockOps
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
@@ -48,6 +54,7 @@ import com.google.android.material.tabs.TabLayout
 import dagger.android.support.DaggerFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
+import org.json.JSONArray
 import java.math.RoundingMode
 import java.text.DecimalFormat
 import javax.inject.Inject
@@ -109,8 +116,10 @@ class ProfileFragment : DaggerFragment() {
     // This property is only valid between onCreateView and onDestroyView.
     private val binding get() = _binding!!
 
-    // ---- Redesigned read-only Profile view (Compose overlay; "Edit" reveals the legacy editor) ----
+    // ---- Redesigned Profile view + editor (Compose overlay) ----
     private val profileViewState = mutableStateOf(ProfileViewState())
+    private val editMode = mutableStateOf(false)
+    private val profileEditState = mutableStateOf<ProfileEditState?>(null)
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = ProfileFragmentBinding.inflate(inflater, container, false)
@@ -142,10 +151,24 @@ class ProfileFragment : DaggerFragment() {
         binding.isfDynamicLabel.visibility = aps.supportsDynamicIsf().toVisibility()
         binding.icDynamicLabel.visibility = aps.supportsDynamicIc().toVisibility()
 
-        // Read-only Compose profile view overlaying the legacy editor; "Edit" hides it to reveal the editor.
+        // Compose profile overlay: read-only ProfileView, or the editable ProfileEditor when in edit mode.
+        // The legacy XML editor stays intact underneath as the "Manage" (add/clone/delete) fallback.
         binding.composeProfile.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         binding.composeProfile.setContent {
-            AapsTheme { ProfileView(profileViewState.value, onEdit = { _binding?.composeProfile?.visibility = View.GONE }) }
+            AapsTheme {
+                if (editMode.value) {
+                    profileEditState.value?.let { st ->
+                        ProfileEditor(
+                            state = st,
+                            callbacks = editorCallbacks,
+                            onSave = { onEditorSave() },
+                            onManage = { revealLegacyEditor() }
+                        )
+                    }
+                } else {
+                    ProfileView(profileViewState.value, onEdit = { enterEditMode() })
+                }
+            }
         }
         buildProfileView()
     }
@@ -182,6 +205,212 @@ class ProfileFragment : DaggerFragment() {
             dailyBasal = String.format(java.util.Locale.getDefault(), "%.1f U/day", dayU),
             basal = basal, isf = isf, ic = ic, target = target
         )
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    //  Compose editable editor (Section 4). SAFETY-CRITICAL: all array edits go through
+    //  ProfileBlockOps, which is a verbatim port of TimeListEdit. Every mutation runs doEdit()
+    //  (marks edited + refreshes graphs) and rebuilds the editor state, exactly like the legacy
+    //  editor's `save` Runnable.
+    // ---------------------------------------------------------------------------------------------
+
+    private fun enterEditMode() {
+        if (profilePlugin.numOfProfiles == 0) profilePlugin.addNewProfile()
+        buildProfileEditState()
+        editMode.value = true
+        _binding?.composeProfile?.visibility = View.VISIBLE
+    }
+
+    private fun revealLegacyEditor() {
+        // Hand off to the legacy XML editor (kept intact) for profile add/clone/delete + options menu.
+        editMode.value = false
+        _binding?.composeProfile?.visibility = View.GONE
+    }
+
+    private fun onEditorSave() {
+        if (!profilePlugin.isValidEditState(activity)) return
+        uel.log(
+            action = Action.STORE_PROFILE, source = Sources.LocalProfile,
+            value = ValueWithUnit.SimpleString(profilePlugin.currentProfile()?.name ?: "")
+        )
+        profilePlugin.storeSettings(requireActivity(), dateUtil.now())
+        build()                 // refresh legacy views + read-only Compose view
+        editMode.value = false  // back to read-only
+    }
+
+    /** Category constraints copied EXACTLY from the legacy TimeListEdit call sites in [build]. */
+    private fun buildProfileEditState() {
+        val currentProfile = profilePlugin.currentProfile() ?: run {
+            profileEditState.value = null
+            return
+        }
+        val pumpDescription = activePlugin.activePump.pumpDescription
+        val mgdl = currentProfile.mgdl
+
+        val basalC = CategoryConstraints(
+            min1 = pumpDescription.basalMinimumRate, max1 = pumpDescription.basalMaximumRate,
+            step = 0.01, decimals = 2, unitLabel = "U/h", isPair = false
+        )
+        val icC = CategoryConstraints(
+            min1 = hardLimits.minIC(), max1 = hardLimits.maxIC(),
+            step = 0.1, decimals = 1, unitLabel = "g/U", isPair = false
+        )
+        val isfC: CategoryConstraints
+        val targetC: CategoryConstraints
+        if (mgdl) {
+            isfC = CategoryConstraints(
+                min1 = HardLimits.MIN_ISF, max1 = HardLimits.MAX_ISF,
+                step = 1.0, decimals = 0, unitLabel = "mg/dL", isPair = false
+            )
+            targetC = CategoryConstraints(
+                min1 = HardLimits.LIMIT_MIN_BG[0], max1 = HardLimits.LIMIT_MIN_BG[1],
+                min2 = HardLimits.LIMIT_TARGET_BG[0], max2 = HardLimits.LIMIT_TARGET_BG[1],
+                step = 1.0, decimals = 0, unitLabel = "mg/dL", isPair = true
+            )
+        } else {
+            isfC = CategoryConstraints(
+                min1 = roundUp(profileUtil.fromMgdlToUnits(HardLimits.MIN_ISF, GlucoseUnit.MMOL)),
+                max1 = roundDown(profileUtil.fromMgdlToUnits(HardLimits.MAX_ISF, GlucoseUnit.MMOL)),
+                step = 0.1, decimals = 1, unitLabel = "mmol/L", isPair = false
+            )
+            targetC = CategoryConstraints(
+                min1 = roundUp(profileUtil.fromMgdlToUnits(HardLimits.LIMIT_MIN_BG[0], GlucoseUnit.MMOL)),
+                max1 = roundDown(profileUtil.fromMgdlToUnits(HardLimits.LIMIT_MIN_BG[1], GlucoseUnit.MMOL)),
+                min2 = roundUp(profileUtil.fromMgdlToUnits(HardLimits.LIMIT_MAX_BG[0], GlucoseUnit.MMOL)),
+                max2 = roundDown(profileUtil.fromMgdlToUnits(HardLimits.LIMIT_MAX_BG[1], GlucoseUnit.MMOL)),
+                step = 0.1, decimals = 1, unitLabel = "mmol/L", isPair = true
+            )
+        }
+
+        val names: List<String> = (profilePlugin.profile?.getProfileList() ?: ArrayList()).map { it.toString() }
+
+        profileEditState.value = ProfileEditState(
+            loading = false,
+            profileNames = names,
+            selectedProfileIndex = profilePlugin.currentProfileIndex,
+            name = currentProfile.name,
+            dia = currentProfile.dia,
+            diaMin = hardLimits.minDia(),
+            diaMax = hardLimits.maxDia(),
+            mgdl = mgdl,
+            basal = blocksOf(currentProfile.basal, null),
+            isf = blocksOf(currentProfile.isf, null),
+            ic = blocksOf(currentProfile.ic, null),
+            target = blocksOf(currentProfile.targetLow, currentProfile.targetHigh),
+            basalC = basalC, isfC = isfC, icC = icC, targetC = targetC,
+            dailyBasal = "∑" + decimalFormatter.to2Decimal(
+                profilePlugin.getEditedProfile()?.let { ProfileSealed.Pure(it, null).baseBasalSum() } ?: 0.0
+            ) + " " + rh.gs(app.aaps.core.ui.R.string.insulin_unit_shortname)
+        )
+    }
+
+    private fun blocksOf(data1: JSONArray, data2: JSONArray?): List<EditableBlock> {
+        val out = ArrayList<EditableBlock>()
+        for (i in 0 until ProfileBlockOps.itemsCount(data1)) {
+            val sec = ProfileBlockOps.secondFromMidnight(data1, i)
+            out.add(
+                EditableBlock(
+                    index = i,
+                    startSeconds = sec,
+                    timeLabel = String.format(java.util.Locale.getDefault(), "%02d:%02d", sec / 3600, (sec % 3600) / 60),
+                    value1 = ProfileBlockOps.value1(data1, i),
+                    value2 = if (data2 != null) ProfileBlockOps.value2(data2, i) else null
+                )
+            )
+        }
+        return out
+    }
+
+    /** Resolve (data1, data2?) for a tab index: 0=Basal, 1=ISF, 2=IC, 3=Target. */
+    private fun arraysForTab(tab: Int): Pair<JSONArray, JSONArray?>? {
+        val p = profilePlugin.currentProfile() ?: return null
+        return when (tab) {
+            0    -> p.basal to null
+            1    -> p.isf to null
+            2    -> p.ic to null
+            3    -> p.targetLow to p.targetHigh
+            else -> null
+        }
+    }
+
+    private val editorCallbacks = object : ProfileEditorCallbacks {
+        override fun onSelectProfile(index: Int) {
+            if (profilePlugin.isEdited) {
+                activity?.let { activity ->
+                    OKDialog.showConfirmation(
+                        activity, rh.gs(R.string.do_you_want_switch_profile),
+                        {
+                            profilePlugin.currentProfileIndex = index
+                            profilePlugin.isEdited = false
+                            build()
+                            buildProfileEditState()
+                        }, null
+                    )
+                }
+            } else {
+                profilePlugin.currentProfileIndex = index
+                build()
+                buildProfileEditState()
+            }
+        }
+
+        override fun onName(name: String) {
+            profilePlugin.currentProfile()?.name = name
+            doEdit()
+            buildProfileEditState()
+        }
+
+        override fun onDia(dia: Double) {
+            profilePlugin.currentProfile()?.dia = dia
+            doEdit()
+            save.run()
+            buildProfileEditState()
+        }
+
+        override fun onValue1(tab: Int, index: Int, value: Double) {
+            val (data1, data2) = arraysForTab(tab) ?: return
+            // Match TimeListEdit: for a pair, keep value1 <= value2.
+            var v2 = ProfileBlockOps.value2(data2, index)
+            if (data2 != null && value > v2) v2 = value
+            ProfileBlockOps.editBlock(data1, data2, index, ProfileBlockOps.secondFromMidnight(data1, index), value, v2)
+            save.run()
+            buildProfileEditState()
+        }
+
+        override fun onValue2(tab: Int, index: Int, value: Double) {
+            val (data1, data2) = arraysForTab(tab) ?: return
+            if (data2 == null) return
+            // Match TimeListEdit: for a pair, keep value1 <= value2.
+            var v1 = ProfileBlockOps.value1(data1, index)
+            if (value < v1) v1 = value
+            ProfileBlockOps.editBlock(data1, data2, index, ProfileBlockOps.secondFromMidnight(data1, index), v1, value)
+            save.run()
+            buildProfileEditState()
+        }
+
+        override fun onTime(tab: Int, index: Int, timeAsSeconds: Int) {
+            val (data1, data2) = arraysForTab(tab) ?: return
+            ProfileBlockOps.editBlock(
+                data1, data2, index, timeAsSeconds,
+                ProfileBlockOps.value1(data1, index), ProfileBlockOps.value2(data2, index)
+            )
+            save.run()
+            buildProfileEditState()
+        }
+
+        override fun onAddBlock(tab: Int) {
+            val (data1, data2) = arraysForTab(tab) ?: return
+            ProfileBlockOps.appendBlock(data1, data2)
+            save.run()
+            buildProfileEditState()
+        }
+
+        override fun onRemoveBlock(tab: Int, index: Int) {
+            val (data1, data2) = arraysForTab(tab) ?: return
+            ProfileBlockOps.removeBlock(data1, data2, index)
+            save.run()
+            buildProfileEditState()
+        }
     }
 
     fun build() {

@@ -631,8 +631,10 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
                     if (res < 20) AapsSemantic.high else AapsSemantic.inRange
                 )
             )
-            pump.batteryLevel?.takeIf { it > 0 }?.let {
-                add(HomeUiState.Supply("Battery", "$it%", if (it < 25) AapsSemantic.low else AapsSemantic.inRange))
+            // Keep the battery pill stable: the pump reports 0 while disconnected/unread, so show "—"
+            // (neutral) rather than letting the pill vanish and reappear.
+            pump.batteryLevel?.let { bat ->
+                add(HomeUiState.Supply("Battery", if (bat > 0) "$bat%" else "—", if (bat in 1..24) AapsSemantic.low else AapsSemantic.inRange))
             }
         }
 
