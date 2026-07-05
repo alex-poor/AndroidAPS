@@ -41,6 +41,7 @@ class HovorkaMpc(
     private val hypoGuardMmol: Double = 5.0,         // below this the graduated basal floor reaches 0
     private val hypoSuspendMmol: Double = 3.9,       // at/below this a HARD 0 U/hr is forced (safety)
     private val deadbandFrac: Double = 0.1,          // snap rates within ±this of nominal back to nominal
+    private val bgDamperBandMmol: Double = 3.0,      // current-BG safety damper: scale above-nominal basal by (G-target)/this
     // --- 3b SMB (microbolus) — HIGHEST RISK, delivers insulin directly; OFF unless maxSmbU > 0 ---
     private val enableSmb: Boolean = false,          // master switch (plugin gates on Objective 8 + pref)
     private val maxSmbU: Double = 0.0,               // hard per-tick cap (U); plugin derives from maxSMB/maxIOB
@@ -99,6 +100,21 @@ class HovorkaMpc(
             else               -> basalFloorFrac * (g0 - hypoGuardMmol) / (targetMmol - hypoGuardMmol)
         }
         var finalU = min(maxBasalMuPerMin, max(bestU, floorMult * nominalBasalMuPerMin))
+        // --- current-glucose safety damper ---
+        // The optimiser can command near-max basal off a horizon-end prediction of a RISE even while glucose
+        // is AT/BELOW target — the overnight (2026-07-06) failure mode: recovering from a low with DEPLETED
+        // insulin, the model sees almost no insulin on board and predicts an EGP-driven climb, so it slams
+        // basal (in-silico it maxed at est.G 5.9), which then over-corrects into the next hypo. Extending the
+        // horizon does NOT fix this (verified in hovorka-mpc/). Instead scale the ABOVE-nominal portion of the
+        // dose by how far CURRENT glucose is above target: 0 at/below target, ramping to full only by
+        // target+[bgDamperBandMmol]. Mild highs get gentle correction; genuine highs keep full authority; a
+        // recovering-from-low glucose can never slam max basal. Only ever REDUCES above-nominal basal — never
+        // touches the floor or the suspend. In-silico: fixes the over-dose (1.74→0.65 U/hr, nadir 5.9→6.6),
+        // cohort-neutral (all Demo checks green).
+        if (finalU > nominalBasalMuPerMin) {
+            val damp = ((g0 - targetMmol) / bgDamperBandMmol).coerceIn(0.0, 1.0)
+            finalU = nominalBasalMuPerMin + (finalU - nominalBasalMuPerMin) * damp
+        }
         // deadband: trivial deviations from nominal collapse to nominal, so AAPS sees "temp == baseBasal"
         // (isChangeRequested FALSE) instead of a churn of ~nominal micro-TBRs. Never snaps a suspend up.
         if (finalU > 0.0 && kotlin.math.abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
