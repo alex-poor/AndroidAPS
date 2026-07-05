@@ -283,7 +283,9 @@ class YpsoBleManager @Inject constructor(
                     pumpState.activeTbrPercent = status.activeTbrPercent
                     pumpState.lastStatusTime = System.currentTimeMillis()
                     pumpState.lastConnectionTime = System.currentTimeMillis()
-                    aapsLogger.info(LTag.PUMP, "YpsoPump status: reservoir=${status.reservoirUnits}U battery=${status.batteryPercent}%")
+                    // DIAG: log the decoded delivery mode + isSuspended + raw payload so a pump-side Stop can be
+                    // seen (validate DeliveryMode.STOPPED/PAUSED against real firmware; raw shows which byte moves).
+                    aapsLogger.info(LTag.PUMP, "YpsoPump status: reservoir=${status.reservoirUnits}U battery=${status.batteryPercent}% deliveryMode=${status.deliveryMode}(${status.deliveryModeName}) suspended=${status.isSuspended} raw=${payload.joinToString("") { "%02x".format(it) }}")
                 } else {
                     aapsLogger.error(LTag.PUMP, "YpsoPump status decode failed (${payload.size}B)")
                 }
