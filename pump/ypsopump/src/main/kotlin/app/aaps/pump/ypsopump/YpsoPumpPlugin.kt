@@ -169,7 +169,7 @@ class YpsoPumpPlugin @Inject constructor(
                 latch.await(20, java.util.concurrent.TimeUnit.MINUTES)   // counter discovery can take minutes
             }
 
-            else                                            -> bleManager.readStatus()
+            else                                            -> bleManager.readStatus { reconcileSuspendTbr() }
         }
     }
 
@@ -308,6 +308,44 @@ class YpsoPumpPlugin @Inject constructor(
     // Real cancel now that confirm-by-read tracks the partial: the Stop button flags a cancel; the poll loop
     // sends the pump's all-zero START_STOP cancel and records what actually went in.
     override fun stopBolusDelivering() { bolusCancelRequested = true }
+
+    // --- pump-side suspend reflection ---
+    // A loop/app suspend already zeroes basal via a recorded 0% TBR. But a suspend initiated ON THE PUMP
+    // (the pump's "Stop", or an occlusion/empty auto-suspend) is only learned from a status read: the BLE
+    // layer sets pumpState.isSuspended, but nothing tells AAPS the basal stopped — so the graph keeps drawing
+    // and IOB keeps ACCRUING the profile basal that isn't being delivered (over-stated IOB). Mirror the pump's
+    // real state as a 0-rate PUMP_SUSPEND temp basal (Medtrum/Combo pattern) so the graph + IOB read 0 while
+    // stopped. Rolling window refreshed each status read; ended on resume. Called from readStatus's onDone.
+    private val suspendTbrWindowMin = 30L
+    private var suspendTbrStartMs = 0L
+
+    private fun reconcileSuspendTbr() {
+        val now = dateUtil.now()
+        when {
+            pumpState.isSuspended && suspendTbrStartMs == 0L -> {                 // pump just stopped
+                suspendTbrStartMs = now
+                pumpSync.syncTemporaryBasalWithPumpId(
+                    timestamp = now, rate = 0.0, duration = T.mins(suspendTbrWindowMin).msecs(),
+                    isAbsolute = true, type = PumpSync.TemporaryBasalType.PUMP_SUSPEND,
+                    pumpId = now, pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
+                )
+                aapsLogger.info(LTag.PUMP, "YpsoPump: pump suspended -> recorded PUMP_SUSPEND 0-TBR")
+            }
+            pumpState.isSuspended && suspendTbrStartMs != 0L -> {                 // still stopped: extend window
+                pumpSync.syncTemporaryBasalWithPumpId(
+                    timestamp = suspendTbrStartMs, rate = 0.0,
+                    duration = (now - suspendTbrStartMs) + T.mins(suspendTbrWindowMin).msecs(),
+                    isAbsolute = true, type = PumpSync.TemporaryBasalType.PUMP_SUSPEND,
+                    pumpId = suspendTbrStartMs, pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
+                )
+            }
+            !pumpState.isSuspended && suspendTbrStartMs != 0L -> {                // resumed: end it
+                pumpSync.syncStopTemporaryBasalWithPumpId(now, now, PumpType.YPSOPUMP, serialNumber())
+                aapsLogger.info(LTag.PUMP, "YpsoPump: pump resumed -> ended PUMP_SUSPEND 0-TBR")
+                suspendTbrStartMs = 0L
+            }
+        }
+    }
 
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
         val dur = round15(durationInMinutes)
