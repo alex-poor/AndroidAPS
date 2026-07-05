@@ -177,40 +177,31 @@ private fun HeroStat(
 
 @Composable
 private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
-    // Lay the pills out at most 2 per row so a 4th pill (e.g. after a cannula change adds Cannula +
-    // Sensor + Reservoir + Battery) wraps to a second row instead of squashing them all onto one line.
-    // Each pill keeps its natural width; rows spread evenly.
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        supplies.chunked(2).forEach { rowPills ->
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                rowPills.forEach { s ->
-                    if (s.fraction != null) SupplyRingPill(s) else StatusPill(label = s.label, value = s.value, dotColor = s.dotColor)
-                }
-            }
-        }
+    // Each pill is a 2-line tile (dot/ring + label on top, value below) so all of them — up to 4 after a
+    // cannula change (Cannula + Sensor + Reservoir + Battery) — fit on ONE row without squashing.
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        supplies.forEach { s -> SupplyCell(s, Modifier.weight(1f)) }
     }
 }
 
 /**
- * A supply pill whose leading indicator is a depleting COUNTDOWN ring (life remaining) rather than a
- * plain dot — so the sensor's time-to-expiry reads at a glance. The ring drains and recolors (green →
- * amber → red) as [HomeUiState.Supply.fraction] falls to 0.
+ * A supply as a compact 2-line tile: line 1 = indicator (a depleting COUNTDOWN ring when the supply
+ * carries a life [HomeUiState.Supply.fraction], e.g. the sensor; else a plain dot) + label; line 2 =
+ * value. Equal-width (weight) so 3–4 supplies share the row cleanly.
  */
 @Composable
-private fun SupplyRingPill(s: HomeUiState.Supply) {
+private fun SupplyCell(s: HomeUiState.Supply, modifier: Modifier) {
     val colors = AapsTheme.colors
-    Row(
-        Modifier.clip(AapsShape.pill).background(colors.controlFill).padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    Column(
+        modifier.clip(AapsShape.cardSmall).background(colors.controlFill).padding(horizontal = 8.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        CountdownRing(s.fraction ?: 0f, s.dotColor)
-        Text(s.label, style = AapsType.caption, color = colors.textSecondary)
-        Text(s.value, style = AapsType.listTitle, color = s.dotColor)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            if (s.fraction != null) CountdownRing(s.fraction, s.dotColor, size = 12.dp) else Dot(s.dotColor, size = 8.dp)
+            Text(s.label, style = AapsType.caption, color = colors.textSecondary, maxLines = 1)
+        }
+        Text(s.value, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1)
     }
 }
 
