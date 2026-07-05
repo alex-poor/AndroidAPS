@@ -483,6 +483,35 @@ class YpsoBleManager @Inject constructor(
     }
 
     /**
+     * Cancel a running bolus: canary-lock the write counter (same benign event-index gate as the bolus),
+     * then write the all-zero START_STOP payload EXACTLY ONCE. Idempotent-ish (cancelling an already-finished
+     * bolus is harmless), so — unlike delivery — a dropped ack here is not dangerous. [onResult]=(sent, msg).
+     */
+    fun cancelBolus(seedW: Long, extended: Boolean, onResult: (Boolean, String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
+        val canary = glbEncode(0)
+        val candidates = listOf(seedW + 1, seedW, seedW + 2)
+        fun tryCanary(i: Int) {
+            if (i >= candidates.size) { onResult(false, "cancel canary failed (tried $candidates)"); return }
+            val c = candidates[i]
+            writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
+                when (status) {
+                    BluetoothGatt.GATT_SUCCESS -> {
+                        persistWriteCounter()
+                        writeOnceAt(CHAR_BOLUS_START_STOP, YpsoCrc.appendCrc(BolusCommand.cancelPayload(extended)), c + 1) { st ->
+                            if (st == BluetoothGatt.GATT_SUCCESS) { persistWriteCounter(); onResult(true, "bolus cancel sent @${c + 1}") }
+                            else onResult(false, "cancel write status=$st @${c + 1}")
+                        }
+                    }
+                    ERR_WRITE_REJECTED         -> tryCanary(i + 1)
+                    else                       -> onResult(false, "cancel canary status=$status")
+                }
+            }
+        }
+        tryCanary(0)
+    }
+
+    /**
      * SAFE TBR (production + test) via the same canary as the bolus: lock the write counter on the BENIGN
      * event-index char, then write the TBR command EXACTLY ONCE at the confirmed next counter. Aborts
      * with no TBR write if the canary can't be confirmed. [percent] 0=suspend, 100=normal; [durationMinutes]
