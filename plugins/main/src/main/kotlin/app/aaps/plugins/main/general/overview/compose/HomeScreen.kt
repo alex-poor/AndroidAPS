@@ -177,15 +177,20 @@ private fun HeroStat(
 
 @Composable
 private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
-    // Spread the pills evenly across the viewport but keep each at its natural width, so a wide
-    // value (e.g. Reservoir "250.00 U") gets the room it needs instead of wrapping onto a new line.
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        supplies.forEach { s ->
-            if (s.fraction != null) SupplyRingPill(s) else StatusPill(label = s.label, value = s.value, dotColor = s.dotColor)
+    // Lay the pills out at most 2 per row so a 4th pill (e.g. after a cannula change adds Cannula +
+    // Sensor + Reservoir + Battery) wraps to a second row instead of squashing them all onto one line.
+    // Each pill keeps its natural width; rows spread evenly.
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        supplies.chunked(2).forEach { rowPills ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                rowPills.forEach { s ->
+                    if (s.fraction != null) SupplyRingPill(s) else StatusPill(label = s.label, value = s.value, dotColor = s.dotColor)
+                }
+            }
         }
     }
 }
