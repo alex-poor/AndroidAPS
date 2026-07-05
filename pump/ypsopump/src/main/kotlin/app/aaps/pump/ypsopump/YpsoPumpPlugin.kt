@@ -29,6 +29,8 @@ import app.aaps.pump.ypsopump.data.YpsoPumpState
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * AndroidAPS pump plugin for the Ypsomed YpsoPump.
@@ -207,31 +209,105 @@ class YpsoPumpPlugin @Inject constructor(
 
     override fun isThisProfileSet(profile: Profile): Boolean = true
 
+    // Bolus delivery is CONFIRM-BY-READ: we never trust the write-accept callback alone (a dropped BLE ack
+    // can mean the pump ALREADY delivered — the 2026-07-05 IOB-desync incident). After the START write we
+    // poll the pump's own bolus status to the true delivered amount, drive the progress dialog from it, and
+    // record THAT. See report + [[ypsopump-bolus-hang]].
+    private val bolusConfirmTimeoutMs = 5 * 60 * 1000L
+    private val bolusPollFastMs = 500L
+    private val bolusPollSlowMs = 2000L
+    private val bolusStepU = 0.05
+    @Volatile private var bolusCancelRequested = false
+
     override fun deliverTreatment(detailedBolusInfo: DetailedBolusInfo): PumpEnactResult {
-        val insulin = detailedBolusInfo.insulin
-        if (insulin <= 0.0) return fail("bolus <= 0")
+        val requested = detailedBolusInfo.insulin
+        if (requested <= 0.0) return fail("bolus <= 0")
         if (!ensureConnected()) return fail("not connected")
-        var accepted = false; var msg = ""
-        val latch = java.util.concurrent.CountDownLatch(1)
-        bleManager.testBolusCanary(insulin, bleManager.writeCounter) { ok, m ->
-            accepted = ok; msg = m
-            if (ok) rxBus.send(EventOverviewBolusProgress(rh, percent = 100, id = detailedBolusInfo.id))
-            latch.countDown()
+        bolusCancelRequested = false
+
+        // Baseline (prior-bolus 'injected' the pump still reports) — logged so validation can confirm whether
+        // the pump RESETS deliveredUnits per bolus. Attribution only trusts values AFTER status goes
+        // 'delivering', so a lingering prior reading alone can never be mistaken for this dose.
+        val baseInjected = readBolusStatusBlocking()?.deliveredUnits ?: 0.0
+
+        // 1) START via the canary-gated write. 'started' is only the START-command ACK — droppable while the
+        //    pump still delivers — so it is NEVER used to decide what to record. The pump status is truth.
+        var started = false; var startMsg = ""
+        val startLatch = java.util.concurrent.CountDownLatch(1)
+        bleManager.testBolusCanary(requested, bleManager.writeCounter) { ok, m -> started = ok; startMsg = m; startLatch.countDown() }
+        startLatch.await(2, java.util.concurrent.TimeUnit.MINUTES)
+
+        // 2) CONFIRM-BY-READ: poll the pump's status until delivery finishes (or timeout / cancel / disconnect),
+        //    tracking the actual delivered units and driving the progress bar (fixes the stuck-at-0%).
+        var sawDelivering = false
+        var delivered = 0.0
+        var total = requested
+        var pollMs = bolusPollFastMs
+        val deadline = dateUtil.now() + bolusConfirmTimeoutMs
+        while (dateUtil.now() < deadline) {
+            val st = readBolusStatusBlocking()
+            if (st != null) {
+                if (st.isDelivering) sawDelivering = true
+                if (sawDelivering) delivered = max(delivered, st.deliveredUnits)
+                if (st.totalProgrammedUnits > 0.0) total = st.totalProgrammedUnits
+                val pct = if (total > 0.0) ((delivered / total) * 100).toInt().coerceIn(0, 99) else 0
+                rxBus.send(EventOverviewBolusProgress(rh, percent = pct, id = detailedBolusInfo.id))
+                aapsLogger.info(LTag.PUMP, "YpsoPump bolus poll: status=${st.bolusStatusCode} delivering=${st.isDelivering} injected=${st.deliveredUnits} total=${st.totalProgrammedUnits} | base=$baseInjected saw=$sawDelivering tracked=$delivered req=$requested")
+                if (sawDelivering && !st.isDelivering) break                 // our bolus completed
+            } else if (sawDelivering && !bleManager.isConnected) {
+                aapsLogger.warn(LTag.PUMP, "YpsoPump bolus: lost connection mid-delivery; recording confirmed $delivered U"); break
+            }
+            if (bolusCancelRequested) {
+                val cl = java.util.concurrent.CountDownLatch(1)
+                bleManager.cancelBolus(bleManager.writeCounter, extended = false) { _, cm -> aapsLogger.info(LTag.PUMP, "YpsoPump bolus cancel: $cm"); cl.countDown() }
+                cl.await(30, java.util.concurrent.TimeUnit.SECONDS)
+                readBolusStatusBlocking()?.let { if (it.isDelivering || sawDelivering) delivered = max(delivered, it.deliveredUnits) }
+                aapsLogger.info(LTag.PUMP, "YpsoPump bolus CANCELLED by user; delivered so far=$delivered")
+                break
+            }
+            Thread.sleep(pollMs)
+            pollMs = min(pollMs * 3 / 2, bolusPollSlowMs)                    // ramp 0.5s -> 2s
         }
-        latch.await(5, java.util.concurrent.TimeUnit.MINUTES)
-        if (!accepted) return fail(msg)
-        pumpSync.syncBolusWithPumpId(
-            timestamp = detailedBolusInfo.timestamp,
-            amount = insulin,
-            type = detailedBolusInfo.bolusType,
-            pumpId = dateUtil.now(),
-            pumpType = PumpType.YPSOPUMP,
-            pumpSerial = serialNumber()
-        )
-        return pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(insulin).comment("YpsoPump: $msg")
+        rxBus.send(EventOverviewBolusProgress(rh, percent = 100, id = detailedBolusInfo.id))
+
+        // 3) RECORD the pump's TRUTH — never gated on the droppable start ack.
+        return when {
+            sawDelivering && delivered > 0.0 -> {                            // confirmed (possibly partial)
+                syncBolus(detailedBolusInfo, delivered)
+                val partial = delivered + bolusStepU < requested
+                pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(delivered)
+                    .comment("YpsoPump: delivered %.2fU%s".format(delivered, if (partial) " (PARTIAL of %.2f)".format(requested) else ""))
+            }
+            started                          -> {                            // ack OK but read never confirmed:
+                // FAIL SAFE for the loop — record the requested dose so IOB is if anything OVER-stated (loop
+                // then UNDER-doses) rather than the dangerous under-count that over-doses. Warn to verify.
+                syncBolus(detailedBolusInfo, requested)
+                pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(requested)
+                    .comment("YpsoPump: UNCONFIRMED — recorded %.2fU, VERIFY on pump".format(requested))
+            }
+            else                             -> fail("bolus not delivered (start failed, none confirmed): $startMsg")
+        }
     }
 
-    override fun stopBolusDelivering() {}
+    private fun syncBolus(info: DetailedBolusInfo, amount: Double) {
+        pumpSync.syncBolusWithPumpId(
+            timestamp = info.timestamp, amount = amount, type = info.bolusType,
+            pumpId = dateUtil.now(), pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
+        )
+    }
+
+    /** One bolus-status read, blocking the caller (queue-worker) thread until the BLE callback returns. */
+    private fun readBolusStatusBlocking(timeoutMs: Long = 8000): app.aaps.pump.ypsopump.comm.commands.BolusCommand? {
+        var out: app.aaps.pump.ypsopump.comm.commands.BolusCommand? = null
+        val l = java.util.concurrent.CountDownLatch(1)
+        bleManager.readBolusStatus { st -> out = st; l.countDown() }
+        l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return out
+    }
+
+    // Real cancel now that confirm-by-read tracks the partial: the Stop button flags a cancel; the poll loop
+    // sends the pump's all-zero START_STOP cancel and records what actually went in.
+    override fun stopBolusDelivering() { bolusCancelRequested = true }
 
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
         val dur = round15(durationInMinutes)
