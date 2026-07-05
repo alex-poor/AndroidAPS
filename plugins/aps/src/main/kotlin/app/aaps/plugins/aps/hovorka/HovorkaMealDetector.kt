@@ -57,6 +57,9 @@ class HovorkaMealDetector(
 
     private val confirmRiseMmol = 1.0  // sustained glucose-above-prediction (mmol/L) to declare a meal
     private val leak = 0.85            // per-tick leak of the unexplained-rise integral (old evidence fades)
+    private var baselineInnov = 0.0    // slow EWMA of the innovation = persistent model-mismatch bias (high-pass ref)
+    private var baselineInit = false   // seed the baseline from the first innovation (capture the bias at t0)
+    private val baselineAdaptRate = 0.06  // baseline adaptation per tick (~80-min τ) — slow vs a real meal's rise
 
     /**
      * @param innovMmol      measured glucose − estimator's prior (post-predict, pre-update) glucose (mmol/L)
@@ -77,9 +80,16 @@ class HovorkaMealDetector(
         val gated = gMeasMmol > hypoGuardMmol && !announcedActive && lowLockTicks == 0 && prior > 0.0
         if (!gated) { reset(); return 0.0 }
 
-        // leaky integral of the deadzoned innovation: sustained under-prediction (a meal) accumulates;
-        // zero-mean CGM noise and one-off blips leak away and never confirm.
-        unexplainedMmol = max(0.0, unexplainedMmol * leak + (innovMmol - slackMmol))
+        // A persistent model MISMATCH (plant ≠ controller) shows up as a STANDING positive innovation, which
+        // the raw integral would accumulate into a phantom meal on a quiet day (verified: worst-min 5.2→4.7).
+        // High-pass it: seed a baseline from the first innovation, adapt it slowly while no meal is CONFIRMED,
+        // and count only the FRESH rise ABOVE it — a real meal is a fast deviation from the slow baseline; a
+        // standing offset gets absorbed into it. In-silico: phantom fixed (5.2→5.1) with meal detection intact.
+        if (!baselineInit) { baselineInnov = innovMmol; baselineInit = true }
+        else if (!running) baselineInnov += (innovMmol - baselineInnov) * baselineAdaptRate
+        // leaky integral of the deadzoned innovation ABOVE the mismatch baseline: a sustained fresh rise (a
+        // meal) accumulates; zero-mean noise, one-off blips, and standing bias leak away and never confirm.
+        unexplainedMmol = max(0.0, unexplainedMmol * leak + ((innovMmol - baselineInnov) - slackMmol))
         // confirm harder when the time-of-day prior is low (overnight needs more evidence)
         val threshold = confirmRiseMmol / prior
         pMeal = 1.0 / (1.0 + exp(-3.0 * (unexplainedMmol - threshold)))
