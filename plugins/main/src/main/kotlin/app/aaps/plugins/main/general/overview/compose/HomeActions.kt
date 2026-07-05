@@ -18,5 +18,6 @@ data class HomeActions(
     val onDeleteCarb: (entry: HomeUiState.CarbEntry) -> Unit = {}, // undo a recent carb entry (COB sheet)
     val onBasal: () -> Unit = {},
     val onRange: (hours: Int) -> Unit = {},   // graph range segmented control
-    val onCalibration: () -> Unit = {}        // "+" overflow → calibrate CGM
+    val onCalibration: () -> Unit = {},       // "+" overflow → calibrate CGM
+    val onInsulinRecord: () -> Unit = {}      // "+" overflow → log a bolus WITHOUT delivering (reconcile a pump/pen dose AAPS missed)
 )

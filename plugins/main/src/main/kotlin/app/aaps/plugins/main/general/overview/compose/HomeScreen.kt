@@ -403,6 +403,10 @@ private fun MoreMenu(actions: HomeActions) {
                 onClick = { expanded = false; actions.onBolus() }
             )
             DropdownMenuItem(
+                text = { Text("Bolus (record only)", color = colors.textPrimary) },
+                onClick = { expanded = false; actions.onInsulinRecord() }
+            )
+            DropdownMenuItem(
                 text = { Text("Temp target", color = colors.textPrimary) },
                 onClick = { expanded = false; actions.onTempTarget() }
             )

@@ -23,6 +23,7 @@ import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.IntKey
+import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.wizard.BolusWizard
@@ -99,7 +100,11 @@ class WizardDialog : DaggerDialogFragment() {
 
         val w = buildWizard(inputs, profile, bgDisplay, carbs)
 
-        val inRange = bgMgdl > 0 && bgMgdl in profile.getTargetLowMgdl()..profile.getTargetHighMgdl()
+        // Label BG against the user's display low/high marks (e.g. 4.0–10.0) — the SAME band the rest of the
+        // app colours BG by — NOT the target band. A single-point profile target makes targetLow==targetHigh,
+        // so an at-target BG (7.1 vs target 7.0) would read "high", which is useless for bolusing. Display only.
+        val inRange = bgMgdl > 0 &&
+            bgDisplay in preferences.get(UnitDoubleKey.OverviewLowMark)..preferences.get(UnitDoubleKey.OverviewHighMark)
         val delta = w.glucoseStatus?.delta ?: 0.0
         return WizardResult(
             bgText = if (bgMgdl > 0) profileUtil.fromMgdlToStringInUnits(bgMgdl) else "--",

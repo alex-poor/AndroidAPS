@@ -463,6 +463,10 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             onCarbs = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
             onBolus = { bolusProtected { uiInteraction.runTreatmentDialog(childFragmentManager) } },
             onWizard = { bolusProtected { uiInteraction.runWizardDialog(childFragmentManager) } },
+            // "Record only" insulin entry (log a delivered pump/pen bolus into IOB WITHOUT re-delivering).
+            // InsulinDialog is the ONLY dialog with a user-toggleable "Record only" — the redesign dropped
+            // its old insulin_button, so surface it here in the "+" menu.
+            onInsulinRecord = { bolusProtected { uiInteraction.runInsulinDialog(childFragmentManager) } },
             onMore = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
             onLoop = { bolusProtected { uiInteraction.runLoopDialog(childFragmentManager, 1) } },
             onTempTarget = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
