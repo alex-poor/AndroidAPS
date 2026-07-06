@@ -314,8 +314,13 @@ class YpsoPumpPlugin @Inject constructor(
     }
 
     private fun syncBolus(info: DetailedBolusInfo, amount: Double) {
+        // Anchor the record to delivery-CONFIRMATION time (now), NOT the bolus start (info.timestamp). A big
+        // bolus takes minutes to deliver, so by the time confirm-by-read finishes, info.timestamp can already
+        // be older than AAPS's 1-minute freshness gate (see YpsoBleManager.connect serial seed) -> the sync
+        // gets silently rejected and the delivered dose is lost. Recording at confirmation time is at most a
+        // couple of minutes later than the true start (negligible for IOB) and can NEVER be dropped as stale.
         pumpSync.syncBolusWithPumpId(
-            timestamp = info.timestamp, amount = amount, type = info.bolusType,
+            timestamp = dateUtil.now(), amount = amount, type = info.bolusType,
             pumpId = dateUtil.now(), pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
         )
     }

@@ -162,6 +162,15 @@ class YpsoBleManager @Inject constructor(
         if (adapter == null || !adapter.isEnabled) { aapsLogger.error(LTag.PUMP, "YpsoPump: Bluetooth off"); return }
         val device = adapter.getRemoteDevice(macAddress)
         pumpState.pumpAddress = macAddress
+        // ROOT CAUSE of large boluses being delivered but NOT recorded: AAPS's confirmActivePump() treats a
+        // pump with an EMPTY serial as "unregistered" and falls back to a 1-minute freshness gate on EVERY
+        // synced record (`timestamp > now - 1min`). The Ypso serial was never populated, so a bolus that
+        // takes >1 min to deliver (a big meal bolus) reached syncBolus with a start-timestamp already older
+        // than that gate -> the sync was silently rejected and the delivered insulin never hit the DB/IOB
+        // (carbs use a non-gated path, hence "carbs recorded, bolus missing"). Seed a STABLE non-empty serial
+        // from the pump MAC so AAPS registers the pump ONCE and thereafter gates on registration time, not
+        // freshness. (Also stops the every-5-min re-register churn and the spurious WRONG_PUMP_DATA path.)
+        if (pumpState.serialNumber.isEmpty()) pumpState.serialNumber = macAddress.replace(":", "")
         pumpState.connectionState = ConnectionState.CONNECTING
         aapsLogger.info(LTag.PUMP, "YpsoPump connecting to $macAddress (bonded=${device.bondState == BluetoothDevice.BOND_BONDED})")
         synchronized(opLock) { queue.clear(); current = null }
