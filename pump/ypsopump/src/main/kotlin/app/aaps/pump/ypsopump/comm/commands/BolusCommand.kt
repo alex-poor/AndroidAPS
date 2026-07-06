@@ -39,7 +39,16 @@ class BolusCommand(
     var extendedMinutesTotal: Int = 0; private set
 
     val isImmediate: Boolean get() = durationMinutes == 0
-    val isDelivering: Boolean get() = bolusStatusCode != 0 || extendedStatusCode != 0
+
+    // Status byte per firmware / tech-doc §10.2: 0=idle, 1=delivering, 3=cancelled, 4=completed.
+    // "Delivering" is ONLY code 1 — the old `!= 0` treated COMPLETED(4) and CANCELLED(3) as still
+    // in progress, so the confirm-by-read poll loop (`sawDelivering && !isDelivering`) never broke on
+    // a clean completion. That bites a slow (large) bolus, which is likely to be polled AT the
+    // completed/idle frame — where the status char reports injected=0 — leaving `delivered` at 0 and
+    // the dose recorded as nothing. Terminal states must read as NOT delivering. [fix 2026-07-06]
+    val isDelivering: Boolean get() = bolusStatusCode == STATUS_DELIVERING || extendedStatusCode == STATUS_DELIVERING
+    val isCompleted: Boolean get() = bolusStatusCode == STATUS_COMPLETED
+    val isCancelled: Boolean get() = bolusStatusCode == STATUS_CANCELLED
 
     override fun encode(): ByteArray {
         val totalScaled = (totalUnits * 100).roundToInt().coerceIn(1, MAX_BOLUS_X100)
@@ -77,6 +86,12 @@ class BolusCommand(
         const val MAX_BOLUS_X100 = 2500
         const val TYPE_IMMEDIATE: Byte = 1
         const val TYPE_EXTENDED: Byte = 2
+
+        // Bolus status-byte codes (CHAR_BOLUS_STATUS / CHAR_BOLUS_NOTIFICATION @0, tech-doc §10.2).
+        const val STATUS_IDLE = 0
+        const val STATUS_DELIVERING = 1
+        const val STATUS_CANCELLED = 3
+        const val STATUS_COMPLETED = 4
 
         /** All-zero 13-byte payload with the type byte set — cancels the running fast/extended bolus. */
         fun cancelPayload(extended: Boolean): ByteArray =
