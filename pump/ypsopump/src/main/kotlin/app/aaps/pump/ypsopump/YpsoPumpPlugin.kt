@@ -25,6 +25,7 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
+import app.aaps.pump.ypsopump.ble.YpsoHistoryEntry
 import app.aaps.pump.ypsopump.data.YpsoPumpState
 import javax.inject.Inject
 import javax.inject.Provider
@@ -246,7 +247,9 @@ class YpsoPumpPlugin @Inject constructor(
         while (dateUtil.now() < deadline) {
             val st = readBolusStatusBlocking()
             if (st != null) {
-                if (st.isDelivering) sawDelivering = true
+                // A 'completed' frame is also proof the pump delivered — capture it so a bolus that races
+                // 1→4 between polls still counts as seen (status decode fixed in BolusCommand.isDelivering).
+                if (st.isDelivering || st.isCompleted) sawDelivering = true
                 if (sawDelivering) delivered = max(delivered, st.deliveredUnits)
                 if (st.totalProgrammedUnits > 0.0) total = st.totalProgrammedUnits
                 val pct = if (total > 0.0) ((delivered / total) * 100).toInt().coerceIn(0, 99) else 0
@@ -268,6 +271,27 @@ class YpsoPumpPlugin @Inject constructor(
             pollMs = min(pollMs * 3 / 2, bolusPollSlowMs)                    // ramp 0.5s -> 2s
         }
         rxBus.send(EventOverviewBolusProgress(rh, percent = 100, id = detailedBolusInfo.id))
+
+        // 2b) RECONCILE against the pump's OWN bolus history when the live poll did NOT confirm the full
+        //     requested dose. A dropped write-ack / BLE blip can leave `delivered` short of (or at zero,
+        //     while) what the pump actually pushed — the exact failure that let a 12.4U bolus record as
+        //     nothing. The pump logs every fast bolus (completed/cancelled) with the delivered units; that
+        //     is ground truth. ADDITIVE ONLY: we adopt the pump's figure solely when it exceeds what we saw
+        //     and is plausibly this bolus (<= requested + one step). A failed/implausible read changes
+        //     nothing, so this can only rescue an under-count, never invent or reduce a dose.
+        if (delivered + bolusStepU < requested) {
+            val hist = readLastFastBolusEventBlocking()
+            if (hist != null && hist.v1Units > delivered && hist.v1Units <= requested + bolusStepU) {
+                aapsLogger.warn(
+                    LTag.PUMP,
+                    "YpsoPump bolus reconcile: pump history type=${hist.eventType} delivered=${hist.v1Units}U (poll saw $delivered U of $requested U) — recording history; dropped-confirm rescued"
+                )
+                delivered = hist.v1Units
+                sawDelivering = true
+            } else {
+                aapsLogger.info(LTag.PUMP, "YpsoPump bolus reconcile: no usable history (hist=${hist?.eventType}/${hist?.v1Units}); keeping polled $delivered U")
+            }
+        }
 
         // 3) RECORD the pump's TRUTH — never gated on the droppable start ack.
         return when {
@@ -300,6 +324,18 @@ class YpsoPumpPlugin @Inject constructor(
         var out: app.aaps.pump.ypsopump.comm.commands.BolusCommand? = null
         val l = java.util.concurrent.CountDownLatch(1)
         bleManager.readBolusStatus { st -> out = st; l.countDown() }
+        l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return out
+    }
+
+    /**
+     * Blocking reconciliation read of the pump's last fast-bolus history event (multi-step: count read +
+     * index write + value read — hence a longer timeout than a single status read). Null on any failure.
+     */
+    private fun readLastFastBolusEventBlocking(timeoutMs: Long = 15000): YpsoHistoryEntry? {
+        var out: YpsoHistoryEntry? = null
+        val l = java.util.concurrent.CountDownLatch(1)
+        bleManager.readLastFastBolusEvent { e -> out = e; l.countDown() }
         l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         return out
     }

@@ -86,6 +86,13 @@ class YpsoBleManager @Inject constructor(
         // 0%/suspend TBR triggers this too). Recover by cancelling (100%/0) then re-sending. [confirmed
         // on-device 2026-07-02: 333% and 0% both rejected 0x86 while a prior 0% TBR was active]
         private const val ERR_TBR_ACTIVE = 134
+
+        // Event-history entry types (tech-doc §10.6). Fast-bolus events carry the units in v1 (hundredths U);
+        // a CANCELLED event additionally carries the requested amount in v2. Used by [readLastFastBolusEvent]
+        // to reconcile a delivered dose against the pump's OWN record when the live confirm-by-read is lost.
+        const val EVT_FAST_BOLUS_STARTED = 1
+        const val EVT_FAST_BOLUS_COMPLETED = 2
+        const val EVT_FAST_BOLUS_CANCELLED = 3
     }
 
     /** Seed the captured session key (hex) into the cryptor before connecting. */
@@ -316,6 +323,7 @@ class YpsoBleManager @Inject constructor(
     private fun u32le(b: ByteArray, o: Int): Int =
         (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8) or
             ((b[o + 2].toInt() and 0xFF) shl 16) or ((b[o + 3].toInt() and 0xFF) shl 24)
+    private fun u16le(b: ByteArray, o: Int): Int = (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
 
     /**
      * ZERO-THERAPY validation of the encrypted WRITE path against the real pump: read the event
@@ -400,6 +408,66 @@ class YpsoBleManager @Inject constructor(
             }.getOrNull()
             onResult(cmd)
         }
+    }
+
+    /**
+     * RECONCILIATION — the pump's OWN record of the most recent FAST bolus (history event types
+     * 1=started / 2=completed / 3=cancelled; delivered units in v1, hundredths U). This is ground
+     * truth for recovering a bolus whose live confirm-by-read was lost (dropped ack / BLE blip):
+     * the pump advanced and delivered, but AAPS never saw the confirmation.
+     *
+     * Reads the event COUNT, then scans at most [maxScan] NEWEST entries (each entry = one BENIGN
+     * event-index write, forward-only at writeCounter+1 exactly like the dosing canary, + one value
+     * read), returning the newest COMPLETED/CANCELLED fast-bolus entry. Stops at the first match.
+     *
+     * SAFETY: purely ADDITIVE and read-only w.r.t. therapy — it only ever *reads* the pump's history.
+     * On ANY failure (not connected, no seeded counter, count read fails, a rejected index write, a
+     * decrypt/parse error, or no fast-bolus entry in range) it returns null and the caller keeps its
+     * existing behaviour. It NEVER scans the write counter (a rejected index write aborts), so it can
+     * neither double-dose nor corrupt the shared counter.
+     */
+    fun readLastFastBolusEvent(maxScan: Int = 4, onResult: (YpsoHistoryEntry?) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(null); return }
+        if (sessionCrypto.writeCounter <= 0) { aapsLogger.warn(LTag.PUMP, "YpsoPump reconcile: no write counter seeded"); onResult(null); return }
+        readMultiframe(CHAR_EVENT_COUNT) { fc ->
+            val count = runCatching { glbFind(sessionCrypto.decrypt(fc)) }.getOrNull()
+            if (count == null || count <= 0) { aapsLogger.warn(LTag.PUMP, "YpsoPump reconcile: event count read failed ($count)"); onResult(null); return@readMultiframe }
+            val newest = count - 1
+            val floor = maxOf(0, count - maxScan)
+            fun scan(idx: Int) {
+                if (idx < floor) { aapsLogger.info(LTag.PUMP, "YpsoPump reconcile: no fast-bolus event in newest ${count - floor} entries"); onResult(null); return }
+                // Select entry [idx] with ONE benign forward-only index write at writeCounter+1 (the pump's
+                // check is forward-gap tolerant; persist on accept so AAPS stays in sync). Reject → abort.
+                val c = sessionCrypto.writeCounter + 1
+                writeOnceAt(CHAR_EVENT_INDEX, glbEncode(idx), c) { st ->
+                    if (st != BluetoothGatt.GATT_SUCCESS) { aapsLogger.warn(LTag.PUMP, "YpsoPump reconcile: index write @$c rejected (status=$st) — abort"); onResult(null); return@writeOnceAt }
+                    persistWriteCounter()
+                    readMultiframe(CHAR_EVENT_VALUE) { vf ->
+                        val entry = runCatching {
+                            val body = sessionCrypto.decrypt(vf)
+                            val p = if (YpsoCrc.isValid(body)) body.copyOfRange(0, body.size - 2) else body
+                            parseHistoryEntry(p)
+                        }.getOrNull()
+                        aapsLogger.info(LTag.PUMP, "YpsoPump reconcile: entry idx=$idx type=${entry?.eventType} v1=${entry?.v1} v2=${entry?.v2} ts=${entry?.timestamp}")
+                        if (entry != null && (entry.eventType == EVT_FAST_BOLUS_COMPLETED || entry.eventType == EVT_FAST_BOLUS_CANCELLED)) onResult(entry)
+                        else scan(idx - 1)
+                    }
+                }
+            }
+            scan(newest)
+        }
+    }
+
+    /** Parse a 17-byte history entry (tech-doc §10.6). Returns null if too short. */
+    private fun parseHistoryEntry(p: ByteArray): YpsoHistoryEntry? {
+        if (p.size < 17) return null
+        return YpsoHistoryEntry(
+            timestamp = u32le(p, 0).toLong() and 0xFFFFFFFFL,
+            eventType = p[4].toInt() and 0xFF,
+            v1 = u16le(p, 5), v2 = u16le(p, 7), v3 = u16le(p, 9),
+            sequence = u32le(p, 11).toLong() and 0xFFFFFFFFL,
+            index = u16le(p, 15)
+        )
     }
 
     /**
@@ -663,4 +731,24 @@ class YpsoBleManager @Inject constructor(
         pumpState.connectionState = ConnectionState.CONNECTED
         aapsLogger.info(LTag.PUMP, "YpsoPump ready (authenticated, control notifications enabled)")
     }
+}
+
+/**
+ * A parsed pump event-history entry (17 bytes, tech-doc §10.6). For fast-bolus events (types 1/2/3)
+ * [v1] is the units in hundredths (delivered for completed/cancelled; requested for started) and, for
+ * a cancelled bolus, [v2] is the requested amount. [timestamp] is pump-clock Unix seconds.
+ */
+data class YpsoHistoryEntry(
+    val timestamp: Long,
+    val eventType: Int,
+    val v1: Int,
+    val v2: Int,
+    val v3: Int,
+    val sequence: Long,
+    val index: Int
+) {
+    /** Units in v1, converted from hundredths. */
+    val v1Units: Double get() = v1 / 100.0
+    /** Units in v2 (requested, for a cancelled bolus), converted from hundredths. */
+    val v2Units: Double get() = v2 / 100.0
 }
