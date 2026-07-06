@@ -228,6 +228,8 @@ class HovorkaMpcPlugin @Inject constructor(
             rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin,
             refTauFastMin = preferences.get(DoubleKey.HovorkaCorrectionTauMin),
+            // in closed loop honour a model-requested full suspend (post-bolus) instead of the anti-spam floor
+            allowFullSuspend = constraintsChecker.isClosedLoopAllowed().value(),
             enableSmb = smbAllowed, maxSmbU = maxSmbU
         )
         val decision = mpc.decide(ekf.x)

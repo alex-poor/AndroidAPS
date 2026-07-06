@@ -49,6 +49,7 @@ class HovorkaMpc(
     private val hypoSuspendMmol: Double = 3.9,       // at/below this a HARD 0 U/hr is forced (safety)
     private val deadbandFrac: Double = 0.1,          // snap rates within ±this of nominal back to nominal
     private val bgDamperBandMmol: Double = 3.0,      // current-BG safety damper: scale above-nominal basal by (G-target)/this
+    private val allowFullSuspend: Boolean = false,   // closed loop: honour a model-requested full suspend (bestU≈0) instead of flooring
     // --- 3b SMB (microbolus) — HIGHEST RISK, delivers insulin directly; OFF unless maxSmbU > 0 ---
     private val enableSmb: Boolean = false,          // master switch (plugin gates on Objective 8 + pref)
     private val maxSmbU: Double = 0.0,               // hard per-tick cap (U); plugin derives from maxSMB/maxIOB
@@ -106,7 +107,15 @@ class HovorkaMpc(
             g0 <= hypoGuardMmol -> 0.0
             else               -> basalFloorFrac * (g0 - hypoGuardMmol) / (targetMmol - hypoGuardMmol)
         }
-        var finalU = min(maxBasalMuPerMin, max(bestU, floorMult * nominalBasalMuPerMin))
+        // Closed-loop full suspend: the graduated floor exists to avoid rate==0 open-loop NOTIFICATION spam —
+        // irrelevant in closed loop. When the optimiser ITSELF wants to suspend (bestU≈0: it sees high IOB / a
+        // predicted fall, e.g. after a meal bolus), honour that and drop to 0 instead of flooring at
+        // 0.7·nominal — matches CamAPS (basal 0 for the bolus duration). A model that still wants SOME basal
+        // keeps the anti-spam floor. In-silico: fixes the 2026-07-06 dinner "AAPS keeps sending basal" (floor
+        // 0.16→0 when the model predicts a fall), cohort-neutral (TIR 90.4→90.1%, TBR 3.0→2.4%).
+        val wantsSuspend = allowFullSuspend && bestU < 0.2 * nominalBasalMuPerMin
+        val floorRate = if (wantsSuspend) 0.0 else floorMult * nominalBasalMuPerMin
+        var finalU = min(maxBasalMuPerMin, max(bestU, floorRate))
         // --- current-glucose safety damper ---
         // The optimiser can command near-max basal off a horizon-end prediction of a RISE even while glucose
         // is AT/BELOW target — the overnight (2026-07-06) failure mode: recovering from a low with DEPLETED
