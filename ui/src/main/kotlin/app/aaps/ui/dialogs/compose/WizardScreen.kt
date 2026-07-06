@@ -238,6 +238,9 @@ private fun ConfirmStep(
             }
         }
         if (result.note.isNotBlank()) Text(result.note, style = AapsType.caption, color = colors.textTertiary)
+        // Max-bolus cap — previously surfaced by the legacy confirm dialog we no longer show. Warn in red.
+        if (result.cappedWarning.isNotBlank())
+            Text(result.cappedWarning, style = AapsType.body, color = colors.high, textAlign = TextAlign.Center)
 
         HoldToConfirmButton(
             label = "Hold to deliver · ${result.totalText}",

@@ -387,7 +387,13 @@ class BolusWizard @Inject constructor(
         return HtmlHelper.fromHtml(actions.joinToString("<br/>"))
     }
 
-    fun confirmAndExecute(ctx: Context, quickWizardEntry: QuickWizardEntry? = null) {
+    /**
+     * [skipConfirmation] — when true the final "are you sure" [OKDialog.showConfirmation] is NOT shown and
+     * the bolus executes directly. Used by the redesigned wizard, whose deliberate press-and-hold gesture
+     * is itself the confirmation, so a second dialog is redundant. The bolus-advisor split *choice* (a
+     * genuine decision, not a confirm) is still offered. Legacy/quick-wizard callers leave it false.
+     */
+    fun confirmAndExecute(ctx: Context, quickWizardEntry: QuickWizardEntry? = null, skipConfirmation: Boolean = false) {
         if (calculatedTotalInsulin > 0.0 || carbs > 0.0) {
             if (accepted) {
                 aapsLogger.debug(LTag.UI, "guarding: already accepted")
@@ -401,19 +407,25 @@ class BolusWizard @Inject constructor(
             if (preferences.get(BooleanKey.OverviewUseBolusAdvisor) && profileUtil.convertToMgdl(bg, profile.units) > 180 && carbs > 0 && carbTime >= 0)
                 OKDialog.showYesNoCancel(
                     ctx, rh.gs(app.aaps.core.ui.R.string.bolus_advisor), rh.gs(app.aaps.core.ui.R.string.bolus_advisor_message),
-                    { bolusAdvisorProcessing(ctx) },
-                    { commonProcessing(ctx, quickWizardEntry) }
+                    { bolusAdvisorProcessing(ctx, skipConfirmation) },
+                    { commonProcessing(ctx, quickWizardEntry, skipConfirmation) }
                 )
             else
-                commonProcessing(ctx, quickWizardEntry)
+                commonProcessing(ctx, quickWizardEntry, skipConfirmation)
         } else {
             OKDialog.show(ctx, rh.gs(app.aaps.core.ui.R.string.boluswizard), rh.gs(app.aaps.core.ui.R.string.no_action_selected))
         }
     }
 
-    private fun bolusAdvisorProcessing(ctx: Context) {
+    private fun bolusAdvisorProcessing(ctx: Context, skipConfirmation: Boolean = false) {
+        if (skipConfirmation) { executeBolusAdvisor(ctx); return }
         val confirmMessage = confirmMessageAfterConstraints(ctx, advisor = true)
         OKDialog.showConfirmation(ctx, rh.gs(app.aaps.core.ui.R.string.boluswizard), confirmMessage, {
+            executeBolusAdvisor(ctx)
+        })
+    }
+
+    private fun executeBolusAdvisor(ctx: Context) {
             DetailedBolusInfo().apply {
                 eventType = TE.Type.CORRECTION_BOLUS
                 insulin = insulinAfterConstraints
@@ -444,7 +456,6 @@ class BolusWizard @Inject constructor(
                     })
                 }
             }
-        })
     }
 
     fun explainShort(): String {
@@ -471,13 +482,23 @@ class BolusWizard @Inject constructor(
     }
 
     @SuppressLint("CheckResult")
-    private fun commonProcessing(ctx: Context, quickWizardEntry: QuickWizardEntry? = null) {
+    private fun commonProcessing(ctx: Context, quickWizardEntry: QuickWizardEntry? = null, skipConfirmation: Boolean = false) {
         val profile = profileFunction.getProfile() ?: return
-        val pump = activePlugin.activePump
         val now = dateUtil.now()
 
-        val confirmMessage = confirmMessageAfterConstraints(ctx, advisor = false, quickWizardEntry)
-        OKDialog.showConfirmation(ctx, rh.gs(app.aaps.core.ui.R.string.boluswizard), confirmMessage, {
+        if (!skipConfirmation) {
+            val confirmMessage = confirmMessageAfterConstraints(ctx, advisor = false, quickWizardEntry)
+            OKDialog.showConfirmation(ctx, rh.gs(app.aaps.core.ui.R.string.boluswizard), confirmMessage, {
+                executeCommon(ctx, profile, now, quickWizardEntry)
+            })
+            return
+        }
+        executeCommon(ctx, profile, now, quickWizardEntry)
+    }
+
+    @SuppressLint("CheckResult")
+    private fun executeCommon(ctx: Context, profile: Profile, now: Long, quickWizardEntry: QuickWizardEntry? = null) {
+        val pump = activePlugin.activePump
             if (insulinAfterConstraints > 0 || carbs > 0) {
                 if (useSuperBolus) {
                     if (loop.allowedNextModes().contains(RM.Mode.SUPER_BOLUS)) {
@@ -552,7 +573,6 @@ class BolusWizard @Inject constructor(
             if (quickWizardEntry != null) {
                 scheduleECarbsFromQuickWizard(ctx, quickWizardEntry)
             }
-        })
     }
 
     private fun scheduleECarbsFromQuickWizard(ctx: Context, quickWizardEntry: QuickWizardEntry) {

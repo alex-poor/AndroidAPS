@@ -29,5 +29,6 @@ data class WizardResult(
     val deliverable: Boolean = false,
     val carbsOnly: Boolean = false,
     val note: String = "",
+    val cappedWarning: String = "",
     val superBolusAvailable: Boolean = false
 )

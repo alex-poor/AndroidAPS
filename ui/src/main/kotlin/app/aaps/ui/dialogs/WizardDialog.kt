@@ -116,11 +116,17 @@ class WizardDialog : DaggerDialogFragment() {
             iobInsulin = signed(-w.insulinFromBolusIOB - w.insulinFromBasalIOB),
             trendInsulin = signed(w.insulinFromTrend),
             superBolusInsulin = signed(w.insulinFromSuperBolus),
-            total = w.calculatedTotalInsulin,
-            totalText = String.format(Locale.getDefault(), "%.2f U", w.calculatedTotalInsulin),
-            deliverable = w.calculatedTotalInsulin > 0.0,
-            carbsOnly = carbs > 0 && w.calculatedTotalInsulin <= 0.0,
+            // Show the amount that will ACTUALLY be delivered (post max-bolus constraint), because the
+            // redesigned wizard no longer shows the legacy confirm dialog that surfaced the cap. If the
+            // constraint reduced the dose, expose it so the user isn't misled about what they're bolusing.
+            total = w.insulinAfterConstraints,
+            totalText = String.format(Locale.getDefault(), "%.2f U", w.insulinAfterConstraints),
+            deliverable = w.insulinAfterConstraints > 0.0,
+            carbsOnly = carbs > 0 && w.insulinAfterConstraints <= 0.0,
             note = if (carbs > 0) "Also logging $carbs g carbs" else "",
+            cappedWarning = if (w.calculatedTotalInsulin - w.insulinAfterConstraints > activePlugin.activePump.pumpDescription.bolusStep)
+                String.format(Locale.getDefault(), "Capped by max bolus: %.2f U → %.2f U", w.calculatedTotalInsulin, w.insulinAfterConstraints)
+            else "",
             superBolusAvailable = false
         )
     }
@@ -136,7 +142,10 @@ class WizardDialog : DaggerDialogFragment() {
         if (carbs <= 0 && !(bgMgdl > 0)) return
         val w = buildWizard(inputs, profile, bgDisplay, carbs)
         if (w.calculatedTotalInsulin > 0.0 || carbs > 0) {
-            w.confirmAndExecute(activity)   // shows the standard confirmation, applies constraints, delivers
+            // skipConfirmation: the Compose Confirm step + press-and-hold gesture IS the confirmation, so
+            // suppress the legacy OKDialog (redundant second popup). Constraints, UEL audit and the actual
+            // commandQueue.bolus still run — identical execute path, just without the extra tap.
+            w.confirmAndExecute(activity, skipConfirmation = true)
             dismiss()
         }
     }
