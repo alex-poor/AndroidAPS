@@ -525,6 +525,6 @@ class HovorkaMpcPlugin @Inject constructor(
         const val EVENTUAL_MIN_MMOL = 1.5        // #1: sanity clamp on the mass-balance eventual (bad COB/IOB)
         const val EVENTUAL_MAX_MMOL = 30.0
         const val HIGH_CORRECTION_MARGIN_MMOL = 0.6   // high-glucose correction floor fires only when mass-balance eventual exceeds target by this
-        const val HIGH_CORRECTION_HORIZON_H = 2.0     // clear the residual mass-balance excess over this many hours (conservative; ramps as glucose climbs)
+        const val HIGH_CORRECTION_HORIZON_H = 1.5     // clear the residual mass-balance excess over this many hours (conservative; ramps as glucose climbs)
     }
 }
