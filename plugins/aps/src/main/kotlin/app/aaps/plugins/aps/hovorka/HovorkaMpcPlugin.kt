@@ -244,10 +244,29 @@ class HovorkaMpcPlugin @Inject constructor(
         val eventualLinearMmol = (rawCgmMmol - iobNow * isfMmol + carbRiseMmol).coerceIn(EVENTUAL_MIN_MMOL, EVENTUAL_MAX_MMOL)
         val reportedEventualMmol = eventualLinearMmol
         val mbNote = " | eventualMB=%.1f (IOB %.1f, COB %.0f)".format(eventualLinearMmol, iobNow, cobG)
+        // SAFETY — high-glucose correction floor (2026-07-07). The Hovorka rollout can turn over-optimistic:
+        // it may predict glucose gliding to target on existing IOB and command u*=0 basal while glucose is
+        // actually high and RISING (observed: est.G 14.3→16.7 climbing, model u*=0, loop delivering nothing —
+        // the more-sensitive ISF made the model over-credit ~2U IOB as a 6 mmol/L drop that wasn't happening).
+        // Guard on the RELIABLE mass-balance eventual: it already credits every unit of IOB/COB, so an eventual
+        // STILL above target means insulin is genuinely still needed — a correction here cannot cause a hypo.
+        // Ramp extra basal above nominal to clear the residual excess over HIGH_CORRECTION_HORIZON_H, capped at
+        // maxBasal. Only ever RAISES the rate — never touches the model's own higher dose, the current-BG
+        // damper, the graduated floor, or any suspend (all of which act at/below target, where this never fires).
+        var corrNote = ""
+        if (!rawHypoSuspend && rawCgmMmol > controlTargetMmol && isfMmol > 0.0 &&
+            eventualLinearMmol > controlTargetMmol + HIGH_CORRECTION_MARGIN_MMOL) {
+            val excessUnits = (eventualLinearMmol - controlTargetMmol) / isfMmol
+            val floorUhr = (operatingBasalUhr + excessUnits / HIGH_CORRECTION_HORIZON_H).coerceAtMost(maxBasalUhr)
+            if (floorUhr > rateUhr) {
+                corrNote = " | HIGH-CORR %.2f→%.2f U/hr (MB %.1f>target %.1f)".format(rateUhr, floorUhr, eventualLinearMmol, controlTargetMmol)
+                rateUhr = round(floorUhr * 100.0) / 100.0
+            }
+        }
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, reIdNote, decision.reason)
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, corrNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -505,5 +524,7 @@ class HovorkaMpcPlugin @Inject constructor(
         const val RE_ID_NOTIF_ID = 4210          // 4: notification id for a model re-tune (INFO; re-usable)
         const val EVENTUAL_MIN_MMOL = 1.5        // #1: sanity clamp on the mass-balance eventual (bad COB/IOB)
         const val EVENTUAL_MAX_MMOL = 30.0
+        const val HIGH_CORRECTION_MARGIN_MMOL = 0.6   // high-glucose correction floor fires only when mass-balance eventual exceeds target by this
+        const val HIGH_CORRECTION_HORIZON_H = 2.0     // clear the residual mass-balance excess over this many hours (conservative; ramps as glucose climbs)
     }
 }
