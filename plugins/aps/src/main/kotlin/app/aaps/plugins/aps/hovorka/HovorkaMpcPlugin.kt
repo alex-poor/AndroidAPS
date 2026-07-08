@@ -226,7 +226,7 @@ class HovorkaMpcPlugin @Inject constructor(
         if (rawHypoSuspend) rateUhr = 0.0
         // 3b: the SMB inherits BOTH hypo backstops — the est.G suspend inside decide() (already zeroes
         // decision.smbU) AND this raw-CGM suspend. Round to 2 dp; a dropped bolus fails closed downstream.
-        val smbU = if (rawHypoSuspend) 0.0 else round(decision.smbU * 100.0) / 100.0
+        var smbU = if (rawHypoSuspend) 0.0 else round(decision.smbU * 100.0) / 100.0
         // Report the multi-hour eventual from the IOB/COB mass-balance identity (bolus-wizard):
         //   eventual = currentBG − IOB·ISF + COB·(ISF/IC)
         // and NOT the Hovorka rollout (decision.eventualMmol). As a standalone multi-hour prediction the
@@ -257,10 +257,30 @@ class HovorkaMpcPlugin @Inject constructor(
         if (!rawHypoSuspend && rawCgmMmol > controlTargetMmol && isfMmol > 0.0 &&
             eventualLinearMmol > controlTargetMmol + HIGH_CORRECTION_MARGIN_MMOL) {
             val excessUnits = (eventualLinearMmol - controlTargetMmol) / isfMmol
-            val floorUhr = (operatingBasalUhr + excessUnits / HIGH_CORRECTION_HORIZON_H).coerceAtMost(maxBasalUhr)
+            // HIGH-CORR SMB (2026-07-08): at a genuine high the model rollout goes over-optimistic (predicts a
+            // phantom fall on existing IOB → u*=0 and its OWN 3b SMB gate declines), so the only thing dosing
+            // was this basal floor — arithmetically right but slow. Front-load a fraction of the RELIABLE
+            // mass-balance excess as an immediate microbolus so highs clear fast, and let basal clear the rest.
+            // Safe: (a) excessUnits is IOB-aware (eventual already subtracts IOB·ISF), so it self-tapers to 0 as
+            // IOB accumulates — booked IOB is intrinsically capped at "just enough to reach target", cannot run
+            // away; (b) only fires clearly-above-target, never when hypo-suspended; (c) bounded by maxSmbU
+            // (maxBolus / abs cap / maxIOB headroom); (d) closed-loop only. Does NOT touch mild-above-target or
+            // meal dosing, so it cannot deepen the post-meal lows the way a global ISF cut would.
+            var hcSmbU = 0.0
+            if (smbAllowed && maxSmbU > 0.0) {
+                hcSmbU = round(min(maxSmbU, HIGH_CORR_SMB_FRACTION * excessUnits) * 100.0) / 100.0
+                if (hcSmbU < HIGH_CORR_SMB_MIN_U) hcSmbU = 0.0
+            }
+            // basal clears only the excess the front-loaded SMB does NOT cover (no double-dosing this tick)
+            val residualExcess = max(0.0, excessUnits - hcSmbU)
+            val floorUhr = (operatingBasalUhr + residualExcess / HIGH_CORRECTION_HORIZON_H).coerceAtMost(maxBasalUhr)
             if (floorUhr > rateUhr) {
                 corrNote = " | HIGH-CORR %.2f→%.2f U/hr (MB %.1f>target %.1f)".format(rateUhr, floorUhr, eventualLinearMmol, controlTargetMmol)
                 rateUhr = round(floorUhr * 100.0) / 100.0
+            }
+            if (hcSmbU > smbU) {
+                corrNote += " | HIGH-CORR-SMB %.2fU".format(hcSmbU)
+                smbU = hcSmbU
             }
         }
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
@@ -526,5 +546,7 @@ class HovorkaMpcPlugin @Inject constructor(
         const val EVENTUAL_MAX_MMOL = 30.0
         const val HIGH_CORRECTION_MARGIN_MMOL = 0.6   // high-glucose correction floor fires only when mass-balance eventual exceeds target by this
         const val HIGH_CORRECTION_HORIZON_H = 1.5     // clear the residual mass-balance excess over this many hours (conservative; ramps as glucose climbs)
+        const val HIGH_CORR_SMB_FRACTION = 0.5        // 2026-07-08: share of the mass-balance high-glucose excess delivered NOW as an SMB (rest ramps via the basal floor); self-tapers as IOB builds. Raise → more aggressive at highs
+        const val HIGH_CORR_SMB_MIN_U = 0.05          // skip sub-resolution high-corr microboluses
     }
 }
