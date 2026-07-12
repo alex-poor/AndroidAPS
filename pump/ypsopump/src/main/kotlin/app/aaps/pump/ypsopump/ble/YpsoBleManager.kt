@@ -45,6 +45,8 @@ class YpsoBleManager @Inject constructor(
     val isConnected: Boolean get() = pumpState.connectionState == ConnectionState.CONNECTED
 
     companion object {
+        private const val OP_TIMEOUT_MS = 8000L   // 2026-07-13: a BLE op with no callback in this long is treated as stalled and force-failed (unwedges the queue + multiframe latch)
+        private const val OP_TIMEOUT_STATUS = -2   // sentinel status for a timed-out op (!= GATT_SUCCESS, distinct from -1 no-gatt)
         private val CHAR_AUTH: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbeb2147bc5")
         private val CHAR_STATUS: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcbee48b7bc5")
         private val CHAR_EXTREAD: UUID = UUID.fromString("669a0c20-0008-969e-e211-fcff000000ff")
@@ -197,15 +199,29 @@ class YpsoBleManager @Inject constructor(
     private val opLock = Any()
     private val queue = ArrayDeque<Op>()
     private var current: Op? = null
+    // Watchdog (2026-07-13): a BLE op clears `current` (and, for a multi-frame read, the `multiframeBusy`
+    // latch) ONLY when its GATT callback fires complete(). If that callback never comes — a dropped
+    // notification, a silently-stalled read, or a mid-op disconnect — both latch forever: every later
+    // multi-frame read logs "overlapping … rejected", the queue freezes, and the pump goes unreachable
+    // until a manual Bluetooth toggle. Time each op out so a stalled op force-fails, which routes through
+    // the op's onResult → (for a read) clears multiframeBusy + fail() → disconnect → clean reconnect.
+    private val opHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val opTimeout = Runnable {
+        aapsLogger.error(LTag.PUMP, "YpsoPump: BLE op timed out after ${OP_TIMEOUT_MS}ms — force-failing to unwedge the queue")
+        complete(null, OP_TIMEOUT_STATUS)
+    }
     private fun enqueue(op: Op) { synchronized(opLock) { queue.addLast(op) }; pumpOps() }
     private fun pumpOps() {
         val op = synchronized(opLock) {
             if (current != null) return
             queue.removeFirstOrNull()?.also { current = it }
         } ?: return
+        opHandler.removeCallbacks(opTimeout)
+        opHandler.postDelayed(opTimeout, OP_TIMEOUT_MS)
         bluetoothGatt?.let(op.action) ?: complete(null, -1)
     }
     private fun complete(value: ByteArray?, status: Int) {
+        opHandler.removeCallbacks(opTimeout)
         val op = synchronized(opLock) { current.also { current = null } }
         op?.onResult(value, status)
         pumpOps()
@@ -675,7 +691,16 @@ class YpsoBleManager @Inject constructor(
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED    -> { pumpState.connectionState = ConnectionState.DISCOVERING; g.discoverServices() }
-                BluetoothProfile.STATE_DISCONNECTED -> { pumpState.connectionState = ConnectionState.DISCONNECTED; bluetoothGatt = null }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    pumpState.connectionState = ConnectionState.DISCONNECTED; bluetoothGatt = null
+                    // Backstop for the watchdog above: a disconnect mid-op would otherwise strand `current`
+                    // and `multiframeBusy` (their clearing callbacks now never fire). Reset both + drop any
+                    // queued ops so the NEXT connection starts from a clean slate rather than instantly re-
+                    // wedging on the first read (which is exactly why an app restart alone didn't recover).
+                    opHandler.removeCallbacks(opTimeout)
+                    multiframeBusy = false
+                    synchronized(opLock) { current = null; queue.clear() }
+                }
             }
         }
 
