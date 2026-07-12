@@ -276,8 +276,19 @@ class HovorkaMpcPlugin @Inject constructor(
             // the model's own 3b meal-SMB own that; front-loading here stacked ~1U into a 9.2U dinner bolus and
             // caused a hypo. Basal (cancellable, self-limiting) still ramps for COB; this fast/irreversible path
             // stands down. maxSmbU already honours the real maxIOB ceiling as a second, general backstop.
+            // u*-GATE (2026-07-13, overnight hypo→2.2): only front-load an SMB when the MODEL itself is passive
+            // (u* at/below nominal) — the exact case this was built for (model over-optimistic → basal alone
+            // under-doses). When the model is ALREADY ramping basal to correct (u* > nominal), the cancellable
+            // basal carries it; adding an irreversible SMB on top double-doses. Last night the SMB fired every
+            // tick alongside u* up to 1.31 U/hr (~291%) on a real rise → ~2U of stacked microbolus → a 5h tail
+            // that cratered to 2.2 hours after the loop had already suspended. `rateUhr` here is still the model
+            // basal (the floor below hasn't raised it yet). Also require the excess to be CLEARLY above target
+            // (not last-mile chasing a predicted ~8 down to 7) — the reversible basal floor handles small highs.
+            val modelBasalUhr = rateUhr
             var hcSmbU = 0.0
-            if (smbAllowed && maxSmbU > 0.0 && cobG < HIGH_CORR_SMB_MAX_COB_G) {
+            if (smbAllowed && maxSmbU > 0.0 && cobG < HIGH_CORR_SMB_MAX_COB_G &&
+                modelBasalUhr <= operatingBasalUhr &&
+                eventualLinearMmol > controlTargetMmol + HIGH_CORR_SMB_MARGIN_MMOL) {
                 hcSmbU = round(min(maxSmbU, HIGH_CORR_SMB_FRACTION * excessUnits) * 100.0) / 100.0
                 if (hcSmbU < HIGH_CORR_SMB_MIN_U) hcSmbU = 0.0
             }
@@ -559,5 +570,6 @@ class HovorkaMpcPlugin @Inject constructor(
         const val HIGH_CORR_SMB_FRACTION = 0.3        // 2026-07-08: share of the mass-balance high-glucose excess delivered NOW as an SMB (rest ramps via the basal floor); self-tapers as IOB builds. Raise → more aggressive at highs (0.5 stacked into a meal bolus → hypo; cut to 0.3)
         const val HIGH_CORR_SMB_MIN_U = 0.05          // skip sub-resolution high-corr microboluses
         const val HIGH_CORR_SMB_MAX_COB_G = 10.0      // 2026-07-08: no front-loaded correction SMB while >=this many g of carbs are pending (meal territory → basal + meal bolus own it; prevents stacking)
+        const val HIGH_CORR_SMB_MARGIN_MMOL = 2.0     // 2026-07-13: front-load an SMB only when the mass-balance eventual is THIS far above target (the reversible basal floor handles smaller highs; stops last-mile chasing that overshoots)
     }
 }
