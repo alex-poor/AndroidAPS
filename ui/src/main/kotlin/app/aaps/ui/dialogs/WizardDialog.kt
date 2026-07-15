@@ -159,6 +159,9 @@ class WizardDialog : DaggerDialogFragment() {
             cob = 0.0,
             bg = bgDisplay,
             correction = 0.0,
+            // pre-bolus: BolusWizard timestamps the carbs at now + carbTime (see its carbsTimestamp), so the
+            // bolus goes in immediately while the loop is told when the carbs actually land.
+            carbTime = inputs.carbTime,
             percentageCorrection = preferences.get(IntKey.OverviewBolusPercentage),
             useBg = inputs.useBg,
             useCob = false,

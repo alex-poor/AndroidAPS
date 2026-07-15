@@ -6,6 +6,12 @@ import androidx.compose.runtime.Immutable
 @Immutable
 data class WizardInputs(
     val carbs: Int = 0,
+    /**
+     * Pre-bolus: minutes from NOW until the carbs are actually eaten (stock AAPS "carb time"). The bolus is
+     * delivered immediately and [BolusWizard] timestamps the carbs at `now + carbTime`, so fast carbs get the
+     * insulin head start they need. Negative = carbs already eaten. Range ±60, matching EditQuickWizardSheet.
+     */
+    val carbTime: Int = 0,
     val useBg: Boolean = true,
     val useIob: Boolean = true,
     val useTrend: Boolean = false,

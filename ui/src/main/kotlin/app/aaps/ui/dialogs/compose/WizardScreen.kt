@@ -87,7 +87,7 @@ fun WizardScreen(
 
         AnimatedContent(targetState = confirming, transitionSpec = { fadeThrough() }, label = "wizard-step") { onConfirm ->
             if (!onConfirm) InputStep(inputs, result, quickChips, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
-            else ConfirmStep(result, colors, onDeliver = { onDeliver(inputs) }, onCancel = { confirming = false })
+            else ConfirmStep(inputs, result, colors, onDeliver = { onDeliver(inputs) }, onCancel = { confirming = false })
         }
     }
 }
@@ -159,6 +159,55 @@ private fun InputStep(
                 }
             }
 
+            // Pre-bolus (stock "carb time"): deliver the bolus NOW, tell AAPS the carbs land in N minutes.
+            // Only meaningful with carbs on board, so it follows the carbs card and hides at 0 g.
+            if (inputs.carbs > 0) {
+                AapsCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("PRE-BOLUS", style = AapsType.label, color = colors.textSecondary)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StepperButton(Icons.Rounded.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                                onInputs(inputs.copy(carbTime = (inputs.carbTime - 5).coerceAtLeast(-60)))
+                            }
+                            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    if (inputs.carbTime > 0) "+${inputs.carbTime}" else "${inputs.carbTime}",
+                                    style = AapsType.bigValue, color = colors.textPrimary
+                                )
+                                Text(
+                                    when {
+                                        inputs.carbTime > 0 -> "min until you eat"
+                                        inputs.carbTime < 0 -> "min since you ate"
+                                        else               -> "eating now"
+                                    },
+                                    style = AapsType.caption, color = colors.textTertiary
+                                )
+                            }
+                            StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
+                                onInputs(inputs.copy(carbTime = (inputs.carbTime + 5).coerceAtMost(60)))
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            listOf(0, 15, 20, 30).forEach { m ->
+                                val active = inputs.carbTime == m
+                                Text(
+                                    if (m == 0) "now" else "+$m",
+                                    style = AapsType.listTitle,
+                                    color = if (active) colors.accentOnLight else colors.textSecondary,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(AapsShape.pill)
+                                        .clickable { onInputs(inputs.copy(carbTime = m)) }
+                                        .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                        .padding(vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // Included in this dose
             AapsCard {
                 Column {
@@ -202,6 +251,7 @@ private fun InputStep(
 
 @Composable
 private fun ConfirmStep(
+    inputs: WizardInputs,
     result: WizardResult,
     colors: app.aaps.core.compose.theme.AapsColors,
     onDeliver: () -> Unit,
@@ -237,6 +287,16 @@ private fun ConfirmStep(
                 }
             }
         }
+        // Pre-bolus is a timing decision, not a dose component — state it plainly on the confirm step so the
+        // "deliver now, eat later" contract is explicit before the hold-to-confirm.
+        if (inputs.carbs > 0 && inputs.carbTime != 0)
+            Text(
+                if (inputs.carbTime > 0)
+                    "Pre-bolus: delivering now — eat ${inputs.carbs} g in ${inputs.carbTime} min"
+                else
+                    "Carbs eaten ${-inputs.carbTime} min ago",
+                style = AapsType.body, color = colors.accent, textAlign = TextAlign.Center
+            )
         if (result.note.isNotBlank()) Text(result.note, style = AapsType.caption, color = colors.textTertiary)
         // Max-bolus cap — previously surfaced by the legacy confirm dialog we no longer show. Warn in red.
         if (result.cappedWarning.isNotBlank())
