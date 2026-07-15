@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -62,9 +63,12 @@ fun WizardScreen(
     var confirming by remember { mutableStateOf(false) }
     val result = remember(inputs) { compute(inputs) }
 
+    // fillMaxSize (not just width): the dialog window is MATCH_PARENT, but a wrap-height root lets the
+    // scrolling content grow past the viewport and push the bottom action bar off-screen. Bounding the root
+    // here is what makes the weight(1f) below able to reserve space for the bar.
     Column(
         Modifier
-            .fillMaxWidth()
+            .fillMaxSize()
             .background(colors.background)
     ) {
         // header
@@ -85,7 +89,12 @@ fun WizardScreen(
             )
         }
 
-        AnimatedContent(targetState = confirming, transitionSpec = { fadeThrough() }, label = "wizard-step") { onConfirm ->
+        AnimatedContent(
+            targetState = confirming,
+            transitionSpec = { fadeThrough() },
+            label = "wizard-step",
+            modifier = Modifier.weight(1f)
+        ) { onConfirm ->
             if (!onConfirm) InputStep(inputs, result, quickChips, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
             else ConfirmStep(inputs, result, colors, onDeliver = { onDeliver(inputs) }, onCancel = { confirming = false })
         }
@@ -101,9 +110,13 @@ private fun InputStep(
     onInputs: (WizardInputs) -> Unit,
     onContinue: () -> Unit
 ) {
-    Column {
+    Column(Modifier.fillMaxSize()) {
+        // weight(1f): the scrolling card list takes only the space LEFT OVER after the bottom action bar is
+        // laid out, so the Continue/Bolus button is always on screen no matter how many cards are shown
+        // (adding the pre-bolus card made an unweighted column overflow and hide the bar entirely).
         Column(
             Modifier
+                .weight(1f)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = AapsSpacing.screenH)
                 .padding(bottom = 8.dp),
@@ -257,8 +270,13 @@ private fun ConfirmStep(
     onDeliver: () -> Unit,
     onCancel: () -> Unit
 ) {
+    // Scrollable for the same reason as InputStep: hold-to-deliver lives at the END of this column, so any
+    // overflow (extra warning lines, pre-bolus note, small screen) would put the ONLY delivery control
+    // off-screen. Scrolling keeps it reachable.
     Column(
         Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = AapsSpacing.screenH)
             .padding(top = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
