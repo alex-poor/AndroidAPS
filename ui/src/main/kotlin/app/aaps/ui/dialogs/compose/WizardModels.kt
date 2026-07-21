@@ -12,6 +12,14 @@ data class WizardInputs(
      * insulin head start they need. Negative = carbs already eaten. Range ±60, matching EditQuickWizardSheet.
      */
     val carbTime: Int = 0,
+    /**
+     * Extended carbs: hours the carbs are declared to absorb over (0 = all at once). Slow fat/protein meals
+     * genuinely absorb over hours; declaring that per-meal is the correct fix, because the model's absorption
+     * constant (tMaxG) is GLOBAL and drains every meal through one shared gut compartment — so it cannot
+     * describe a fast and a slow meal at once. AAPS expands the entry into 15-min chunks, which is what the
+     * APS/COB path already reads.
+     */
+    val carbDurationHours: Int = 0,
     val useBg: Boolean = true,
     val useIob: Boolean = true,
     val useTrend: Boolean = false,

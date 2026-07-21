@@ -147,6 +147,13 @@ class BolusWizard @Inject constructor(
     private var useAlarm = false
     var notes: String = ""
     private var carbTime: Int = 0
+    /**
+     * Extended carbs: hours over which the carbs are declared to absorb (0 = normal, all at once). Stored as
+     * [DetailedBolusInfo.carbsDuration]; AppRepository.expandCarbs then splits the entry into 15-min chunks,
+     * which is what the APS/COB path consumes (getCarbsFromTimeToTimeExpanded). Lets a slow fat/protein meal
+     * be declared as such per-meal, instead of forcing one global absorption rate onto every meal.
+     */
+    private var carbDurationHours: Int = 0
     private var quickWizard: Boolean = true
     var usePercentage: Boolean = false
     var positiveIOBOnly: Boolean = false
@@ -170,6 +177,7 @@ class BolusWizard @Inject constructor(
         useAlarm: Boolean,
         notes: String = "",
         carbTime: Int = 0,
+        carbDurationHours: Int = 0,
         usePercentage: Boolean = false,
         totalPercentage: Double = 100.0,
         quickWizard: Boolean = false,
@@ -194,6 +202,7 @@ class BolusWizard @Inject constructor(
         this.useAlarm = useAlarm
         this.notes = notes
         this.carbTime = carbTime
+        this.carbDurationHours = carbDurationHours
         this.quickWizard = quickWizard
         this.usePercentage = usePercentage
         this.totalPercentage = totalPercentage
@@ -538,6 +547,7 @@ class BolusWizard @Inject constructor(
                     mgdlGlucose = profileUtil.convertToMgdl(bg, profile.units)
                     glucoseType = TE.MeterType.MANUAL
                     carbsTimestamp = now + T.mins(this@BolusWizard.carbTime.toLong()).msecs()
+                    carbsDuration = T.hours(this@BolusWizard.carbDurationHours.toLong()).msecs()
                     bolusCalculatorResult = createBolusCalculatorResult()
                     notes = this@BolusWizard.notes
                     if (insulin > 0 || carbs > 0) {

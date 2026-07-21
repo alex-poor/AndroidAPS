@@ -162,6 +162,8 @@ class WizardDialog : DaggerDialogFragment() {
             // pre-bolus: BolusWizard timestamps the carbs at now + carbTime (see its carbsTimestamp), so the
             // bolus goes in immediately while the loop is told when the carbs actually land.
             carbTime = inputs.carbTime,
+            // extended carbs: declares a slow meal's absorption per-meal (AAPS expands to 15-min chunks)
+            carbDurationHours = inputs.carbDurationHours,
             percentageCorrection = preferences.get(IntKey.OverviewBolusPercentage),
             useBg = inputs.useBg,
             useCob = false,

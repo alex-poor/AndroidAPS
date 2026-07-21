@@ -219,6 +219,50 @@ private fun InputStep(
                         }
                     }
                 }
+
+                // Extended carbs. A slow (fat/protein) meal absorbs over HOURS; declaring that per-meal is the
+                // only correct lever, because the model's tMaxG is global and drains every meal at one rate.
+                // AAPS splits the entry into 15-min chunks that the APS/COB path already consumes.
+                AapsCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("CARB ABSORPTION", style = AapsType.label, color = colors.textSecondary)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StepperButton(Icons.Rounded.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                                onInputs(inputs.copy(carbDurationHours = (inputs.carbDurationHours - 1).coerceAtLeast(0)))
+                            }
+                            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    if (inputs.carbDurationHours == 0) "fast" else "${inputs.carbDurationHours} h",
+                                    style = AapsType.bigValue, color = colors.textPrimary
+                                )
+                                Text(
+                                    if (inputs.carbDurationHours == 0) "all at once" else "spread over",
+                                    style = AapsType.caption, color = colors.textTertiary
+                                )
+                            }
+                            StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
+                                onInputs(inputs.copy(carbDurationHours = (inputs.carbDurationHours + 1).coerceAtMost(8)))
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            listOf(0, 2, 3, 4).forEach { h ->
+                                val active = inputs.carbDurationHours == h
+                                Text(
+                                    if (h == 0) "fast" else "${h}h",
+                                    style = AapsType.listTitle,
+                                    color = if (active) colors.accentOnLight else colors.textSecondary,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(AapsShape.pill)
+                                        .clickable { onInputs(inputs.copy(carbDurationHours = h)) }
+                                        .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                        .padding(vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Included in this dose
@@ -307,6 +351,11 @@ private fun ConfirmStep(
         }
         // Pre-bolus is a timing decision, not a dose component — state it plainly on the confirm step so the
         // "deliver now, eat later" contract is explicit before the hold-to-confirm.
+        if (inputs.carbs > 0 && inputs.carbDurationHours > 0)
+            Text(
+                "Extended carbs: ${inputs.carbs} g absorbing over ${inputs.carbDurationHours} h",
+                style = AapsType.body, color = colors.accent, textAlign = TextAlign.Center
+            )
         if (inputs.carbs > 0 && inputs.carbTime != 0)
             Text(
                 if (inputs.carbTime > 0)
