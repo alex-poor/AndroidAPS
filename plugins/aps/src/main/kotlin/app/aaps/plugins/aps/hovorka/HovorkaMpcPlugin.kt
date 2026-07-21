@@ -5,6 +5,7 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceManager
 import androidx.preference.PreferenceScreen
+import app.aaps.core.data.model.BS
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.aps.APS
 import app.aaps.core.interfaces.aps.APSResult
@@ -26,6 +27,7 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAPSCalculationFinished
 import app.aaps.core.interfaces.rx.events.EventNewNotification
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.data.time.T
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.StringKey
@@ -212,8 +214,42 @@ class HovorkaMpcPlugin @Inject constructor(
         // keep the ONE genuine safety constraint from that bundle — closed-loop-allowed (no autonomous bolus
         // in open loop) — and preserve the real dosing limits below (per-tick maxIOB HEADROOM + pump/pref
         // maxBolus, so an SMB can never push IOB past maxIOB) and both hypo suspends inside the MPC.
+        //
+        // 2026-07-22 SAFETY REWRITE. The original gate was `enableSmb && maxSmbU > 0 && !hypoSuspended &&
+        // g0 > target` — i.e. a microbolus whenever glucose exceeded 7.0 and the 60-min rollout stayed above
+        // 8.5. That has no notion of carbs, of time since a meal, or of whether glucose is even RISING, and
+        // the smbFraction=0.5 "converge over ticks" design re-fires against an unchanged prediction when
+        // glucose is FLAT. Overnight 2026-07-21/22 it delivered 13 SMBs = 2.1U at BG 7.1-8.7, fasting, and
+        // drove 8.2 -> 3.3 mmol/L (2.1U x ISF 2.5 = 5.3 predicted vs 4.9 observed drop: the SMBs ARE the hypo).
+        // Bolus authority is irreversible and must be reserved for genuine meal excursions; a flat 8.4 at 2am
+        // is basal's job. Four structural guards, ALL must hold:
+        //   (a) real high   - glucose meaningfully above target (in HovorkaMpc: g0 > target + smbMinHighMmol)
+        //   (b) fed state   - carbs on board, or a meal within SMB_MEAL_WINDOW_MIN (no fasting SMB)
+        //   (c) rising      - never bolus a flat or falling glucose
+        //   (d) no stacking - cumulative SMB over SMB_STACK_WINDOW_MIN capped at SMB_STACK_CAP_U
+        val cobNowG = iobCobCalculator.getCobInfo("HovorkaSmbGate").displayCob ?: 0.0
+        val recentMealMs = now - T.mins(SMB_MEAL_WINDOW_MIN).msecs()
+        val hasRecentMeal = persistenceLayer.getCarbsFromTimeToTimeExpanded(recentMealMs, now, false).any { it.amount > 0.0 }
+        // (e) POST-HYPO LOCKOUT. 2026-07-21 showed the fed-state test is not enough on its own: a 2.7 mmol/L
+        // hypo at 19:52 was rescued with 25g at 20:05/20:10, and those RESCUE carbs are indistinguishable from
+        // a meal by COB alone — so the loop was free to microbolus the recovery away (2.1U from 21:12) and put
+        // glucose back on the floor at 03:12. Carbs eaten to escape a low must never license a bolus. After any
+        // reading at/below SMB_POST_HYPO_MMOL, block SMB for SMB_POST_HYPO_LOCKOUT_MIN.
+        val hypoLookbackMs = now - T.mins(SMB_POST_HYPO_LOCKOUT_MIN).msecs()
+        val recentHypo = persistenceLayer.getBgReadingsDataFromTimeToTime(hypoLookbackMs, now, false)
+            .any { it.value / MGDL_PER_MMOL <= SMB_POST_HYPO_MMOL }
+        val fedState = cobNowG > 0.0 || hasRecentMeal
+        val rising = glucoseStatus.delta > 0.0
+        // (d) rolling-window stacking cap: how much SMB has already gone in recently. Individually-trivial
+        // microboluses summed to a full correction bolus with nothing tracking the aggregate.
+        val smbRecentU = persistenceLayer
+            .getBolusesFromTimeToTime(now - T.mins(SMB_STACK_WINDOW_MIN).msecs(), now, false)
+            .filter { it.type == BS.Type.SMB }
+            .sumOf { it.amount }
+        val stackHeadroomU = max(0.0, SMB_STACK_CAP_U - smbRecentU)
         val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
-            constraintsChecker.isClosedLoopAllowed().value()
+            constraintsChecker.isClosedLoopAllowed().value() &&
+            fedState && rising && !recentHypo && stackHeadroomU > 0.0
         val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
         val maxSmbU = if (smbAllowed) {
             // getMaxIOBAllowed() is supplied by the OpenAPS-SMB plugin, which is DISABLED whenever HovorkaMPC is
@@ -223,7 +259,9 @@ class HovorkaMpcPlugin @Inject constructor(
             // regardless of which plugin owns the constraint. min() keeps whichever bound is tighter.
             val maxIob = min(constraintsChecker.getMaxIOBAllowed().value(), preferences.get(DoubleKey.ApsSmbMaxIob))
             val maxBolus = constraintsChecker.getMaxBolusAllowed().value()
-            max(0.0, min(min(maxBolus, SMB_ABS_CAP_U), maxIob - iobNow))
+            // stackHeadroomU folds the rolling-window cap in as just another ceiling, so the tightest of
+            // {maxBolus, per-tick cap, maxIOB headroom, rolling-window headroom} wins.
+            max(0.0, min(min(min(maxBolus, SMB_ABS_CAP_U), maxIob - iobNow), stackHeadroomU))
         } else 0.0
 
         // 3a: if the estimator identifies a regime (IMM), roll the MPC out with that model
@@ -275,10 +313,18 @@ class HovorkaMpcPlugin @Inject constructor(
         // Ramp extra basal above nominal to clear the residual excess over HIGH_CORRECTION_HORIZON_H, capped at
         // maxBasal. Only ever RAISES the rate — never touches the model's own higher dose, the current-BG
         // damper, the graduated floor, or any suspend (all of which act at/below target, where this never fires).
+        // The `rawCgm > target` gate was as loose as the old SMB one: it fired at est.G 7.2 (2/2 firings on
+        // 2026-07-16 were at 7.2-7.4), partly because a NEGATIVE IOB — routine after the loop runs below-profile
+        // basal — inflates the mass-balance eventual (eventual = G - IOB*ISF, so IOB<0 pushes it UP) and
+        // manufactures a fictional excess. Worse, raising basal there partly undoes the current-BG damper, which
+        // is the hypo protection near target. Require a GENUINE high, and never credit negative IOB as excess.
         var corrNote = ""
-        if (!rawHypoSuspend && rawCgmMmol > controlTargetMmol && isfMmol > 0.0 &&
-            eventualLinearMmol > controlTargetMmol + HIGH_CORRECTION_MARGIN_MMOL) {
-            val excessUnits = (eventualLinearMmol - controlTargetMmol) / isfMmol
+        val iobForCorrection = max(0.0, iobNow)      // negative IOB = behind on basal, NOT a glucose excess
+        val eventualForCorrection = (rawCgmMmol - iobForCorrection * isfMmol + carbRiseMmol)
+            .coerceIn(EVENTUAL_MIN_MMOL, EVENTUAL_MAX_MMOL)
+        if (!rawHypoSuspend && rawCgmMmol > controlTargetMmol + HIGH_CORRECTION_MIN_HIGH_MMOL && isfMmol > 0.0 &&
+            eventualForCorrection > controlTargetMmol + HIGH_CORRECTION_MARGIN_MMOL) {
+            val excessUnits = (eventualForCorrection - controlTargetMmol) / isfMmol
             // HIGH-CORR SMB (2026-07-08): at a genuine high the model rollout goes over-optimistic (predicts a
             // phantom fall on existing IOB → u*=0 and its OWN 3b SMB gate declines), so the only thing dosing
             // was this basal floor — arithmetically right but slow. Front-load a fraction of the RELIABLE
@@ -313,7 +359,7 @@ class HovorkaMpcPlugin @Inject constructor(
             val residualExcess = max(0.0, excessUnits - hcSmbU)
             val floorUhr = (operatingBasalUhr + residualExcess / HIGH_CORRECTION_HORIZON_H).coerceAtMost(maxBasalUhr)
             if (floorUhr > rateUhr) {
-                corrNote = " | HIGH-CORR %.2f→%.2f U/hr (MB %.1f>target %.1f)".format(rateUhr, floorUhr, eventualLinearMmol, controlTargetMmol)
+                corrNote = " | HIGH-CORR %.2f→%.2f U/hr (MB %.1f>target %.1f)".format(rateUhr, floorUhr, eventualForCorrection, controlTargetMmol)
                 rateUhr = round(floorUhr * 100.0) / 100.0
             }
             if (hcSmbU > smbU) {
@@ -577,11 +623,17 @@ class HovorkaMpcPlugin @Inject constructor(
         const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
         const val HYPO_SUSPEND_MMOL = 3.9        // at/below this RAW CGM value, force a hard 0 U/hr suspend
         const val SMB_ABS_CAP_U = 1.5            // 3b: absolute per-tick microbolus cap (further bounded by maxIOB/maxBolus)
+        const val SMB_MEAL_WINDOW_MIN = 180L     // SMB only in a FED state: carbs on board, or a meal within this window
+        const val SMB_STACK_WINDOW_MIN = 180L    // rolling window the cumulative-SMB cap is measured over
+        const val SMB_POST_HYPO_MMOL = 4.0        // any reading at/below this locks SMB out (rescue carbs must not license a bolus)
+        const val SMB_POST_HYPO_LOCKOUT_MIN = 240L // ...for this long afterwards
+        const val SMB_STACK_CAP_U = 1.0          // max total SMB within that window (13 x 0.1-0.3U = 2.1U overnight hypo)
         const val RE_ID_DAYS = 10L               // 4: trailing window the re-identification fits over
         const val RE_ID_MIN_SAMPLES = 864        // 4: require ~3 days of 5-min samples before re-tuning
         const val RE_ID_NOTIF_ID = 4210          // 4: notification id for a model re-tune (INFO; re-usable)
         const val EVENTUAL_MIN_MMOL = 1.5        // #1: sanity clamp on the mass-balance eventual (bad COB/IOB)
         const val EVENTUAL_MAX_MMOL = 30.0
+        const val HIGH_CORRECTION_MIN_HIGH_MMOL = 2.0  // correction floor needs a GENUINE high (target+this), not merely >target
         const val HIGH_CORRECTION_MARGIN_MMOL = 0.6   // high-glucose correction floor fires only when mass-balance eventual exceeds target by this
         const val HIGH_CORRECTION_HORIZON_H = 1.5     // clear the residual mass-balance excess over this many hours (in-silico 2026-07-07: 1.5h beats 2h on highs, still zero added lows)
         const val HIGH_CORR_SMB_FRACTION = 0.3        // 2026-07-08: share of the mass-balance high-glucose excess delivered NOW as an SMB (rest ramps via the basal floor); self-tapers as IOB builds. Raise → more aggressive at highs (0.5 stacked into a meal bolus → hypo; cut to 0.3)

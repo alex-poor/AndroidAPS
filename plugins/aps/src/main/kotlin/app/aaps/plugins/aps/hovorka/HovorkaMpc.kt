@@ -55,6 +55,11 @@ class HovorkaMpc(
     private val maxSmbU: Double = 0.0,               // hard per-tick cap (U); plugin derives from maxSMB/maxIOB
     private val smbFraction: Double = 0.5,           // deliver only this share of the deficit per tick (converge)
     private val smbMarginMmol: Double = 1.5,         // only when predicted glucose stays > target+this
+    // A microbolus is IRREVERSIBLE, so it must require a genuine high — not merely "above target". The old
+    // `g0 > targetMmol` gate microbolused a flat fasting 8.4 mmol/L every tick (2026-07-21/22: 13 SMBs =
+    // 2.1U overnight -> 3.3 mmol/L hypo). Mild elevation is basal's job; bolus authority is for real
+    // excursions. Fed-state / rising / anti-stacking guards live in HovorkaMpcPlugin (they need COB+history).
+    private val smbMinHighMmol: Double = 1.0,        // SMB requires g0 > target + this (a floor, NOT the safety gate)
     private val smbHorizonMin: Int = 60,             // horizon over which "still predicted high" is judged
     private val minSmbU: Double = 0.05               // don't bother with sub-resolution microboluses
 ) {
@@ -151,7 +156,7 @@ class HovorkaMpc(
         // target. Fold-back is automatic: the plugin replays delivered boluses through the estimator next
         // tick (CamAPS AfterInsulinBolusIMM1). ---
         var smbU = 0.0
-        if (enableSmb && maxSmbU > 0.0 && !hypoSuspended && g0 > targetMmol) {
+        if (enableSmb && maxSmbU > 0.0 && !hypoSuspended && g0 > targetMmol + smbMinHighMmol) {
             // "will glucose stay high even with the PLANNED basal?" — judge against the sequence's mean rate
             // over the SMB horizon, NOT the front-loaded first step. The optimiser front-loads seg 0 and
             // tapers; using seg 0 as if it held constant over-estimates future insulin and wrongly predicts
