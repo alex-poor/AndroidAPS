@@ -237,6 +237,10 @@
     <string name="hovorka_imm_bank_summary">Run 8 parallel models spanning fast↔slow carb absorption and pick the best-fitting each cycle (CamAPS-style), instead of one fixed model. Experimental — on its own it is about the same as the single model; it mainly prepares for meal detection and microbolus (SMB). Off = single model.</string>
     <string name="hovorka_enable_smb_title">Microbolus (SMB) — EXPERIMENTAL, delivers insulin</string>
     <string name="hovorka_enable_smb_summary">When a temp basal cannot lower a post-meal peak fast enough, deliver a small immediate correction bolus (a fraction of the deficit, bounded by max IOB / max bolus). Requires SMB objective. Highest-risk feature; forced to zero on any hypo. Off = temp-basal only.</string>
+    <string name="hovorka_max_basal_title">Maximum basal rate (U/hr)</string>
+    <string name="hovorka_max_basal_summary">Hard ceiling on any temporary basal the loop can set. Nothing the algorithm decides can exceed this. Usual guidance is 3–4x your highest profile basal rate; too low and the loop cannot clear a high in reasonable time.</string>
+    <string name="hovorka_max_iob_title">Maximum IOB (U)</string>
+    <string name="hovorka_max_iob_summary">Hard ceiling on total insulin on board. Once IOB reaches this, every correction path stops until it decays. Usual guidance is about 0.2x your total daily dose. Set too low, the loop goes quiet at exactly the moment a high needs correcting.</string>
     <string name="hovorka_carb_absorption_by_tod_title">Carb absorption varies by time of day</string>
     <string name="hovorka_carb_absorption_by_tod_summary">Scale the carb-absorption time above by when the meal was eaten: breakfast unchanged, midday x1.33, evening x1.67. Set for slower evening digestion, where carbs arrive long after a pre-bolus has peaked — the loop otherwise expects dinner carbs about two hours before they show up, backs off through the early dip, then chases the late rise. Off = one absorption time for every meal.</string>
     <string name="hovorka_meal_detection_title">Unannounced-meal detection — EXPERIMENTAL</string>
