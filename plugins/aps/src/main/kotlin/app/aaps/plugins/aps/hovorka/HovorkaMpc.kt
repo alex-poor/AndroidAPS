@@ -118,6 +118,12 @@ class HovorkaMpc(
         // 0.7·nominal — matches CamAPS (basal 0 for the bolus duration). A model that still wants SOME basal
         // keeps the anti-spam floor. In-silico: fixes the 2026-07-06 dinner "AAPS keeps sending basal" (floor
         // 0.16→0 when the model predicts a fall), cohort-neutral (TIR 90.4→90.1%, TBR 3.0→2.4%).
+        // NOTE (2026-07-25): a "g0 <= target" gate was TRIED here and REJECTED. Rationale was sound — after a
+        // large carb-matched bolus the rollout craters and holds a hard suspend into a real climb (live: BG
+        // 7.5→16.2 with 0 U/hr for 110 min). But in-silico it was harmful in ALL FOUR cohort scenarios: lows
+        // 2.9→8.0%, worst-min 3.1→2.3, peak essentially unchanged. The suspend is usually CORRECT — the insulin
+        // is late, not missing — and blocking it just stacks insulin into the eventual absorption. Do not
+        // re-add. The stalled-meal detector in HovorkaMpcPlugin targets the real failure instead.
         val wantsSuspend = allowFullSuspend && bestU < 0.2 * nominalBasalMuPerMin
         val floorRate = if (wantsSuspend) 0.0 else floorMult * nominalBasalMuPerMin
         var finalU = min(maxBasalMuPerMin, max(bestU, floorRate))
