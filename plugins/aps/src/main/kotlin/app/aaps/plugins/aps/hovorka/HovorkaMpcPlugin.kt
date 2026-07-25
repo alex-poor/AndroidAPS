@@ -224,6 +224,34 @@ class HovorkaMpcPlugin @Inject constructor(
             .any { it.value / MGDL_PER_MMOL <= SMB_POST_HYPO_MMOL }
         val fedState = cobNowG > 0.0 || hasRecentMeal
         val rising = glucoseStatus.delta > 0.0
+        // IOB is needed by the UNANNOUNCED-RISE release below, so it is computed here rather than after the
+        // gates (it was previously read a few lines further down; the value is identical).
+        val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
+        // --- UNANNOUNCED-RISE release (2026-07-25) ---
+        // (b) fedState and (e) recentHypo are both time-based and glucose-BLIND, and together they can lock
+        // out bolus authority during a genuine, unfed, unopposed climb. Live 2026-07-25 17:37: BG 12.0 and
+        // rising, IOB 0.2, COB 0 — basal already ramped to 1.6 U/hr and losing — but SMB was blocked because
+        // no carbs had been announced in 180 min AND a 3.6 reading at 16:27 had armed the 4-hour post-hypo
+        // lockout. Both guards were right in their own terms and jointly wrong: you are demonstrably not in
+        // a hypo when you are at 12 and climbing with no insulin on board.
+        //
+        // Release BOTH gates only on the conjunction of: clearly high, genuinely rising, and essentially NO
+        // insulin on board (so this cannot stack onto an existing correction), plus a minimum separation from
+        // the last low so an immediate rebound still cannot license a bolus. Every other SMB guard — the
+        // stacking cap, maxIOB/maxBolus, the raw-CGM hypo suspend, the descent guard — still applies on top.
+        //
+        // Swept over the trailing 21 days of this user's own data, this releases on 8 ticks, NONE of which was
+        // followed by a reading below 3.9 within 2h. Widening any threshold (BG < 10, IOB > 0.5, gap < 60 min)
+        // re-admits the post-hypo rebound case this is deliberately built to exclude.
+        val minsSinceHypo = persistenceLayer
+            .getBgReadingsDataFromTimeToTime(now - T.mins(SMB_POST_HYPO_LOCKOUT_MIN).msecs(), now, false)
+            .filter { it.value / MGDL_PER_MMOL <= SMB_POST_HYPO_MMOL }
+            .maxOfOrNull { (now - it.timestamp) / 60000.0 } ?: Double.MAX_VALUE
+        val unannouncedRise = (glucoseStatus.glucose / MGDL_PER_MMOL) >= UNANNOUNCED_RISE_MIN_BG_MMOL &&
+            rising &&
+            iobNow <= UNANNOUNCED_RISE_MAX_IOB_U &&
+            cobNowG <= 0.0 &&
+            minsSinceHypo >= UNANNOUNCED_RISE_MIN_SINCE_HYPO_MIN
         // (d) rolling-window stacking cap: how much SMB has already gone in recently. Individually-trivial
         // microboluses summed to a full correction bolus with nothing tracking the aggregate.
         val smbRecentU = persistenceLayer
@@ -231,10 +259,13 @@ class HovorkaMpcPlugin @Inject constructor(
             .filter { it.type == BS.Type.SMB }
             .sumOf { it.amount }
         val stackHeadroomU = max(0.0, SMB_STACK_CAP_U - smbRecentU)
+        // `unannouncedRise` releases ONLY the two glucose-blind gates (fedState, recentHypo). `rising`, the
+        // stacking cap, the closed-loop check and the SMB pref all still bind — as do maxIOB/maxBolus, the
+        // raw-CGM hypo suspend and the descent guard further down.
         val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
             constraintsChecker.isClosedLoopAllowed().value() &&
-            fedState && rising && !recentHypo && stackHeadroomU > 0.0
-        val iobNow = iobCobCalculator.calculateFromTreatmentsAndTemps(now, profile).iob
+            rising && stackHeadroomU > 0.0 &&
+            ((fedState && !recentHypo) || unannouncedRise)
         val maxSmbU = if (smbAllowed) {
             // getMaxIOBAllowed() is supplied by the OpenAPS-SMB plugin, which is DISABLED whenever HovorkaMPC is
             // the active APS — so the constraint returns unbounded and the "SMB can never push IOB past maxIOB"
@@ -305,6 +336,11 @@ class HovorkaMpcPlugin @Inject constructor(
         val iobForCorrection = max(0.0, iobNow)      // negative IOB = behind on basal, NOT a glucose excess
         val eventualForCorrection = (rawCgmMmol - iobForCorrection * isfMmol + carbRiseMmol)
             .coerceIn(EVENTUAL_MIN_MMOL, EVENTUAL_MAX_MMOL)
+        // NOTE (2026-07-25): an unconditional "observed high AND rising" bypass of the mass-balance gate was
+        // TRIED here and REJECTED — in-silico it added lows in all four cohort scenarios (worst-min 3.1→2.6)
+        // for a ≤0.1 mmol/L peak gain. Firing on a high alone cannot distinguish LATE insulin (the common case,
+        // where extra dosing stacks into a hypo) from MISSING insulin (the rare real failure). The stalled-meal
+        // detector below adds the missing discriminator — TIME — and is gated far more tightly.
         if (!rawHypoSuspend && rawCgmMmol > controlTargetMmol + HIGH_CORRECTION_MIN_HIGH_MMOL && isfMmol > 0.0 &&
             eventualForCorrection > controlTargetMmol + HIGH_CORRECTION_MARGIN_MMOL) {
             val excessUnits = (eventualForCorrection - controlTargetMmol) / isfMmol
@@ -350,6 +386,50 @@ class HovorkaMpcPlugin @Inject constructor(
                 smbU = hcSmbU
             }
         }
+        // --- DESCENT GUARD (2026-07-25) — the mirror of the HIGH-CORR floor, and the fix for the 2.8 ---
+        // The rollout is unreliable in BOTH directions, and the correction floor above only ever listens to
+        // the mass-balance eventual on the UPSIDE. Nothing listened on the downside, so the same over-optimism
+        // that withholds insulin at a high also KEEPS DOSING into a fall:
+        //   2026-07-25 15:12  BG 7.0 falling   rollout eventual 8.2   eventualMB 4.1  -> still dosed
+        //   2026-07-25 15:47  BG 4.7 falling   rollout eventual 7.4   eventualMB 2.9  -> still dosed
+        //   2026-07-25 16:12  BG 3.0           rollout eventual 7.0   eventualMB 2.1  -> nadir 2.8
+        // The rollout predicted a 7.0 landing all the way down to BG 3.0 (it assumes EGP recovers glucose once
+        // basal drops, so it never forecasts a low). The raw-CGM hypo suspend is a backstop that only fires at
+        // 3.9 — far too late to prevent the fall, since insulin already delivered cannot be recalled.
+        //
+        // eventualMB is the RELIABLE number here (it credits every unit of IOB/COB) and it is already computed
+        // above for display. Measured over 21 days of this user's own decisions it is strongly predictive:
+        //   eventualMB < 4.5 -> a reading below 3.9 within 2h in 33-46% of cases (vs 3% when MB > 8)
+        // and the loop was still delivering insulin in 19-44% of those ticks.
+        //
+        // So: taper basal toward zero as eventualMB falls below DESCENT_GUARD_MMOL, reaching a full suspend at
+        // DESCENT_SUSPEND_MMOL. This only ever REMOVES insulin, so unlike every dosing change it cannot cause
+        // a hypo — the worst case is a temporarily lower basal that the next tick restores. Cost measured on
+        // the real data: ~1.1U withheld over 21 days where no low actually followed (~0.05U/day).
+        // Placed AFTER the correction floor so it has the final say: withholding beats correcting.
+        if (isfMmol > 0.0 && rateUhr > 0.0 && eventualLinearMmol < DESCENT_GUARD_MMOL) {
+            val span = (DESCENT_GUARD_MMOL - DESCENT_SUSPEND_MMOL).coerceAtLeast(0.1)
+            // 1.0 at/above the guard threshold, 0.0 at/below the suspend threshold
+            val keepFrac = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
+            val guarded = round(rateUhr * keepFrac * 100.0) / 100.0
+            if (guarded < rateUhr) {
+                corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (MB %.1f<%.1f)"
+                    .format(rateUhr, guarded, eventualLinearMmol, DESCENT_GUARD_MMOL)
+                rateUhr = guarded
+            }
+            // an irreversible microbolus must never survive a predicted low
+            if (smbU > 0.0 && eventualLinearMmol < DESCENT_GUARD_MMOL) {
+                corrNote += " | DESCENT-GUARD-SMB %.2f→0".format(smbU)
+                smbU = 0.0
+            }
+        }
+        // NOTE (2026-07-25): a STALLED-MEAL rescue (dose more when a meal bolus >=90 min old is not acting)
+        // was built here and REMOVED. In-silico it was a perfect no-op in every cohort scenario, and the real
+        // data then explained why it must be: in all four of this user's >16 episodes the booked insulin DID
+        // eventually work (20.1 -> 6.8 within 3h), and TWO of the four ended at 3.9 and 2.8. The insulin was
+        // late, not missing, and the totals were already excessive — so adding more at the peak deepens the
+        // crash that follows. This is the fourth rejected variant of "dose harder at a high"; the post-meal
+        // peak is a TIMING problem (pre-bolus lead time, site absorption) and is not safely fixable here.
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
@@ -623,5 +703,21 @@ class HovorkaMpcPlugin @Inject constructor(
         const val HIGH_CORR_SMB_MIN_U = 0.05          // skip sub-resolution high-corr microboluses
         const val HIGH_CORR_SMB_MAX_COB_G = 10.0      // 2026-07-08: no front-loaded correction SMB while >=this many g of carbs are pending (meal territory → basal + meal bolus own it; prevents stacking)
         const val HIGH_CORR_SMB_MARGIN_MMOL = 2.0     // 2026-07-13: front-load an SMB only when the mass-balance eventual is THIS far above target (the reversible basal floor handles smaller highs; stops last-mile chasing that overshoots)
+
+        // --- DESCENT GUARD (2026-07-25). The mirror of the correction floor: taper basal toward zero as the
+        // RELIABLE mass-balance eventual falls, so the loop stops dosing into a fall instead of waiting for the
+        // 3.9 raw-CGM backstop (by which point the insulin is already delivered and cannot be recalled).
+        // Thresholds from this user's own 21 days: eventualMB < 4.5 preceded a sub-3.9 reading within 2h in
+        // 33-46% of ticks (vs 3% when MB > 8), and the loop was still dosing in 19-44% of them. Measured cost
+        // of the guard: ~1.1U withheld over 21 days where no low followed (~0.05 U/day). ---
+        // --- UNANNOUNCED-RISE release (2026-07-25). Lets SMB through the two glucose-BLIND gates (fedState,
+        // post-hypo lockout) during a genuine unfed climb with no insulin on board. Swept over the trailing
+        // 21 days: 8 releases, ZERO followed by a sub-3.9 reading within 2h. Loosening any of the three
+        // re-admits the post-hypo rebound this is built to exclude. ---
+        const val UNANNOUNCED_RISE_MIN_BG_MMOL = 10.0       // must be clearly high
+        const val UNANNOUNCED_RISE_MAX_IOB_U = 0.5          // ...with essentially NO insulin on board (cannot stack)
+        const val UNANNOUNCED_RISE_MIN_SINCE_HYPO_MIN = 60.0 // ...and not an immediate rebound off a low
+        const val DESCENT_GUARD_MMOL = 4.5     // begin tapering basal below this mass-balance eventual
+        const val DESCENT_SUSPEND_MMOL = 3.5   // ...reaching a full suspend here
     }
 }
