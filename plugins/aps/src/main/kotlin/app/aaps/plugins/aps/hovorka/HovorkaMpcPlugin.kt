@@ -122,6 +122,12 @@ class HovorkaMpcPlugin @Inject constructor(
             )
             addPreference(
                 AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaCarbAbsorptionByTod,
+                    summary = R.string.hovorka_carb_absorption_by_tod_summary, title = R.string.hovorka_carb_absorption_by_tod_title
+                )
+            )
+            addPreference(
+                AdaptiveSwitchPreference(
                     ctx = context, booleanKey = BooleanKey.HovorkaTddAdaptation,
                     summary = R.string.hovorka_tdd_adaptation_summary, title = R.string.hovorka_tdd_adaptation_title
                 )
@@ -184,7 +190,23 @@ class HovorkaMpcPlugin @Inject constructor(
         val icGPerU = profile.getIc()
         // carb absorption time-to-peak (min) is a physiological property the profile ISF/IC do NOT capture;
         // default 40 (fast), raise for slow (fat/protein) meals so the controller expects a longer rise.
-        val carbAbsorptionMin = preferences.get(DoubleKey.HovorkaCarbAbsorptionMin)
+        // TIME-OF-DAY carb absorption (2026-07-25). Carb absorption is not a constant — it varies across the
+        // day, and a single value cannot fit all three meals. Measured over this user's trailing 21 days
+        // (54 meals, time from carb entry to the post-dip glucose peak):
+        //     06-11h  n=12  peak @128 min   -> tMaxG ~ 90
+        //     11-16h  n=17  peak @188 min   -> tMaxG ~120
+        //     16-24h  n=21  peak @261 min   -> tMaxG ~150
+        // Dinner absorbs more than twice as slowly as breakfast. With a single tMaxG=90 the controller expects
+        // dinner carbs ~2h before they arrive, so it suspends through the early insulin-driven DIP (73% of
+        // dinners, 16/22, dip below their starting glucose) and is then caught flat-footed by the late wave
+        // (2026-07-25: 9.4 -> 6.2 at +60min -> 12.5 at +180min on a correctly-dosed 110g meal).
+        // The evening multiplier is applied to whatever the user's base pref is, so the pref still works as
+        // the master control; setting HovorkaCarbAbsorptionByTod=false restores the old single-value behaviour.
+        val carbAbsorptionBase = preferences.get(DoubleKey.HovorkaCarbAbsorptionMin)
+        val carbAbsorptionMin =
+            if (preferences.get(BooleanKey.HovorkaCarbAbsorptionByTod))
+                carbAbsorptionBase * carbAbsorptionTodFactor(dateUtil.now())
+            else carbAbsorptionBase
         val baseModel = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol, carbAbsorptionMin)
         // 4: re-identify structural params (insulin sensitivity / EGP / carb-absorption) from recent history —
         // a daily background re-tune, stateless from the personalise() prior so the model is never more than one
@@ -424,18 +446,33 @@ class HovorkaMpcPlugin @Inject constructor(
         // a hypo — the worst case is a temporarily lower basal that the next tick restores. Cost measured on
         // the real data: ~1.1U withheld over 21 days where no low actually followed (~0.05U/day).
         // Placed AFTER the correction floor so it has the final say: withholding beats correcting.
-        if (isfMmol > 0.0 && rateUhr > 0.0 && eventualLinearMmol < DESCENT_GUARD_MMOL) {
+        // RAW-BG ARM (2026-07-25, same night). The first version of this guard tapered on eventualMB ALONE and
+        // was far too weak in practice: live at 23:22, BG 4.8 and falling steadily (6.4 -> 4.8 over 40 min),
+        // eventualMB 4.2 sat only 30% into the 4.5->3.5 taper, so it kept 70% of basal and still delivered
+        // 0.24 U/hr into a fall. That repeats the exact defect diagnosed in HIGH-CORR this morning — guarding
+        // on a PREDICTION with no floor on the OBSERVED value. No forecast should license dosing at 4.8 and
+        // dropping. So take the STRONGER of two independent tapers:
+        //   - the mass-balance arm (predictive: catches a fall before glucose is low), and
+        //   - a raw-CGM arm on the sensor value itself (reactive: cannot be talked out of it by a forecast).
+        // Whichever demands the bigger cut wins. Still only ever REMOVES insulin.
+        val mbBelow = eventualLinearMmol < DESCENT_GUARD_MMOL
+        val bgBelow = rawCgmMmol < DESCENT_BG_GUARD_MMOL
+        if (isfMmol > 0.0 && rateUhr > 0.0 && (mbBelow || bgBelow)) {
             val span = (DESCENT_GUARD_MMOL - DESCENT_SUSPEND_MMOL).coerceAtLeast(0.1)
             // 1.0 at/above the guard threshold, 0.0 at/below the suspend threshold
-            val keepFrac = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
+            val mbKeep = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
+            // raw-CGM taper: full basal at DESCENT_BG_GUARD_MMOL, zero by the hypo-suspend threshold
+            val bgSpan = (DESCENT_BG_GUARD_MMOL - HYPO_SUSPEND_MMOL).coerceAtLeast(0.1)
+            val bgKeep = ((rawCgmMmol - HYPO_SUSPEND_MMOL) / bgSpan).coerceIn(0.0, 1.0)
+            val keepFrac = min(mbKeep, bgKeep)          // the stricter arm wins
             val guarded = round(rateUhr * keepFrac * 100.0) / 100.0
             if (guarded < rateUhr) {
-                corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (MB %.1f<%.1f)"
-                    .format(rateUhr, guarded, eventualLinearMmol, DESCENT_GUARD_MMOL)
+                val arm = if (bgKeep < mbKeep) "BG %.1f".format(rawCgmMmol) else "MB %.1f".format(eventualLinearMmol)
+                corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (%s)".format(rateUhr, guarded, arm)
                 rateUhr = guarded
             }
             // an irreversible microbolus must never survive a predicted low
-            if (smbU > 0.0 && eventualLinearMmol < DESCENT_GUARD_MMOL) {
+            if (smbU > 0.0) {
                 corrNote += " | DESCENT-GUARD-SMB %.2f→0".format(smbU)
                 smbU = 0.0
             }
@@ -450,7 +487,8 @@ class HovorkaMpcPlugin @Inject constructor(
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, corrNote, reIdNote, decision.reason)
+        val todNote = if (carbAbsorptionMin != carbAbsorptionBase) " | tMaxG=%.0f (ToD)".format(carbAbsorptionMin) else ""
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, corrNote, todNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -481,6 +519,32 @@ class HovorkaMpcPlugin @Inject constructor(
     // which change rarely — memoise on a rounded key so it recomputes only when they actually change.
     private var cachedModel: HovorkaModel? = null
     private var cachedKey: String = ""
+
+    /**
+     * Time-of-day multiplier on the carb-absorption time constant (2026-07-25).
+     *
+     * Keyed on the hour of the MOST RECENT MEAL rather than the current time: a dinner eaten at 18:30 is
+     * still absorbing at 22:00, and it is the meal's own absorption profile that matters, not the clock.
+     * Falls back to the current hour when there is no recent meal (nothing is absorbing, so the value only
+     * affects the model's forward expectation).
+     *
+     * Multipliers are relative to a 90-minute base (the value this user runs), derived from the measured
+     * time-to-peak per block: 06-11h 128min (x1.0), 11-16h 188min (x1.33), 16-24h 261min (x1.67).
+     * Overnight shares the evening figure — too few night meals (n=0) to measure, and a late dinner is the
+     * likeliest thing still absorbing then.
+     */
+    private fun carbAbsorptionTodFactor(now: Long): Double {
+        val lastMealMs = persistenceLayer
+            .getCarbsFromTimeToTimeExpanded(now - T.hours(CARB_TOD_MEAL_LOOKBACK_H).msecs(), now, false)
+            .filter { it.amount > 0.0 }
+            .maxOfOrNull { it.timestamp }
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = lastMealMs ?: now }
+        return when (cal.get(java.util.Calendar.HOUR_OF_DAY)) {
+            in 6..10  -> CARB_TOD_MORNING_MUL
+            in 11..15 -> CARB_TOD_MIDDAY_MUL
+            else      -> CARB_TOD_EVENING_MUL
+        }
+    }
 
     private fun personalizedModel(w: Double, isfMgdl: Double, icGPerU: Double, basalUhr: Double, targetMmol: Double, carbAbsorptionMin: Double): HovorkaModel {
         val key = "%.1f/%.1f/%.2f/%.4f/%.2f/%.1f".format(w, isfMgdl, icGPerU, basalUhr, targetMmol, carbAbsorptionMin)
@@ -734,7 +798,18 @@ class HovorkaMpcPlugin @Inject constructor(
         const val UNANNOUNCED_RISE_MIN_BG_MMOL = 10.0       // must be clearly high
         const val UNANNOUNCED_RISE_MAX_IOB_U = 0.5          // ...with essentially NO insulin on board (cannot stack)
         const val UNANNOUNCED_RISE_MIN_SINCE_HYPO_MIN = 60.0 // ...and not an immediate rebound off a low
+        // --- TIME-OF-DAY carb absorption (2026-07-25). Multipliers on the base HovorkaCarbAbsorptionMin pref,
+        // from 54 measured meals: time from carb entry to post-dip glucose peak was 128 min (06-11h),
+        // 188 min (11-16h), 261 min (16-24h). Ratios vs the morning block give 1.0 / 1.33 / 1.67. ---
+        const val CARB_TOD_MORNING_MUL = 1.0   // 06-11h — the base value already fits breakfast
+        const val CARB_TOD_MIDDAY_MUL = 1.33   // 11-16h
+        const val CARB_TOD_EVENING_MUL = 1.67  // 16-06h — dinner absorbs >2x slower than breakfast
+        const val CARB_TOD_MEAL_LOOKBACK_H = 6L // how far back to look for the meal whose profile still applies
         const val DESCENT_GUARD_MMOL = 4.5     // begin tapering basal below this mass-balance eventual
         const val DESCENT_SUSPEND_MMOL = 3.5   // ...reaching a full suspend here
+        // RAW-BG arm: taper on the SENSOR value too, so no forecast can license dosing into an observed fall.
+        // Full basal at this value, ramping to zero by HYPO_SUSPEND_MMOL (3.9). Live 2026-07-25 23:22 the
+        // MB-only guard still gave 0.24 U/hr at BG 4.8 falling; with this arm that tick keeps 24% -> 0.08.
+        const val DESCENT_BG_GUARD_MMOL = 6.0
     }
 }
