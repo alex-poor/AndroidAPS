@@ -32,6 +32,13 @@ class HovorkaMpc(
     // --- sequence optimisation (CamAPS-faithful: optimise a BIR *vector*, command its first step) ---
     private val nSegments: Int = 6,                  // piecewise-constant basal segments over the horizon
     private val sweeps: Int = 2,                     // coordinate-descent passes over the segments
+    // reference-trajectory shape (approach-to-target). Two exponential zones: approach the target with
+    // time-constant [refTauFastMin] when glucose is above [refBreakMmol] (decisive when high), and the
+    // gentler [refTauSlowMin] at/below it. Derived by in-silico optimisation + a digital-twin A/B (replaces
+    // the original fixed zone-slopes). Lower refTauFast = more decisive high-glucose correction.
+    private val refTauFastMin: Double = 60.0,
+    private val refTauSlowMin: Double = 180.0,
+    private val refBreakMmol: Double = 13.0,
     // below-target attenuation: how hard to penalise glucose RISING above the setpoint while still ≤ the
     // (raised) control target. 0.0 = the rise toward target is free (fullest back-off, most CamAPS-like);
     // a small value trades a touch of that back-off against fewer rebound highs.
@@ -228,19 +235,15 @@ class HovorkaMpc(
         return 0.5 * (lo + hi)
     }
 
-    /** Reference trajectory: exponential approach to target with glucose-zone-dependent decay. */
+    /** Reference trajectory: exponential approach to target, faster ([refTauFastMin]) above the breakpoint. */
     fun referenceTrajectory(g0: Double): DoubleArray {
         val steps = horizonMin / stepMin
         val ref = DoubleArray(steps + 1)
         ref[0] = g0
         for (i in 0 until steps) {
             val g = ref[i]
-            val slopePerMin = when {                 // decoded per-step slopes (per ~1 unit); scaled to /min
-                g > 13.0 -> -1.0 / 24.0
-                g > 10.0 -> -0.0283
-                else     -> -1.0 / 60.0
-            }
-            val decay = exp(slopePerMin * stepMin / 5.0)   // slopes at ~5-min cadence
+            val tauMin = if (g > refBreakMmol) refTauFastMin else refTauSlowMin
+            val decay = exp(-stepMin / tauMin)          // per ref-step exponential decay toward target
             ref[i + 1] = targetMmol + (g - targetMmol) * decay
         }
         return ref

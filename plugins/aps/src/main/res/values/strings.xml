@@ -227,12 +227,22 @@
     <string name="hovorka_mpc_description">Experimental Hovorka nonlinear model-predictive control (in-silico validated only — not for therapy)</string>
     <string name="hovorka_body_weight_title">Body weight (kg)</string>
     <string name="hovorka_body_weight_summary">Patient body weight — parameterises the Hovorka physiological model</string>
+    <string name="hovorka_carb_absorption_title">Carb absorption time-to-peak (min)</string>
+    <string name="hovorka_carb_absorption_summary">How long your meals take to peak in the blood. The default (40) suits fast carbs; raise it if you eat slowly-absorbing meals (fat/protein) and the loop lets you run high after eating. Higher = the controller expects a longer, later glucose rise.</string>
+    <string name="hovorka_correction_tau_title">High-glucose correction speed (min)</string>
+    <string name="hovorka_correction_tau_summary">How fast the controller aims to bring high glucose back to target. LOWER = more decisive correction when high. 60 (default) is modestly more decisive than the original ~120; 20 is the in-silico optimum (aggressive — validate open-loop first); set 120 for the original gentle behaviour.</string>
     <string name="hovorka_tdd_adaptation_title">Adaptive TDD (learn from recent days)</string>
     <string name="hovorka_tdd_adaptation_summary">Slowly move the operating basal the controller is shaped around, based on the last week of enacted insulin and glucose outcomes (bounded, safety-first). Off = use the profile basal as-is.</string>
     <string name="hovorka_imm_bank_title">IMM Kalman bank (identify carb absorption)</string>
     <string name="hovorka_imm_bank_summary">Run 8 parallel models spanning fast↔slow carb absorption and pick the best-fitting each cycle (CamAPS-style), instead of one fixed model. Experimental — on its own it is about the same as the single model; it mainly prepares for meal detection and microbolus (SMB). Off = single model.</string>
     <string name="hovorka_enable_smb_title">Microbolus (SMB) — EXPERIMENTAL, delivers insulin</string>
     <string name="hovorka_enable_smb_summary">When a temp basal cannot lower a post-meal peak fast enough, deliver a small immediate correction bolus (a fraction of the deficit, bounded by max IOB / max bolus). Requires SMB objective. Highest-risk feature; forced to zero on any hypo. Off = temp-basal only.</string>
+    <string name="hovorka_max_basal_title">Maximum basal rate (U/hr)</string>
+    <string name="hovorka_max_basal_summary">Hard ceiling on any temporary basal the loop can set. Nothing the algorithm decides can exceed this. Usual guidance is 3–4x your highest profile basal rate; too low and the loop cannot clear a high in reasonable time.</string>
+    <string name="hovorka_max_iob_title">Maximum IOB (U)</string>
+    <string name="hovorka_max_iob_summary">Hard ceiling on total insulin on board. Once IOB reaches this, every correction path stops until it decays. Usual guidance is about 0.2x your total daily dose. Set too low, the loop goes quiet at exactly the moment a high needs correcting.</string>
+    <string name="hovorka_carb_absorption_by_tod_title">Carb absorption varies by time of day</string>
+    <string name="hovorka_carb_absorption_by_tod_summary">Scale the carb-absorption time above by when the meal was eaten: breakfast unchanged, midday x1.33, evening x1.67. Set for slower evening digestion, where carbs arrive long after a pre-bolus has peaked — the loop otherwise expects dinner carbs about two hours before they show up, backs off through the early dip, then chases the late rise. Off = one absorption time for every meal.</string>
     <string name="hovorka_meal_detection_title">Unannounced-meal detection — EXPERIMENTAL</string>
     <string name="hovorka_meal_detection_summary">Detect meals you did not enter: when glucose rises faster than known insulin and carbs explain, infer the carbs and react earlier (best paired with SMB). Biased hard against false positives — off around lows and for a while after, and while announced carbs are still active. Off = only announced carbs are used.</string>
     <string name="hovorka_param_id_title">Auto re-tune model from my data — EXPERIMENTAL</string>

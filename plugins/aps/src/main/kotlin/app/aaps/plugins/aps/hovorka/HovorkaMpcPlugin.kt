@@ -75,6 +75,7 @@ class HovorkaMpcPlugin @Inject constructor(
 ) : PluginBase(
     PluginDescription()
         .mainType(PluginType.APS)
+        .fragmentClass("app.aaps.plugins.aps.compose.AlgorithmFragment")
         .pluginName(R.string.hovorka_mpc_name)
         .shortName(R.string.hovorka_mpc_shortname)
         .preferencesId(PluginDescription.PREFERENCE_SCREEN)
@@ -101,10 +102,45 @@ class HovorkaMpcPlugin @Inject constructor(
             key = "hovorka_mpc_settings"
             title = rh.gs(R.string.hovorka_mpc_name)
             initialExpandedChildrenCount = 0
+            // SAFETY LIMITS. These two keys belong to the OpenAPS-SMB plugin, which is disabled whenever
+            // HovorkaMPC is the active APS — so AAPS never renders its preference screen and the values were
+            // unreachable in the UI, while HovorkaMPC still enforced them. Surface them here: they are the
+            // ceiling on everything this plugin can do, so they must be visible and editable where the
+            // algorithm that obeys them lives.
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.ApsMaxBasal,
+                    dialogMessage = R.string.hovorka_max_basal_summary, title = R.string.hovorka_max_basal_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.ApsSmbMaxIob,
+                    dialogMessage = R.string.hovorka_max_iob_summary, title = R.string.hovorka_max_iob_title
+                )
+            )
             addPreference(
                 AdaptiveDoublePreference(
                     ctx = context, doubleKey = DoubleKey.HovorkaBodyWeight,
                     dialogMessage = R.string.hovorka_body_weight_summary, title = R.string.hovorka_body_weight_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaCarbAbsorptionMin,
+                    dialogMessage = R.string.hovorka_carb_absorption_summary, title = R.string.hovorka_carb_absorption_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaCorrectionTauMin,
+                    dialogMessage = R.string.hovorka_correction_tau_summary, title = R.string.hovorka_correction_tau_title
+                )
+            )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaCarbAbsorptionByTod,
+                    summary = R.string.hovorka_carb_absorption_by_tod_summary, title = R.string.hovorka_carb_absorption_by_tod_title
                 )
             )
             addPreference(
@@ -169,14 +205,42 @@ class HovorkaMpcPlugin @Inject constructor(
         // their basal/profile-target — instead of population weight-only params. Cached (calibration heavy).
         val isfMgdl = profile.getProfileIsfMgdl()
         val icGPerU = profile.getIc()
-        val baseModel = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol)
+        // carb absorption time-to-peak (min) is a physiological property the profile ISF/IC do NOT capture;
+        // default 40 (fast), raise for slow (fat/protein) meals so the controller expects a longer rise.
+        // TIME-OF-DAY carb absorption (2026-07-25). Carb absorption is not a constant — it varies across the
+        // day, and a single value cannot fit all three meals. Measured over this user's trailing 21 days
+        // (54 meals, time from carb entry to the post-dip glucose peak):
+        //     06-11h  n=12  peak @128 min   -> tMaxG ~ 90
+        //     11-16h  n=17  peak @188 min   -> tMaxG ~120
+        //     16-24h  n=21  peak @261 min   -> tMaxG ~150
+        // Dinner absorbs more than twice as slowly as breakfast. With a single tMaxG=90 the controller expects
+        // dinner carbs ~2h before they arrive, so it suspends through the early insulin-driven DIP (73% of
+        // dinners, 16/22, dip below their starting glucose) and is then caught flat-footed by the late wave
+        // (2026-07-25: 9.4 -> 6.2 at +60min -> 12.5 at +180min on a correctly-dosed 110g meal).
+        // The evening multiplier is applied to whatever the user's base pref is, so the pref still works as
+        // the master control; setting HovorkaCarbAbsorptionByTod=false restores the old single-value behaviour.
+        val carbAbsorptionBase = preferences.get(DoubleKey.HovorkaCarbAbsorptionMin)
+        val carbAbsorptionMin =
+            if (preferences.get(BooleanKey.HovorkaCarbAbsorptionByTod))
+                carbAbsorptionBase * carbAbsorptionTodFactor(dateUtil.now())
+            else carbAbsorptionBase
+        val baseModel = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol, carbAbsorptionMin)
         // 4: re-identify structural params (insulin sensitivity / EGP / carb-absorption) from recent history —
         // a daily background re-tune, stateless from the personalise() prior so the model is never more than one
         // bounded step from the profile. OFF by default; surfaces its result to the UI (reason + settings + a
         // notification on any change). The basal the user actually takes is unaffected — this only re-tunes the
         // MODEL the MPC rolls out on.
         val model = reIdentifiedModel(baseModel, bodyWeightKg, isfMgdl, now)
-        val maxBasalUhr = constraintsChecker.getMaxBasalAllowed(profile).value()
+        // maxBasal: getMaxBasalAllowed() is supplied by the OpenAPS-SMB plugin, which is DISABLED whenever
+        // HovorkaMPC is the active APS — so the constraint returns unbounded and the user's setting was
+        // silently dead here (the same defect already fixed for maxIOB below). Worse, because that plugin is
+        // disabled AAPS never RENDERS its preference screen, so neither value was reachable in the UI at all:
+        // on 2026-07-26 the user went looking for "maximum basal" and found only "minimal request change".
+        // Read the pref directly, and take whichever bound is tighter if a real constraint does exist.
+        val maxBasalUhr = min(
+            constraintsChecker.getMaxBasalAllowed(profile).value(),
+            preferences.get(DoubleKey.ApsMaxBasal)
+        )
         val maxBasalMuMin = maxBasalUhr * 1000.0 / 60.0
         // 2d: adapt the OPERATING basal (the MPC's nominal / floor centre) from recent daily outcomes if
         // enabled. The MODEL above stays anchored to the PROFILE basal — 2d moves only the operating point.
@@ -285,6 +349,7 @@ class HovorkaMpcPlugin @Inject constructor(
         val mpc = HovorkaMpc(
             rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin,
+            refTauFastMin = preferences.get(DoubleKey.HovorkaCorrectionTauMin),
             // in closed loop honour a model-requested full suspend (post-bolus) instead of the anti-spam floor
             allowFullSuspend = constraintsChecker.isClosedLoopAllowed().value(),
             enableSmb = smbAllowed, maxSmbU = maxSmbU
@@ -333,9 +398,42 @@ class HovorkaMpcPlugin @Inject constructor(
         // manufactures a fictional excess. Worse, raising basal there partly undoes the current-BG damper, which
         // is the hypo protection near target. Require a GENUINE high, and never credit negative IOB as excess.
         var corrNote = ""
-        val iobForCorrection = max(0.0, iobNow)      // negative IOB = behind on basal, NOT a glucose excess
+        // --- IOB DIVERGENCE DETECTOR (2026-07-26) ---
+        // Every guard here reasons from `eventual = BG - IOB*ISF`, which assumes booked IOB WILL act. When it
+        // does not — a failed site, a bad cartridge, degraded insulin — that assumption inverts the loop's
+        // behaviour precisely when it matters: the phantom pull-down keeps `eventual` near target, the
+        // correction floor sees no excess, and the loop goes quiet at a high it should be attacking.
+        //   2026-07-26 08:22  BG 14.9, IOB 3.7 -> eventual 7.0 (target 7.0) -> rate 0.00 for 30 min
+        //   2026-07-25 12:17  BG 14.6, IOB 4.1 -> eventual 6.8               -> rate 0.00
+        //   2026-07-07 14:32  BG 20.1, IOB 5.2 -> eventual 7.0               -> rate 0.00
+        // In each case the booked insulin measurably was not working (2026-07-26 breakfast: dosing was
+        // correct at 5.51U against a 5.29U carb requirement, yet ~2.8U never acted).
+        //
+        // The detector is purely OBSERVATIONAL: if glucose has RISEN over the last half hour while the model
+        // insisted it was heading down, the booked IOB is not doing what the model claims, whatever the
+        // arithmetic says. Discount it, so the correction floor sees the excess that is really there.
+        //
+        // Deliberately narrow. Fitted over the user's trailing 21 days it fires on 3.5% of decisions, covers
+        // every one of the bad episodes (incl. 2026-07-25 and -26), and only 3% of firings were followed by a
+        // sub-3.9 reading within 2h — versus 33-46% for the descent guard's trigger, i.e. it selects a very
+        // different and much safer population. Gates:
+        //   - glucose genuinely HIGH (>= DIVERGENCE_MIN_BG_MMOL). Below that a discount would RAISE dosing on
+        //     a near-target glucose, which is the hypo direction — at BG 8.6 a 50% discount reads MB 2.8 and
+        //     would suppress instead of correct. The high gate is what makes this safe.
+        //   - a real RISE over the window, not noise
+        //   - the model predicted a FALL throughout that window (mass balance below glucose at every tick)
+        //   - meaningful IOB booked, or there is nothing to discount
+        // It only ever RAISES the eventual (never lowers it), so it can only ever ADD correction at a high;
+        // it cannot suppress a suspend, and every hypo backstop downstream still binds.
+        val divergence = detectIobDivergence(now, rawCgmMmol, iobNow)
+        val iobCreditFactor = if (divergence) DIVERGENCE_IOB_CREDIT else 1.0
+        val iobForCorrection = max(0.0, iobNow) * iobCreditFactor   // negative IOB = behind on basal, NOT a glucose excess
         val eventualForCorrection = (rawCgmMmol - iobForCorrection * isfMmol + carbRiseMmol)
             .coerceIn(EVENTUAL_MIN_MMOL, EVENTUAL_MAX_MMOL)
+        val divNote = if (divergence)
+            " | IOB-DIVERGENCE (BG rose %.1f→%.1f while model predicted a fall; crediting %.0f%% of %.1fU)"
+                .format(rawCgmMmol - DIVERGENCE_MIN_RISE_MMOL, rawCgmMmol, 100.0 * DIVERGENCE_IOB_CREDIT, iobNow)
+        else ""
         // NOTE (2026-07-25): an unconditional "observed high AND rising" bypass of the mass-balance gate was
         // TRIED here and REJECTED — in-silico it added lows in all four cohort scenarios (worst-min 3.1→2.6)
         // for a ≤0.1 mmol/L peak gain. Firing on a high alone cannot distinguish LATE insulin (the common case,
@@ -407,18 +505,33 @@ class HovorkaMpcPlugin @Inject constructor(
         // a hypo — the worst case is a temporarily lower basal that the next tick restores. Cost measured on
         // the real data: ~1.1U withheld over 21 days where no low actually followed (~0.05U/day).
         // Placed AFTER the correction floor so it has the final say: withholding beats correcting.
-        if (isfMmol > 0.0 && rateUhr > 0.0 && eventualLinearMmol < DESCENT_GUARD_MMOL) {
+        // RAW-BG ARM (2026-07-25, same night). The first version of this guard tapered on eventualMB ALONE and
+        // was far too weak in practice: live at 23:22, BG 4.8 and falling steadily (6.4 -> 4.8 over 40 min),
+        // eventualMB 4.2 sat only 30% into the 4.5->3.5 taper, so it kept 70% of basal and still delivered
+        // 0.24 U/hr into a fall. That repeats the exact defect diagnosed in HIGH-CORR this morning — guarding
+        // on a PREDICTION with no floor on the OBSERVED value. No forecast should license dosing at 4.8 and
+        // dropping. So take the STRONGER of two independent tapers:
+        //   - the mass-balance arm (predictive: catches a fall before glucose is low), and
+        //   - a raw-CGM arm on the sensor value itself (reactive: cannot be talked out of it by a forecast).
+        // Whichever demands the bigger cut wins. Still only ever REMOVES insulin.
+        val mbBelow = eventualLinearMmol < DESCENT_GUARD_MMOL
+        val bgBelow = rawCgmMmol < DESCENT_BG_GUARD_MMOL
+        if (isfMmol > 0.0 && rateUhr > 0.0 && (mbBelow || bgBelow)) {
             val span = (DESCENT_GUARD_MMOL - DESCENT_SUSPEND_MMOL).coerceAtLeast(0.1)
             // 1.0 at/above the guard threshold, 0.0 at/below the suspend threshold
-            val keepFrac = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
+            val mbKeep = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
+            // raw-CGM taper: full basal at DESCENT_BG_GUARD_MMOL, zero by the hypo-suspend threshold
+            val bgSpan = (DESCENT_BG_GUARD_MMOL - HYPO_SUSPEND_MMOL).coerceAtLeast(0.1)
+            val bgKeep = ((rawCgmMmol - HYPO_SUSPEND_MMOL) / bgSpan).coerceIn(0.0, 1.0)
+            val keepFrac = min(mbKeep, bgKeep)          // the stricter arm wins
             val guarded = round(rateUhr * keepFrac * 100.0) / 100.0
             if (guarded < rateUhr) {
-                corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (MB %.1f<%.1f)"
-                    .format(rateUhr, guarded, eventualLinearMmol, DESCENT_GUARD_MMOL)
+                val arm = if (bgKeep < mbKeep) "BG %.1f".format(rawCgmMmol) else "MB %.1f".format(eventualLinearMmol)
+                corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (%s)".format(rateUhr, guarded, arm)
                 rateUhr = guarded
             }
             // an irreversible microbolus must never survive a predicted low
-            if (smbU > 0.0 && eventualLinearMmol < DESCENT_GUARD_MMOL) {
+            if (smbU > 0.0) {
                 corrNote += " | DESCENT-GUARD-SMB %.2f→0".format(smbU)
                 smbU = 0.0
             }
@@ -433,7 +546,8 @@ class HovorkaMpcPlugin @Inject constructor(
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, corrNote, reIdNote, decision.reason)
+        val todNote = if (carbAbsorptionMin != carbAbsorptionBase) " | tMaxG=%.0f (ToD)".format(carbAbsorptionMin) else ""
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, corrNote, todNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -465,12 +579,63 @@ class HovorkaMpcPlugin @Inject constructor(
     private var cachedModel: HovorkaModel? = null
     private var cachedKey: String = ""
 
-    private fun personalizedModel(w: Double, isfMgdl: Double, icGPerU: Double, basalUhr: Double, targetMmol: Double): HovorkaModel {
-        val key = "%.1f/%.1f/%.2f/%.4f/%.2f".format(w, isfMgdl, icGPerU, basalUhr, targetMmol)
+    /**
+     * Time-of-day multiplier on the carb-absorption time constant (2026-07-25).
+     *
+     * Keyed on the hour of the MOST RECENT MEAL rather than the current time: a dinner eaten at 18:30 is
+     * still absorbing at 22:00, and it is the meal's own absorption profile that matters, not the clock.
+     * Falls back to the current hour when there is no recent meal (nothing is absorbing, so the value only
+     * affects the model's forward expectation).
+     *
+     * Multipliers are relative to a 90-minute base (the value this user runs), derived from the measured
+     * time-to-peak per block: 06-11h 128min (x1.0), 11-16h 188min (x1.33), 16-24h 261min (x1.67).
+     * Overnight shares the evening figure — too few night meals (n=0) to measure, and a late dinner is the
+     * likeliest thing still absorbing then.
+     */
+    private fun carbAbsorptionTodFactor(now: Long): Double {
+        val lastMealMs = persistenceLayer
+            .getCarbsFromTimeToTimeExpanded(now - T.hours(CARB_TOD_MEAL_LOOKBACK_H).msecs(), now, false)
+            .filter { it.amount > 0.0 }
+            .maxOfOrNull { it.timestamp }
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = lastMealMs ?: now }
+        return when (cal.get(java.util.Calendar.HOUR_OF_DAY)) {
+            in 6..10  -> CARB_TOD_MORNING_MUL
+            in 11..15 -> CARB_TOD_MIDDAY_MUL
+            else      -> CARB_TOD_EVENING_MUL
+        }
+    }
+
+    /**
+     * IOB DIVERGENCE (2026-07-26): has glucose RISEN over the last [DIVERGENCE_WINDOW_MIN] minutes while the
+     * booked IOB says it should have been falling? If so the insulin on board is not acting and its credit in
+     * the mass-balance eventual is fictional.
+     *
+     * Uses only CGM history + current IOB — no model state — so it cannot be talked out of it by the same
+     * rollout that is already wrong. The "model predicted a fall" test is evaluated directly from mass
+     * balance at each historical reading (BG - IOB*ISF < BG, i.e. positive IOB), which is what the guards
+     * downstream actually consume.
+     */
+    private fun detectIobDivergence(now: Long, rawCgmMmol: Double, iobNow: Double): Boolean {
+        if (rawCgmMmol < DIVERGENCE_MIN_BG_MMOL) return false      // only at a genuine high — see call site
+        if (iobNow < DIVERGENCE_MIN_IOB_U) return false            // nothing meaningful to discount
+        val readings = persistenceLayer
+            .getBgReadingsDataFromTimeToTime(now - T.mins(DIVERGENCE_WINDOW_MIN).msecs(), now, false)
+            .sortedBy { it.timestamp }
+        if (readings.size < DIVERGENCE_MIN_READINGS) return false  // not enough history to judge
+        val oldest = readings.first().value / MGDL_PER_MMOL
+        // a real rise across the window, not sensor noise
+        if (rawCgmMmol - oldest < DIVERGENCE_MIN_RISE_MMOL) return false
+        // ...and monotone enough that this is a sustained climb rather than a spike either side of a dip
+        val midpoint = readings[readings.size / 2].value / MGDL_PER_MMOL
+        return midpoint > oldest && rawCgmMmol > midpoint
+    }
+
+    private fun personalizedModel(w: Double, isfMgdl: Double, icGPerU: Double, basalUhr: Double, targetMmol: Double, carbAbsorptionMin: Double): HovorkaModel {
+        val key = "%.1f/%.1f/%.2f/%.4f/%.2f/%.1f".format(w, isfMgdl, icGPerU, basalUhr, targetMmol, carbAbsorptionMin)
         if (key != cachedKey || cachedModel == null) {
-            cachedModel = HovorkaModel(HovorkaParams.personalize(w, isfMgdl, icGPerU, basalUhr, targetMmol))
+            cachedModel = HovorkaModel(HovorkaParams.personalize(w, isfMgdl, icGPerU, basalUhr, targetMmol, tMaxGmin = carbAbsorptionMin))
             cachedKey = key
-            aapsLogger.debug(LTag.APS, "HovorkaMPC personalised: W=$w ISF=$isfMgdl IC=$icGPerU basal=$basalUhr target=$targetMmol")
+            aapsLogger.debug(LTag.APS, "HovorkaMPC personalised: W=$w ISF=$isfMgdl IC=$icGPerU basal=$basalUhr target=$targetMmol tMaxG=$carbAbsorptionMin")
         }
         return cachedModel!!
     }
@@ -698,7 +863,7 @@ class HovorkaMpcPlugin @Inject constructor(
         const val EVENTUAL_MAX_MMOL = 30.0
         const val HIGH_CORRECTION_MIN_HIGH_MMOL = 2.0  // correction floor needs a GENUINE high (target+this), not merely >target
         const val HIGH_CORRECTION_MARGIN_MMOL = 0.6   // high-glucose correction floor fires only when mass-balance eventual exceeds target by this
-        const val HIGH_CORRECTION_HORIZON_H = 1.5     // clear the residual mass-balance excess over this many hours (conservative; ramps as glucose climbs)
+        const val HIGH_CORRECTION_HORIZON_H = 1.5     // clear the residual mass-balance excess over this many hours (in-silico 2026-07-07: 1.5h beats 2h on highs, still zero added lows)
         const val HIGH_CORR_SMB_FRACTION = 0.3        // 2026-07-08: share of the mass-balance high-glucose excess delivered NOW as an SMB (rest ramps via the basal floor); self-tapers as IOB builds. Raise → more aggressive at highs (0.5 stacked into a meal bolus → hypo; cut to 0.3)
         const val HIGH_CORR_SMB_MIN_U = 0.05          // skip sub-resolution high-corr microboluses
         const val HIGH_CORR_SMB_MAX_COB_G = 10.0      // 2026-07-08: no front-loaded correction SMB while >=this many g of carbs are pending (meal territory → basal + meal bolus own it; prevents stacking)
@@ -717,7 +882,28 @@ class HovorkaMpcPlugin @Inject constructor(
         const val UNANNOUNCED_RISE_MIN_BG_MMOL = 10.0       // must be clearly high
         const val UNANNOUNCED_RISE_MAX_IOB_U = 0.5          // ...with essentially NO insulin on board (cannot stack)
         const val UNANNOUNCED_RISE_MIN_SINCE_HYPO_MIN = 60.0 // ...and not an immediate rebound off a low
+        // --- TIME-OF-DAY carb absorption (2026-07-25). Multipliers on the base HovorkaCarbAbsorptionMin pref,
+        // from 54 measured meals: time from carb entry to post-dip glucose peak was 128 min (06-11h),
+        // 188 min (11-16h), 261 min (16-24h). Ratios vs the morning block give 1.0 / 1.33 / 1.67. ---
+        const val CARB_TOD_MORNING_MUL = 1.0   // 06-11h — the base value already fits breakfast
+        const val CARB_TOD_MIDDAY_MUL = 1.33   // 11-16h
+        const val CARB_TOD_EVENING_MUL = 1.67  // 16-06h — dinner absorbs >2x slower than breakfast
+        const val CARB_TOD_MEAL_LOOKBACK_H = 6L // how far back to look for the meal whose profile still applies
         const val DESCENT_GUARD_MMOL = 4.5     // begin tapering basal below this mass-balance eventual
         const val DESCENT_SUSPEND_MMOL = 3.5   // ...reaching a full suspend here
+        // RAW-BG arm: taper on the SENSOR value too, so no forecast can license dosing into an observed fall.
+        // Full basal at this value, ramping to zero by HYPO_SUSPEND_MMOL (3.9). Live 2026-07-25 23:22 the
+        // MB-only guard still gave 0.24 U/hr at BG 4.8 falling; with this arm that tick keeps 24% -> 0.08.
+        // --- IOB DIVERGENCE detector (2026-07-26). Discounts booked IOB that is observably not acting, so a
+        // failed site / bad cartridge cannot silence the correction floor at a high. Fitted on the user's
+        // trailing 21 days: fires on 3.5% of decisions, covers every bad episode, and only 3% of firings were
+        // followed by a sub-3.9 reading within 2h (vs 33-46% for the descent-guard trigger). ---
+        const val DIVERGENCE_MIN_BG_MMOL = 10.0   // only at a genuine high — below this a discount would raise dosing toward a hypo
+        const val DIVERGENCE_MIN_RISE_MMOL = 1.0  // a real rise across the window, not sensor noise
+        const val DIVERGENCE_WINDOW_MIN = 30L     // ...measured over this long
+        const val DIVERGENCE_MIN_IOB_U = 1.0      // ...with enough IOB booked for the discount to mean anything
+        const val DIVERGENCE_MIN_READINGS = 4     // need this many CGM points in the window to judge
+        const val DIVERGENCE_IOB_CREDIT = 0.5     // credit only this share of booked IOB while diverging
+        const val DESCENT_BG_GUARD_MMOL = 6.0
     }
 }

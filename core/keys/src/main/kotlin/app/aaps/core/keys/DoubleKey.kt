@@ -35,6 +35,8 @@ enum class DoubleKey(
     ApsAmaMin5MinCarbsImpact("openapsama_min_5m_carbimpact", 3.0, 1.0, 12.0, defaultedBySM = true),
     ApsSmbMin5MinCarbsImpact("openaps_smb_min_5m_carbimpact", 8.0, 1.0, 12.0, defaultedBySM = true),
     HovorkaBodyWeight("hovorka_body_weight", 70.0, 30.0, 250.0),
+    HovorkaCarbAbsorptionMin("hovorka_carb_absorption_min", 40.0, 20.0, 120.0),
+    HovorkaCorrectionTauMin("hovorka_correction_tau_min", 60.0, 20.0, 180.0),
     AbsorptionCutOff("absorption_cutoff", 6.0, 4.0, 10.0),
     AbsorptionMaxTime("absorption_maxtime", 6.0, 4.0, 10.0),
     AutosensMin("autosens_min", 0.7, 0.1, 1.0, defaultedBySM = true, hideParentScreenIfHidden = true),

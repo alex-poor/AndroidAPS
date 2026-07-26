@@ -22,6 +22,7 @@ enum class BooleanKey(
     HovorkaImmBank("hovorka_imm_bank", false),
     HovorkaEnableSmb("hovorka_enable_smb", false),
     HovorkaMealDetection("hovorka_meal_detection", false),
+    HovorkaCarbAbsorptionByTod("hovorka_carb_absorption_by_tod", false),
     HovorkaParamId("hovorka_param_id", false),
     GeneralSetupWizardProcessed("startupwizard_processed", false),
     OverviewKeepScreenOn("keep_screen_on", false, calculatedDefaultValue = true),
