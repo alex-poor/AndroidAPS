@@ -12,6 +12,10 @@ be looped, built on the reverse-engineering work of the people credited below.
 > - It only works with the pump's **per-pairing session key**, which you must **extract yourself from the
 >   genuine app (mylife / CamAPS FX) on a rooted device** (e.g. via frida). There is **no clean/supported
 >   path** — no key, no function.
+> - **The key expires after 28 days.** Confirmed on real hardware (2026-07-28): at 28 days the pump
+>   begins refusing every encrypted read with `NO_SHARED_KEY` (0x8C/140) and the loop stops dead.
+>   You must re-extract a key every 28 days, and that requires a valid un-revoked keybox. Plan for
+>   this before you rely on it for therapy — see [Key expiry](#key-expiry-28-days).
 > - **Use at your own risk, and only if you fully understand what it's doing.** Do not rely on it as therapy.
 
 ---
@@ -77,6 +81,58 @@ See `pump/ypsopump/` for the code; the protocol write-up lives in SandraK82's re
 ## Requirements
 - A rooted Android device, the YpsoPump, and the ability to extract the pump session key from the genuine
   app (frida). Build AndroidAPS from this branch, seed the key, enable the plugin.
+
+## Key expiry (28 days)
+
+The pump enforces a **28-day expiry** on the shared key. This is not optional and not configurable.
+
+Measured on a real pump:
+
+```
+sharedKeyDate (minted)   2026-06-29 17:30:58
+last successful read     2026-07-28 00:08:04   key age 28d 6.62h
+first NO_SHARED_KEY      2026-07-28 00:17:31   key age 28d 6.78h
+```
+
+Reads succeeded every 20 minutes right up to the last one, so this is a hard cutoff rather than a
+gradual degradation. The ~6.7 hours past an exact 28 days suggests the pump checks lazily — a timer
+or a daily boundary — rather than at the precise instant.
+
+### Recognising it
+
+The failure is easy to misdiagnose, because **the BLE link looks perfectly healthy**:
+
+- GATT connect ✅
+- MD5 auth ✅ — this is `MD5(mac + salt)`, a static hash with nothing to do with the shared key, so
+  it succeeds even with no key at all
+- CTRL_NOTIFY subscription ✅
+- **every** encrypted read ❌ — `status=140, got 0 frames`, on every characteristic
+
+It **survives** an app restart, a pump Bluetooth stop/start, and a **pump battery pull**. The key
+normally survives a reboot, so a battery pull changing nothing is itself a diagnostic signal. The
+counters never move, which rules out `0x8B` counter desync.
+
+If you are chasing this live, AAPS's own persistent log is the place to look —
+`/storage/emulated/0/Android/data/info.nightscout.androidaps/files/AndroidAPS.log` plus the rotated
+`.zip` archives beside it. `logcat`'s ring buffer will have lost the transition. Note also that
+`deviceStatus` records keep appearing after reads have stopped: AAPS re-publishes *cached* pump data,
+which will give you a false impression of when contact was lost.
+
+### Error codes
+
+Documented by [SandraK82](https://github.com/SandraK82/ypsopump-research) in
+`guides/building-a-driver-app.md` (not in the BLE-protocol doc):
+
+| Code | Meaning |
+|------|---------|
+| `0x82` (130) | bad parameter |
+| `0x85` (133) | GATT / connection |
+| `0x86` (134) | `BLE_READ_ERROR_INVALID_SHARED_KEY` — new key exchange needed |
+| `0x88` (136) | `KEY_EXCHANGE_ERROR_BLOCKED_OR_BUSY` — wait and retry |
+| `0x8A` (138) | `BLE_WRITE_ERROR_ENCRYPTION_FAILED` — key or counter problem |
+| `0x8B` (139) | `COUNTER_ERROR` — counter desync, recoverable by resync |
+| `0x8C` (140) | **`NO_SHARED_KEY` — key exchange required.** Not recoverable in software. |
+| `0x8D` (141) | `FRAGMENTATION_ERROR` — multiframe reassembly failure |
 
 ## License
 Inherits the AndroidAPS license (AGPL-3.0). Same terms and the same **no-warranty** — emphatically so for

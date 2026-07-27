@@ -80,6 +80,26 @@ class YpsoBleManager @Inject constructor(
         // counter is off by >=1 and the pump requires strictly-greater). Recover by scanning the counter
         // FORWARD (benign zero-therapy canary) until accepted; see [COUNTER_RESYNC_SCAN].
         private const val ERR_COUNTER_BEHIND = 139
+        // App-error 0x8C (140) = NO_SHARED_KEY, "key exchange required" (SandraK82,
+        // guides/building-a-driver-app.md). The pump has discarded the shared key and will refuse EVERY
+        // encrypted read until a new key exchange is performed. NOT recoverable in software.
+        //
+        // PROVEN on our own pump 2026-07-28: the pump enforces a 28-DAY key expiry, contradicting
+        // report/key-lifetime.md, which concluded "NO pump-side expiry ... the only expiry is a 28-day
+        // APP-side check that the pump ignores". It does not ignore it:
+        //     sharedKeyDate (minted)  2026-06-29 17:30:58
+        //     last successful read    2026-07-28 00:08:04   key age 28d 6.62h
+        //     first NO_SHARED_KEY     2026-07-28 00:17:31   key age 28d 6.78h
+        // Reads had succeeded every 20 min right up to 00:08, so this is a switch flipping, not drift.
+        // The ~6.7h past an exact 28 days suggests a lazy check (timer / daily boundary) rather than an
+        // instantaneous one.
+        //
+        // The trap is that the link looks perfectly healthy: GATT connect, MD5 auth (a static
+        // MD5(mac+salt), unrelated to the shared key) and CTRL_NOTIFY all succeed, and only the first
+        // encrypted read fails. It survives an app restart, a pump BLE stop/start AND a battery pull
+        // (the key normally survives reboot, so a battery pull changing nothing is itself diagnostic),
+        // and the counters never move — which rules out 0x8B desync.
+        private const val ERR_NO_SHARED_KEY = 140
         // How far to scan the write counter forward when it is behind (each step = one benign canary write).
         // Desync is normally +1/+2; a wide-ish bound covers multiple lost acks without unbounded runaway.
         private const val COUNTER_RESYNC_SCAN = 32
@@ -242,7 +262,19 @@ class YpsoBleManager @Inject constructor(
         val frames = ArrayList<ByteArray>()
         fun step(now: UUID): Unit = readOp(now) { v, s ->
             aapsLogger.debug(LTag.PUMP, "YpsoPump frame[${frames.size}] from $now: status=$s ${v?.joinToString("") { "%02x".format(it) } ?: "null"}")
-            if (s != BluetoothGatt.GATT_SUCCESS || v == null) { multiframeBusy = false; fail("read $now failed (status=$s, got ${frames.size} frames)"); return@readOp }
+            if (s != BluetoothGatt.GATT_SUCCESS || v == null) {
+                multiframeBusy = false
+                // Name 0x8C explicitly. Reported as a bare "status=140" it reads like a transient BLE
+                // fault and invites hours of restarting things that cannot possibly help; it actually
+                // means the shared key is gone and only a re-key will fix it.
+                if (s == ERR_NO_SHARED_KEY)
+                    fail("KEY EXPIRED — pump returned NO_SHARED_KEY (0x8C) on $now. The shared key has " +
+                        "expired (28-day pump-side expiry) or been cleared; a NEW KEY EXCHANGE is required. " +
+                        "Restarting AAPS, toggling pump Bluetooth and pulling the pump battery will NOT fix this.")
+                else
+                    fail("read $now failed (status=$s, got ${frames.size} frames)")
+                return@readOp
+            }
             frames.add(v)
             val total = (frames[0][0].toInt() and 0x0F).let { if (it == 0) 1 else it }
             if (frames.size < total) step(CHAR_EXTREAD) else { multiframeBusy = false; done(reassemble(frames)) }
