@@ -14,6 +14,11 @@ import java.util.concurrent.TimeUnit
 
 internal object NetworkStackBuilder {
 
+    // Keep the scheme the user typed (http:// or https://); default to https for bare hostnames.
+    private fun normalizeBaseUrl(baseUrl: String): String =
+        if (baseUrl.startsWith("http://") || baseUrl.startsWith("https://")) baseUrl
+        else "https://$baseUrl"
+
     @JvmSynthetic
     internal fun getApi(
         baseUrl: String,
@@ -37,7 +42,7 @@ internal object NetworkStackBuilder {
         logger: HttpLoggingInterceptor.Logger
     ): Retrofit =
         Retrofit.Builder()
-            .baseUrl("https://$baseUrl/api/")
+            .baseUrl("${normalizeBaseUrl(baseUrl)}/api/")
             .client(
                 getOkHttpClient(
                     context = context,
@@ -57,7 +62,7 @@ internal object NetworkStackBuilder {
         logger: HttpLoggingInterceptor.Logger
     ): Retrofit =
         Retrofit.Builder()
-            .baseUrl("https://$baseUrl/api/")
+            .baseUrl("${normalizeBaseUrl(baseUrl)}/api/")
             .client(getAuthRefreshOkHttpClient(context = context, logging = logging, logger = logger))
             .addConverterFactory(GsonConverterFactory.create(provideGson()))
             .build()
