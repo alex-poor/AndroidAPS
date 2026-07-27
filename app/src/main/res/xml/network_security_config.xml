@@ -3,5 +3,8 @@
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="false">127.0.0.1</domain>
+        <!-- Local/Tailscale Nightscout served over plain HTTP (traffic already encrypted by Tailscale WireGuard). -->
+        <domain includeSubdomains="false">truenas.tailad1fba.ts.net</domain>
+        <domain includeSubdomains="false">192.168.88.236</domain>
     </domain-config>
 </network-security-config>
