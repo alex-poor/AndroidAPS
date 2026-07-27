@@ -307,13 +307,45 @@ class HovorkaMpcPlugin @Inject constructor(
         // Swept over the trailing 21 days of this user's own data, this releases on 8 ticks, NONE of which was
         // followed by a reading below 3.9 within 2h. Widening any threshold (BG < 10, IOB > 0.5, gap < 60 min)
         // re-admits the post-hypo rebound case this is deliberately built to exclude.
+        // minOf, not maxOf: we want the age of the MOST RECENT low. maxOfOrNull returns the age of the
+        // OLDEST reading in the window, so with two lows (say 2h ago and 20 min ago) it would report 2h
+        // and release the gate 20 minutes after a fresh low. Bug shipped 2026-07-26, fixed 2026-07-27.
         val minsSinceHypo = persistenceLayer
             .getBgReadingsDataFromTimeToTime(now - T.mins(SMB_POST_HYPO_LOCKOUT_MIN).msecs(), now, false)
             .filter { it.value / MGDL_PER_MMOL <= SMB_POST_HYPO_MMOL }
-            .maxOfOrNull { (now - it.timestamp) / 60000.0 } ?: Double.MAX_VALUE
+            .minOfOrNull { (now - it.timestamp) / 60000.0 } ?: Double.MAX_VALUE
+        // POST-HYPO LOCKOUT, now glucose-aware (2026-07-27). The flat 4-hour block was too blunt: its
+        // purpose is to stop the loop bolusing away rescue carbs, which only applies while glucose is
+        // still low or near it. Measured over 30 days, on ticks where the lockout was ACTIVE:
+        //     time since low     all ticks -> went <4.0 in 2h     ...but at BG >= 10
+        //       0-60 min            46%                              0%  (n=11, too thin to trust)
+        //      60-120 min           17%                              7%
+        //     120-180 min           15%                             10%
+        //     180-240 min           11%                              0%
+        // Baseline for ticks with NO recent low at BG >= 10 is 3%. So being high two hours after a 3.9 is
+        // barely more dangerous than being high normally, while the first hour genuinely is (46%).
+        // Keep the first hour absolute; after that release on glucose. A threshold sweep over
+        // (45/60/90/120 min) x (BG 9/10/11) gave 4-6% everywhere, so the exact cut is not delicate —
+        // 60 min / BG 10 is the middle of a flat region, not a fitted edge. IOB was tested as an extra
+        // gate and showed no monotonic relationship (0%, 20%, 3%, 0% across bands), i.e. noise.
+        val postHypoReleased = minsSinceHypo >= POST_HYPO_RELEASE_MIN &&
+            (glucoseStatus.glucose / MGDL_PER_MMOL) >= POST_HYPO_RELEASE_BG_MMOL
+        // The IOB cap this used to carry (<= 0.5U) was a crude proxy for "there is not already enough
+        // insulin working", and it almost never coincided with a real high — so the release rarely fired.
+        // Measured over 30 days on unfed rising highs (COB=0, BG>=10), raw IOB does not predict a
+        // subsequent low at all (4%/10%/19%/9%/11% across bands — no trend), but the mass-balance
+        // eventual does, cleanly:
+        //     eventualMB 0-7  -> 23% went <4.0 in 3h
+        //     eventualMB 7-9  -> 16%
+        //     eventualMB 9-11 ->  4%
+        //     eventualMB 11+  ->  7%
+        // That is the honest gate: MB already credits every unit of IOB, so a HIGH MB means the insulin
+        // on board is genuinely insufficient regardless of the raw number. Swapping the cap for
+        // MB >= 9 releases 111 ticks instead of 38 at a LOWER low rate (5% vs 8%).
+        val mbForRelease = (glucoseStatus.glucose / MGDL_PER_MMOL) - iobNow * (isfMgdl / MGDL_PER_MMOL)
         val unannouncedRise = (glucoseStatus.glucose / MGDL_PER_MMOL) >= UNANNOUNCED_RISE_MIN_BG_MMOL &&
             rising &&
-            iobNow <= UNANNOUNCED_RISE_MAX_IOB_U &&
+            mbForRelease >= UNANNOUNCED_RISE_MIN_MB_MMOL &&
             cobNowG <= 0.0 &&
             minsSinceHypo >= UNANNOUNCED_RISE_MIN_SINCE_HYPO_MIN
         // (d) rolling-window stacking cap: how much SMB has already gone in recently. Individually-trivial
@@ -329,7 +361,7 @@ class HovorkaMpcPlugin @Inject constructor(
         val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
             constraintsChecker.isClosedLoopAllowed().value() &&
             rising && stackHeadroomU > 0.0 &&
-            ((fedState && !recentHypo) || unannouncedRise)
+            ((fedState && (!recentHypo || postHypoReleased)) || unannouncedRise)
         val maxSmbU = if (smbAllowed) {
             // getMaxIOBAllowed() is supplied by the OpenAPS-SMB plugin, which is DISABLED whenever HovorkaMPC is
             // the active APS — so the constraint returns unbounded and the "SMB can never push IOB past maxIOB"
@@ -879,8 +911,14 @@ class HovorkaMpcPlugin @Inject constructor(
         // post-hypo lockout) during a genuine unfed climb with no insulin on board. Swept over the trailing
         // 21 days: 8 releases, ZERO followed by a sub-3.9 reading within 2h. Loosening any of the three
         // re-admits the post-hypo rebound this is built to exclude. ---
+        // --- POST-HYPO lockout release (2026-07-27). The first hour after a low stays absolutely
+        // blocked (46% of those ticks go low again); after that the block lifts once glucose is clearly
+        // high, where the measured risk is 0-10% against a 3% no-recent-low baseline. See the derivation
+        // at the call site. ---
+        const val POST_HYPO_RELEASE_MIN = 60.0          // first hour after a low is never released
+        const val POST_HYPO_RELEASE_BG_MMOL = 10.0      // ...after that, release only when clearly high
         const val UNANNOUNCED_RISE_MIN_BG_MMOL = 10.0       // must be clearly high
-        const val UNANNOUNCED_RISE_MAX_IOB_U = 0.5          // ...with essentially NO insulin on board (cannot stack)
+        const val UNANNOUNCED_RISE_MIN_MB_MMOL = 9.0        // ...and mass balance still says the insulin on board is NOT enough
         const val UNANNOUNCED_RISE_MIN_SINCE_HYPO_MIN = 60.0 // ...and not an immediate rebound off a low
         // --- TIME-OF-DAY carb absorption (2026-07-25). Multipliers on the base HovorkaCarbAbsorptionMin pref,
         // from 54 measured meals: time from carb entry to post-dip glucose peak was 128 min (06-11h),
@@ -889,8 +927,19 @@ class HovorkaMpcPlugin @Inject constructor(
         const val CARB_TOD_MIDDAY_MUL = 1.33   // 11-16h
         const val CARB_TOD_EVENING_MUL = 1.67  // 16-06h — dinner absorbs >2x slower than breakfast
         const val CARB_TOD_MEAL_LOOKBACK_H = 6L // how far back to look for the meal whose profile still applies
-        const val DESCENT_GUARD_MMOL = 4.5     // begin tapering basal below this mass-balance eventual
-        const val DESCENT_SUSPEND_MMOL = 3.5   // ...reaching a full suspend here
+        // Thresholds RAISED 2026-07-27 after measuring outcomes over 21 days. The originals were set by
+        // guesswork and were far too low — at BG 5.5-6.0 falling the guard still kept 76% of basal, and
+        // the MB arm did not begin tapering until 4.5, by which point the outcome is already decided.
+        // Measured probability of dropping below 4.0 within 2h, on FALLING decisions:
+        //     BG 6.5-7.0  15%      MB 5.5-6.5  22%
+        //     BG 6.0-6.5  23%      MB 5.0-5.5  27%
+        //     BG 5.5-6.0  27%      MB 4.5-5.0  34%
+        //     BG 5.0-5.5  43%      MB 4.0-4.5  52%
+        //     BG 4.5-5.0  51%
+        // A band where a quarter of falls end below 4.0 is not one to be delivering near-nominal basal in.
+        // Both tapers now start where the risk starts rather than where a low is already underway.
+        const val DESCENT_GUARD_MMOL = 6.5     // begin tapering basal below this mass-balance eventual
+        const val DESCENT_SUSPEND_MMOL = 4.0   // ...reaching a full suspend here
         // RAW-BG arm: taper on the SENSOR value too, so no forecast can license dosing into an observed fall.
         // Full basal at this value, ramping to zero by HYPO_SUSPEND_MMOL (3.9). Live 2026-07-25 23:22 the
         // MB-only guard still gave 0.24 U/hr at BG 4.8 falling; with this arm that tick keeps 24% -> 0.08.
@@ -904,6 +953,6 @@ class HovorkaMpcPlugin @Inject constructor(
         const val DIVERGENCE_MIN_IOB_U = 1.0      // ...with enough IOB booked for the discount to mean anything
         const val DIVERGENCE_MIN_READINGS = 4     // need this many CGM points in the window to judge
         const val DIVERGENCE_IOB_CREDIT = 0.5     // credit only this share of booked IOB while diverging
-        const val DESCENT_BG_GUARD_MMOL = 6.0
+        const val DESCENT_BG_GUARD_MMOL = 7.5
     }
 }
