@@ -146,6 +146,17 @@ AGPL-3.0, same as upstream AndroidAPS. See [LICENSE.txt](LICENSE.txt).
 
 <sub>Everything below is the upstream AndroidAPS README, unchanged.</sub>
 
+> ℹ️ **Fork change — NSClientv3 accepts `http://` Nightscout URLs.** Upstream AAPS is HTTPS-only for
+> Nightscout sync, enforced at four independent layers: the URL input validator, the NSClientv3 plugin's
+> scheme handling, the `nssdk` network builder, and the app's Android network-security config
+> (`app/src/main/res/xml/network_security_config.xml`). This fork loosens all four so a plain-HTTP
+> Nightscout can be used. **This is intended specifically for VPN / mesh setups (e.g. Tailscale,
+> WireGuard, ZeroTier) where the transport is already end-to-end encrypted and TLS on Nightscout is
+> redundant.** Cleartext is permitted only for the explicitly listed hosts in `network_security_config.xml`
+> — everything else stays HTTPS-only. **Do not point NSClientv3 at a plain-HTTP endpoint over the public
+> internet or an untrusted LAN**: your API token and health data would travel unencrypted. Add or remove
+> allowed hosts by editing the `<domain>` entries in that file.
+
 # AAPS
 * Check the wiki: https://wiki.aaps.app
 *  Everyone who’s been looping with AAPS needs to fill out the form after 3 days of looping  https://docs.google.com/forms/d/14KcMjlINPMJHVt28MDRupa4sz4DDIooI4SrW0P3HSN8/viewform?c=0&w=1
