@@ -24,6 +24,7 @@ enum class BooleanKey(
     HovorkaMealDetection("hovorka_meal_detection", false),
     HovorkaCarbAbsorptionByTod("hovorka_carb_absorption_by_tod", false),
     HovorkaParamId("hovorka_param_id", false),
+    HovorkaSiteChangeGuard("hovorka_site_change_guard", false),
     GeneralSetupWizardProcessed("startupwizard_processed", false),
     OverviewKeepScreenOn("keep_screen_on", false, calculatedDefaultValue = true),
     OverviewShowTreatmentButton("show_treatment_button", false, defaultedBySM = true, hideParentScreenIfHidden = true),

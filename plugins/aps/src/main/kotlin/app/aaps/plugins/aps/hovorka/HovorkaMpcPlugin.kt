@@ -6,6 +6,7 @@ import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceManager
 import androidx.preference.PreferenceScreen
 import app.aaps.core.data.model.BS
+import app.aaps.core.data.model.TE
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.aps.APS
 import app.aaps.core.interfaces.aps.APSResult
@@ -173,6 +174,24 @@ class HovorkaMpcPlugin @Inject constructor(
                     summary = R.string.hovorka_param_id_summary, title = R.string.hovorka_param_id_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaSiteChangeGuard,
+                    summary = R.string.hovorka_site_change_guard_summary, title = R.string.hovorka_site_change_guard_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaSiteChangeGuardH,
+                    dialogMessage = R.string.hovorka_site_change_guard_h_summary, title = R.string.hovorka_site_change_guard_h_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaSiteChangeMaxPct,
+                    dialogMessage = R.string.hovorka_site_change_max_pct_summary, title = R.string.hovorka_site_change_max_pct_title
+                )
+            )
             // Read-only transparency block: the last re-tune's timestamp, whether it changed anything, and what.
             addPreference(
                 Preference(context).apply {
@@ -275,6 +294,21 @@ class HovorkaMpcPlugin @Inject constructor(
         //   (b) fed state   - carbs on board, or a meal within SMB_MEAL_WINDOW_MIN (no fasting SMB)
         //   (c) rising      - never bolus a flat or falling glucose
         //   (d) no stacking - cumulative SMB over SMB_STACK_WINDOW_MIN capped at SMB_STACK_CAP_U
+        // --- POST-SITE-CHANGE GUARD (2026-08-12): is a fresh cannula still opening up? ---
+        // Keyed on CANNULA_CHANGE specifically. The user registers changes through the Prime/Fill
+        // dialog, which writes CANNULA_CHANGE and INSULIN_CHANGE one second apart (verified in the
+        // DB: every change carries both, with the site in the note — "cannula: right flank"). Keying
+        // on CANNULA_CHANGE therefore catches that workflow, while a tubing/reservoir-only fill —
+        // which writes INSULIN_CHANGE ALONE and does not disturb absorption — correctly does NOT arm
+        // the guard. Do not "helpfully" widen this to INSULIN_CHANGE.
+        val siteGuardOn = preferences.get(BooleanKey.HovorkaSiteChangeGuard)
+        val lastSiteChangeMs = persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.CANNULA_CHANGE)?.timestamp
+        val siteAgeH = lastSiteChangeMs?.let { (now - it) / T.hours(1).msecs().toDouble() }
+        val siteGuardWindowH = preferences.get(DoubleKey.HovorkaSiteChangeGuardH)
+        // Fails OPEN: with no CANNULA_CHANGE ever recorded, siteAgeH is null and the guard stays off
+        // rather than clamping forever on a database that simply has no site history.
+        val siteGuardActive = siteGuardOn && siteAgeH != null && siteAgeH < siteGuardWindowH
+
         val cobNowG = iobCobCalculator.getCobInfo("HovorkaSmbGate").displayCob ?: 0.0
         val recentMealMs = now - T.mins(SMB_MEAL_WINDOW_MIN).msecs()
         val hasRecentMeal = persistenceLayer.getCarbsFromTimeToTimeExpanded(recentMealMs, now, false).any { it.amount > 0.0 }
@@ -358,9 +392,14 @@ class HovorkaMpcPlugin @Inject constructor(
         // `unannouncedRise` releases ONLY the two glucose-blind gates (fedState, recentHypo). `rising`, the
         // stacking cap, the closed-loop check and the SMB pref all still bind — as do maxIOB/maxBolus, the
         // raw-CGM hypo suspend and the descent guard further down.
+        // (f) POST-SITE-CHANGE. An SMB is irreversible, and during the first hours on a fresh site the
+        // insulin it delivers is not absorbed on schedule — it lands later, all at once. This is the
+        // one window where "clearly high and rising" is an unreliable licence to bolus, because the
+        // high is caused by insulin NOT ARRIVING and more insulin cannot fix that. Basal is
+        // cancellable and still ramps (bounded by the cap below); bolus authority stands down.
         val smbAllowed = preferences.get(BooleanKey.HovorkaEnableSmb) &&
             constraintsChecker.isClosedLoopAllowed().value() &&
-            rising && stackHeadroomU > 0.0 &&
+            rising && stackHeadroomU > 0.0 && !siteGuardActive &&
             ((fedState && (!recentHypo || postHypoReleased)) || unannouncedRise)
         val maxSmbU = if (smbAllowed) {
             // getMaxIOBAllowed() is supplied by the OpenAPS-SMB plugin, which is DISABLED whenever HovorkaMPC is
@@ -457,7 +496,14 @@ class HovorkaMpcPlugin @Inject constructor(
         //   - meaningful IOB booked, or there is nothing to discount
         // It only ever RAISES the eventual (never lowers it), so it can only ever ADD correction at a high;
         // it cannot suppress a suspend, and every hypo backstop downstream still binds.
-        val divergence = detectIobDivergence(now, rawCgmMmol, iobNow)
+        // POST-SITE-CHANGE (2026-08-12): stand the divergence detector down inside the guard window.
+        // Its signature — glucose RISING while booked IOB says it should be falling — is exactly what a
+        // fresh, non-absorbing site produces, and it is the single most likely thing to fire here. But
+        // its response is to DISCOUNT IOB and add correction, i.e. dose harder into a site that is not
+        // delivering. That is precisely the 2026-08-10 sequence: the loop pushed to 4.03 U/h and the
+        // following 6h bottomed at 2.2 mmol/L. The detector was written for a site that has FAILED and
+        // will not recover; a fresh site is late, not dead, and the two need opposite responses.
+        val divergence = !siteGuardActive && detectIobDivergence(now, rawCgmMmol, iobNow)
         val iobCreditFactor = if (divergence) DIVERGENCE_IOB_CREDIT else 1.0
         val iobForCorrection = max(0.0, iobNow) * iobCreditFactor   // negative IOB = behind on basal, NOT a glucose excess
         val eventualForCorrection = (rawCgmMmol - iobForCorrection * isfMmol + carbRiseMmol)
@@ -575,11 +621,45 @@ class HovorkaMpcPlugin @Inject constructor(
         // late, not missing, and the totals were already excessive — so adding more at the peak deepens the
         // crash that follows. This is the fourth rejected variant of "dose harder at a high"; the post-meal
         // peak is a TIMING problem (pre-bolus lead time, site absorption) and is not safely fixable here.
+        // --- POST-SITE-CHANGE CAP (2026-08-12) — applied LAST so nothing downstream can lift it ---
+        // Placed after the correction floor and the descent guard deliberately: the floor only ever
+        // RAISES the rate, and this must have the final say over it. It only ever LOWERS, so it composes
+        // safely with the descent guard and every hypo suspend (all of which bound from below).
+        //
+        // Bound basal to a multiple of the OPERATING basal rather than a fixed number, so it scales with
+        // the user's own profile and with 2d's adapted operating point. Only binds at a genuine high:
+        // below SITE_GUARD_MIN_BG_MMOL the ordinary controller is doing the right thing and there is no
+        // runaway to prevent — clamping there would just withhold ordinary basal.
+        //
+        // What this deliberately does NOT do: it does not raise the target, suspend delivery, or alarm.
+        // It accepts a KNOWN, MEASURED ~6h of hyperglycaemia (mean 13.5) in exchange for not stacking
+        // insulin that cannot act yet. That trade is only correct because the hyperglycaemia is bounded
+        // and self-resolving — every window past 12h returns to 7.4-7.6 on its own.
+        var siteNote = ""
+        if (siteGuardActive && rawCgmMmol > SITE_GUARD_MIN_BG_MMOL) {
+            val capUhr = max(
+                SITE_GUARD_ABS_FLOOR_UHR,
+                operatingBasalUhr * preferences.get(DoubleKey.HovorkaSiteChangeMaxPct) / 100.0
+            ).coerceAtMost(maxBasalUhr)
+            if (rateUhr > capUhr) {
+                siteNote = " | SITE-GUARD %.2f→%.2f U/hr (cannula %.1fh old, <%.0fh)"
+                    .format(rateUhr, capUhr, siteAgeH ?: 0.0, siteGuardWindowH)
+                rateUhr = round(capUhr * 100.0) / 100.0
+            } else {
+                siteNote = " | SITE-GUARD armed (cannula %.1fh old)".format(siteAgeH ?: 0.0)
+            }
+            // belt and braces: smbAllowed already blocked the model's SMB, but the HIGH-CORR-SMB path
+            // above assigns smbU independently of it, so zero any survivor here.
+            if (smbU > 0.0) {
+                siteNote += " | SITE-GUARD-SMB %.2f→0".format(smbU)
+                smbU = 0.0
+            }
+        }
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
         val todNote = if (carbAbsorptionMin != carbAbsorptionBase) " | tMaxG=%.0f (ToD)".format(carbAbsorptionMin) else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, corrNote, todNote, reIdNote, decision.reason)
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, corrNote, siteNote, todNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -953,6 +1033,26 @@ class HovorkaMpcPlugin @Inject constructor(
         const val DIVERGENCE_MIN_IOB_U = 1.0      // ...with enough IOB booked for the discount to mean anything
         const val DIVERGENCE_MIN_READINGS = 4     // need this many CGM points in the window to judge
         const val DIVERGENCE_IOB_CREDIT = 0.5     // credit only this share of booked IOB while diverging
+        // --- POST-SITE-CHANGE GUARD (2026-08-12) ---
+        // Measured on this user's own data (report/site-change-findings.md, realdata/site_change.py):
+        // for ~6h after a cannula change insulin does not absorb. Mean glucose 13.5 mmol/L against 7.6
+        // in the SAME clock hours on non-change days, while taking 4x the bolus insulin (2.15 vs 0.51
+        // U/h). 6 of 6 changes, paired sign test p=0.016; excluding one change with a documented
+        // occlusion it is 5/5, +3.3 mmol/L, p=0.031. The extra carbs eaten in those windows justify
+        // ~3U more insulin; ~9.8U more was actually delivered and glucose STILL ran 6.0 higher.
+        // The cleanest case (2026-08-04) had ZERO carbs, ~13U of bolus over 6h, and averaged 11.8.
+        //
+        // So the loop's normal response is not merely useless here, it is harmful: the insulin is going
+        // somewhere, and when the site opens it arrives all at once. The one change where the loop
+        // pushed hardest (2026-08-10, 4.03 U/h) ended at 2.2 mmol/L with 46% of the following 6h
+        // below 3.9.
+        //
+        // This guard is the fourth "dose differently at a high" mechanism in this file and the FIRST
+        // that removes insulin rather than adding it — the previous three (stalled-meal rescue, the
+        // high-and-rising bypass, unconditional divergence) were all rejected for adding lows. It can
+        // only ever LOWER the rate, so it cannot cause a hypo.
+        const val SITE_GUARD_MIN_BG_MMOL = 8.0    // below this the normal controller is already correct; the cap only binds at a high
+        const val SITE_GUARD_ABS_FLOOR_UHR = 0.0  // the cap never forces a suspend — it bounds above, existing guards bound below
         const val DESCENT_BG_GUARD_MMOL = 7.5
     }
 }
