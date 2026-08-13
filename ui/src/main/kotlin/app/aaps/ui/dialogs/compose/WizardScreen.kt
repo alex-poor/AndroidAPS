@@ -368,6 +368,10 @@ private fun ConfirmStep(
         // Max-bolus cap — previously surfaced by the legacy confirm dialog we no longer show. Warn in red.
         if (result.cappedWarning.isNotBlank())
             Text(result.cappedWarning, style = AapsType.body, color = colors.high, textAlign = TextAlign.Center)
+        // Fresh-site advisory. Amber, not red: this is guidance about HOW to give the dose, not a
+        // constraint on it — `low` is reserved for urgent/hypo in the semantic palette.
+        if (result.siteWarning.isNotBlank())
+            Text(result.siteWarning, style = AapsType.body, color = colors.high, textAlign = TextAlign.Center)
 
         HoldToConfirmButton(
             label = "Hold to deliver · ${result.totalText}",

@@ -44,5 +44,17 @@ data class WizardResult(
     val carbsOnly: Boolean = false,
     val note: String = "",
     val cappedWarning: String = "",
+    /**
+     * Advisory shown when the cannula is new. Insulin peaks about twice as slowly at a fresh site
+     * (time-to-peak 110 min on day 1 vs 56 min on day 4, Hildebrandt 1991), and a single large bolus
+     * makes it worse still: the same dose split into smaller ones gave a 1.8x higher depot
+     * surface-to-volume ratio and significantly faster onset (Diabetes Care 2013). The two compound,
+     * which is exactly the failure seen on 2026-08-13 -- a correctly-dosed 6.70 U lunch bolus into a
+     * ~6h-old site ran glucose to 15.9, and the corrections added while waiting all landed at once.
+     *
+     * Advisory only. Splitting the dose is the user's call and the loop cannot do it for them, so
+     * this is the only place the finding can actually reach the decision.
+     */
+    val siteWarning: String = "",
     val superBolusAvailable: Boolean = false
 )

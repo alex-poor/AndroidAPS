@@ -186,12 +186,6 @@ class HovorkaMpcPlugin @Inject constructor(
                     dialogMessage = R.string.hovorka_site_change_guard_h_summary, title = R.string.hovorka_site_change_guard_h_title
                 )
             )
-            addPreference(
-                AdaptiveDoublePreference(
-                    ctx = context, doubleKey = DoubleKey.HovorkaSiteChangeMaxPct,
-                    dialogMessage = R.string.hovorka_site_change_max_pct_summary, title = R.string.hovorka_site_change_max_pct_title
-                )
-            )
             // Read-only transparency block: the last re-tune's timestamp, whether it changed anything, and what.
             addPreference(
                 Preference(context).apply {
@@ -621,40 +615,24 @@ class HovorkaMpcPlugin @Inject constructor(
         // late, not missing, and the totals were already excessive — so adding more at the peak deepens the
         // crash that follows. This is the fourth rejected variant of "dose harder at a high"; the post-meal
         // peak is a TIMING problem (pre-bolus lead time, site absorption) and is not safely fixable here.
-        // --- POST-SITE-CHANGE CAP (2026-08-12) — applied LAST so nothing downstream can lift it ---
-        // Placed after the correction floor and the descent guard deliberately: the floor only ever
-        // RAISES the rate, and this must have the final say over it. It only ever LOWERS, so it composes
-        // safely with the descent guard and every hypo suspend (all of which bound from below).
-        //
-        // Bound basal to a multiple of the OPERATING basal rather than a fixed number, so it scales with
-        // the user's own profile and with 2d's adapted operating point. Only binds at a genuine high:
-        // below SITE_GUARD_MIN_BG_MMOL the ordinary controller is doing the right thing and there is no
-        // runaway to prevent — clamping there would just withhold ordinary basal.
-        //
-        // What this deliberately does NOT do: it does not raise the target, suspend delivery, or alarm.
-        // It accepts a KNOWN, MEASURED ~6h of hyperglycaemia (mean 13.5) in exchange for not stacking
-        // insulin that cannot act yet. That trade is only correct because the hyperglycaemia is bounded
-        // and self-resolving — every window past 12h returns to 7.4-7.6 on its own.
+        // --- POST-SITE-CHANGE, note only (cap REMOVED 2026-08-13) ---
+        // The basal cap that used to live here has been deleted. Three reasons, all from the data:
+        //  (a) WRONG TIMESCALE. The published impaired window is DAYS (time-to-peak insulin 110 min on
+        //      day 1 vs 56 min on day 4, Hildebrandt 1991), not 6 hours. On 2026-08-13 a 6h window
+        //      armed at 07:25 would have expired at 13:25 -- twelve minutes after the lunch bolus and
+        //      before the entire excursion it was built to catch.
+        //  (b) WRONG ACTOR. Replayed over that day it would have withheld 0.00 U of the 10.60 U
+        //      delivered: the insulin that mattered was the user's own meal and correction boluses,
+        //      which this plugin does not and should not govern.
+        //  (c) IT COULD BACKFIRE. If the site opens on cumulative volume rather than elapsed time --
+        //      not settled either way -- withholding basal PROLONGS the impaired window.
+        // What survives is the pair of actions that are correct under every reading of the mechanism,
+        // both applied above: SMB suppression and the divergence stand-down. Both withhold AGGRESSION
+        // rather than basal, so widening their window is safe where capping basal was not.
         var siteNote = ""
-        if (siteGuardActive && rawCgmMmol > SITE_GUARD_MIN_BG_MMOL) {
-            val capUhr = max(
-                SITE_GUARD_ABS_FLOOR_UHR,
-                operatingBasalUhr * preferences.get(DoubleKey.HovorkaSiteChangeMaxPct) / 100.0
-            ).coerceAtMost(maxBasalUhr)
-            if (rateUhr > capUhr) {
-                siteNote = " | SITE-GUARD %.2f→%.2f U/hr (cannula %.1fh old, <%.0fh)"
-                    .format(rateUhr, capUhr, siteAgeH ?: 0.0, siteGuardWindowH)
-                rateUhr = round(capUhr * 100.0) / 100.0
-            } else {
-                siteNote = " | SITE-GUARD armed (cannula %.1fh old)".format(siteAgeH ?: 0.0)
-            }
-            // belt and braces: smbAllowed already blocked the model's SMB, but the HIGH-CORR-SMB path
-            // above assigns smbU independently of it, so zero any survivor here.
-            if (smbU > 0.0) {
-                siteNote += " | SITE-GUARD-SMB %.2f→0".format(smbU)
-                smbU = 0.0
-            }
-        }
+        if (siteGuardActive)
+            siteNote = " | SITE-GUARD armed (cannula %.1fh old, <%.0fh: no SMB, divergence off)"
+                .format(siteAgeH ?: 0.0, siteGuardWindowH)
         val ttNote = if (tempTargetMgdl != null) " | TT=%.0f mg/dL".format(tempTargetMgdl) else ""
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
@@ -1051,8 +1029,6 @@ class HovorkaMpcPlugin @Inject constructor(
         // that removes insulin rather than adding it — the previous three (stalled-meal rescue, the
         // high-and-rising bypass, unconditional divergence) were all rejected for adding lows. It can
         // only ever LOWER the rate, so it cannot cause a hypo.
-        const val SITE_GUARD_MIN_BG_MMOL = 8.0    // below this the normal controller is already correct; the cap only binds at a high
-        const val SITE_GUARD_ABS_FLOOR_UHR = 0.0  // the cap never forces a suspend — it bounds above, existing guards bound below
         const val DESCENT_BG_GUARD_MMOL = 7.5
     }
 }

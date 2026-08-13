@@ -15,6 +15,7 @@ import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.GlucoseUnit
 import app.aaps.core.data.model.TE
+import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
@@ -116,7 +117,10 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
         val insulin = inputs.insulin
         val actions: LinkedList<String?> = LinkedList()
 
-        var eventTime = dateUtil.now()
+        // Back-date the RECORD only. `requestPrimeBolus` below is untouched and still delivers now --
+        // insulin cannot be given retroactively, and letting the offset reach the bolus would put a
+        // fictional delivery time into IOB.
+        var eventTime = dateUtil.now() - T.mins(inputs.minutesAgo.toLong()).msecs()
         eventTime -= eventTime % 1000
 
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
@@ -141,6 +145,13 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
         val notes: String = inputs.notes
         if (notes.isNotEmpty())
             actions.add(rh.gs(app.aaps.core.ui.R.string.notes_label) + ": " + notes)
+        // Surface the back-dated time in the confirmation. A silently back-dated record would be
+        // worse than none: site age feeds the post-change analysis and the HovorkaMPC site guard.
+        if (inputs.minutesAgo > 0)
+            actions.add(
+                (rh.gs(app.aaps.core.ui.R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
+                    .formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor)
+            )
 
         if (insulinAfterConstraints > 0 || siteChange || insulinChange) {
             activity?.let { activity ->

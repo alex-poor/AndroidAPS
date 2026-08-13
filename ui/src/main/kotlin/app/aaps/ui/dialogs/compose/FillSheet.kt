@@ -36,7 +36,19 @@ data class FillInputs(
     val insulin: Double,
     val siteChange: Boolean,
     val insulinChange: Boolean,
-    val notes: String
+    val notes: String,
+    /**
+     * How long ago the site/cartridge change actually happened, in minutes. Back-dates ONLY the
+     * therapy events -- any prime bolus is still delivered now, because insulin cannot be given
+     * retroactively.
+     *
+     * Exists because a cannula change is routinely made away from the phone and recorded later, and
+     * until now this sheet stamped `dateUtil.now()` with no way to correct it. An hours-late
+     * timestamp is not a cosmetic problem: site age drives the post-change analysis and the
+     * HovorkaMPC site guard, and a change that is never recorded at all (as happened 2026-08-04 and
+     * 2026-08-13) is invisible to both.
+     */
+    val minutesAgo: Int
 )
 
 /**
@@ -49,6 +61,7 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
     var siteChange by remember { mutableStateOf(false) }
     var insulinChange by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
+    var minutesAgo by remember { mutableStateOf(0.0) }
 
     SheetSurface(title = "Prime / Fill", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
@@ -67,12 +80,33 @@ fun FillSheet(state: FillSheetState, onSubmit: (FillInputs) -> Unit, onClose: ()
             ToggleRow("Pump site change", siteChange, { siteChange = it }, sub = "Record cannula change")
             ToggleRow("Insulin cartridge change", insulinChange, { insulinChange = it }, sub = "Record reservoir change")
 
+            // Only meaningful when something is being recorded; a prime on its own always happens now.
+            if (siteChange || insulinChange) {
+                NumberField(
+                    label = "Changed", value = minutesAgo, onValue = { minutesAgo = it },
+                    step = 5.0, min = 0.0, max = 1440.0, decimals = 0, unit = "min ago",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
+                    listOf("now" to 0, "30m" to 30, "1h" to 60, "2h" to 120, "4h" to 240, "8h" to 480, "12h" to 720)
+                        .forEach { (label, mins) -> Chip(label = label, onClick = { minutesAgo = mins.toDouble() }) }
+                }
+            }
+
             if (state.showNotes) NotesField(notes, { notes = it })
 
             PrimaryButton(
                 label = "Confirm",
                 enabled = insulin > 0.0 || siteChange || insulinChange,
-                onClick = { onSubmit(FillInputs(insulin, siteChange, insulinChange, notes)) }
+                onClick = {
+                    onSubmit(
+                        FillInputs(
+                            insulin, siteChange, insulinChange, notes,
+                            // back-dating only applies to what is being recorded
+                            minutesAgo = if (siteChange || insulinChange) minutesAgo.toInt() else 0
+                        )
+                    )
+                }
             )
         }
     }

@@ -12,6 +12,8 @@ import android.view.WindowManager
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.data.model.TE
+import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.IobCobCalculator
@@ -127,7 +129,27 @@ class WizardDialog : DaggerDialogFragment() {
             cappedWarning = if (w.calculatedTotalInsulin - w.insulinAfterConstraints > activePlugin.activePump.pumpDescription.bolusStep)
                 String.format(Locale.getDefault(), "Capped by max bolus: %.2f U → %.2f U", w.calculatedTotalInsulin, w.insulinAfterConstraints)
             else "",
+            siteWarning = freshSiteWarning(w.insulinAfterConstraints),
             superBolusAvailable = false
+        )
+    }
+
+    /**
+     * Advisory when bolusing into a cannula less than [FRESH_SITE_H] old.
+     *
+     * Only fires for a dose big enough to matter -- a fresh site handles a basal trickle fine, and the
+     * handicap is only expressed under a large single bolus. Silent when no cannula change has ever
+     * been recorded, so a database with no site history never nags.
+     */
+    private fun freshSiteWarning(insulin: Double): String {
+        if (insulin < FRESH_SITE_MIN_BOLUS_U) return ""
+        val last = persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.CANNULA_CHANGE)?.timestamp ?: return ""
+        val ageH = (dateUtil.now() - last) / T.hours(1).msecs().toDouble()
+        if (ageH >= FRESH_SITE_H || ageH < 0) return ""
+        return String.format(
+            Locale.getDefault(),
+            "New cannula (%.0fh) — insulin peaks ~2× slower here. Consider splitting this dose, and give corrections time.",
+            ageH
         )
     }
 
@@ -180,4 +202,14 @@ class WizardDialog : DaggerDialogFragment() {
         val sign = if (rounded > 0) "+" else ""
         return sign + String.format(Locale.getDefault(), "%.2f U", rounded)
     }
+
+    companion object {
+
+        /** Day-1 window. The measured effect spans days; 24h captures the worst of it. */
+        const val FRESH_SITE_H = 24.0
+
+        /** Below this, a single bolus is small enough that depot surface-to-volume is not the issue. */
+        const val FRESH_SITE_MIN_BOLUS_U = 1.5
+    }
+
 }
