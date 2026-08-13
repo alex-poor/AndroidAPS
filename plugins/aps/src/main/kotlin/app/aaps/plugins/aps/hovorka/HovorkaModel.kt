@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.hovorka
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -102,12 +103,30 @@ class HovorkaModel(val p: HovorkaParams) {
         return 0.5 * (lo + hi)
     }
 
-    /** Run the model to (approximate) steady state at constant infusion u, no meals. */
-    fun steadyState(u: Double, minutes: Int = 6000): DoubleArray {
+    /**
+     * Run the model to steady state at constant infusion u, no meals.
+     *
+     * [minutes] is a CEILING, not a fixed horizon: the integration stops as soon as glucose stops moving.
+     * That matters because callers compare results computed with different horizons. `personalize` anchored
+     * egp0 with a 3000-minute run while other call sites used the 6000-minute default, and on a
+     * low-sensitivity model neither is converged — the anchor held target at 3000 min and the same model was
+     * still 0.3 mmol/L lower by 6000, so the controller's operating point sat below the target it had just
+     * been calibrated to. Converging rather than counting removes the discrepancy in both directions and is
+     * usually FASTER, since a typical model settles well inside the ceiling.
+     */
+    fun steadyState(u: Double, minutes: Int = SS_MAX_MIN): DoubleArray {
         var s = doubleArrayOf(
             p.vg * 6.0, p.vg * 3.0, 0.0, 0.0, 0.0, u * p.tMaxI, u * p.tMaxI, 0.0, 0.0, 0.0
         )
-        repeat(minutes) { s = step(s, u, 1.0) }
+        var prevG = glucoseMmol(s)
+        for (i in 1..minutes) {
+            s = step(s, u, 1.0)
+            if (i % SS_CHECK_MIN == 0) {
+                val g = glucoseMmol(s)
+                if (abs(g - prevG) < SS_TOL_MMOL) return s
+                prevG = g
+            }
+        }
         return s
     }
 
@@ -119,5 +138,14 @@ class HovorkaModel(val p: HovorkaParams) {
 
     companion object {
         const val MMOL_PER_G_CHO = 1000.0 / 180.0   // 1 g glucose ≈ 5.556 mmol
+        // steady-state convergence: glucose moving less than this over a check interval is settled. 1e-4
+        // mmol/L per 60 min is far below anything the controller can act on, and below CGM resolution.
+        private const val SS_CHECK_MIN = 60
+        private const val SS_TOL_MMOL = 1e-4
+        // Default CEILING. Generous rather than tight, because the old 6000 was not a converged answer for
+        // low-sensitivity models (still drifting ~0.1 mmol/L at 6000 min), and callers using different
+        // horizons then disagreed about the same model's operating point. With the convergence test above, a
+        // fast-settling model never pays for the extra headroom.
+        const val SS_MAX_MIN = 20000
     }
 }

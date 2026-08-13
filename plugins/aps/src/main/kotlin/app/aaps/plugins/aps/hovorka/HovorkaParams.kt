@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.hovorka
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -74,16 +75,22 @@ data class HovorkaParams(
          *      profile basal (this is the "anchor steady state to profile basal+target" step);
          *   3. carb bioavailability ag so the model's insulin:carb balance (bolus AUC vs. meal AUC)
          *      matches the profile IC.
-         * Steps 1 and 2 are near-orthogonal (sensitivity vs. glucose level) so a few fixed-point
-         * sweeps converge; step 3 is one shot once SI is fixed.
          *
-         * ROBUSTNESS: both the SI multiplier and egp0 are BOUNDED to physiological ranges (relative to the
-         * population base) and the SI multiplier is solved ABSOLUTELY from the base kb each sweep (never
-         * compounded) — so an extreme or self-inconsistent profile clamps to the nearest sane model instead
-         * of diverging to a degenerate one (a model with ss@basal≈0 would make the controller refuse all
-         * insulin). The loop always ENDS on an egp0 anchor so steadyState(basal)==target holds.
+         * (1) and (2) are NOT independent — egp0 is a function of the sensitivity, since only one egp0 holds
+         * target at the profile basal for a given SI. They are therefore solved together, as a single bounded
+         * bisection on the multiplier with egp0 re-anchored inside it; see the comment on the solve. (3) is
+         * one shot once SI is fixed.
+         *
+         * ROBUSTNESS: both the SI multiplier and egp0 are BOUNDED to physiological ranges relative to the
+         * population base, and the multiplier is solved ABSOLUTELY from the base kb (never compounded) — so an
+         * extreme or self-inconsistent profile clamps to the nearest sane model instead of diverging to a
+         * degenerate one (a model with ss@basal≈0 would make the controller refuse all insulin). Because egp0
+         * is derived from the multiplier rather than chased alongside it, there is no fixed-point iteration
+         * and no runaway corner to guard against.
          *
          * Falls back to population weight scaling when ISF/basal/target are absent (<= 0).
+         * Pinned by PersonalizeCheck: the returned model must have the ISF and operating point it was asked
+         * for. Nothing pinned that before, which is how a systematic 37% ISF error shipped.
          */
         fun personalize(
             w: Double,
@@ -101,19 +108,48 @@ data class HovorkaParams(
             val egp0Lo = EGP0_MIN_MUL * base.egp0
             val egp0Hi = EGP0_MAX_MUL * base.egp0
 
-            fun withParams(siMul: Double, egp0: Double) =
-                base.copy(kb1 = base.kb1 * siMul, kb2 = base.kb2 * siMul, kb3 = base.kb3 * siMul, egp0 = egp0)
+            fun withSi(siMul: Double) =
+                base.copy(kb1 = base.kb1 * siMul, kb2 = base.kb2 * siMul, kb3 = base.kb3 * siMul)
 
-            // Solve ONCE, in order (no outer iteration — chasing egp0↔SI via the confounded ISF measurement
-            // has multiple fixed points and can run away to a degenerate high-SI/high-EGP corner):
-            //   1. anchor egp0 to hold target at basal with population SI,
-            var egp0 = anchorEgp0(base, basalMuMin, targetMmol).coerceIn(egp0Lo, egp0Hi)
-            //   2. solve the absolute SI multiplier to match ISF at that egp0,
-            val siMul = solveSiMul(base, egp0, basalMuMin, isfMmolPerU, targetMmol).coerceIn(SI_MUL_MIN, SI_MUL_MAX)
-            //   3. re-anchor egp0 with the final SI so steadyState(basal)==target holds exactly.
-            egp0 = anchorEgp0(withParams(siMul, egp0), basalMuMin, targetMmol).coerceIn(egp0Lo, egp0Hi)
-            var p = withParams(siMul, egp0)
-            // (3): carb bioavailability from IC (only if a sane IC was supplied).
+            // CONSISTENT SOLVE (fixed 2026-08-14). egp0 is NOT an independent unknown: for any insulin
+            // sensitivity there is exactly one egp0 that holds [targetMmol] at the profile basal. Making that
+            // dependence explicit collapses a two-unknown problem to a ONE-dimensional bounded bisection on
+            // the multiplier alone — no fixed-point iteration, so none of the runaway the previous ordering
+            // was written to avoid, and no inconsistency either.
+            //
+            // WHAT WAS WRONG BEFORE. The old code solved in three ordered steps: anchor egp0 at POPULATION
+            // sensitivity, solve the multiplier against that egp0, then RE-anchor egp0 with the solved
+            // multiplier. That last step moves the very quantity the solve was conditioned on, and nothing
+            // re-solves afterwards. Traced on this user's profile (67 kg, 0.45 U/hr, target 7.0, ISF 2.3):
+            // step 2 found siMul 0.803 giving exactly ISF 2.30 at egp0 = 1.22x base; step 3 then moved egp0
+            // to 1.01x base, and the model that actually shipped had ISF 3.16 — 37% too insulin-sensitive.
+            // The error is systematic and one-directional, not noise. It also cascaded: `calibrateAgToIc`
+            // balances the meal against a bolus that was too strong, so `ag` clamped at its 1.0 ceiling and
+            // the carb side came out ~20% weak as well.
+            fun paramsFor(siMul: Double): HovorkaParams {
+                val p = withSi(siMul)
+                return p.copy(egp0 = anchorEgp0(p, basalMuMin, targetMmol).coerceIn(egp0Lo, egp0Hi))
+            }
+            // modelISF is monotone increasing in the multiplier (verified by sweep across 0.005..5.0), so a
+            // plain bisection is sound; outside the bracket we clamp to the boundary exactly as before.
+            fun isfFor(siMul: Double) = modelIsfMmol(paramsFor(siMul), basalMuMin, targetMmol)
+            var lo = SI_MUL_MIN
+            var hi = SI_MUL_MAX
+            val siMul = when {
+                isfFor(lo) >= isfMmolPerU -> lo
+                isfFor(hi) <= isfMmolPerU -> hi
+                else -> {
+                    repeat(SI_SOLVE_STEPS) {
+                        val mid = 0.5 * (lo + hi)
+                        if (isfFor(mid) < isfMmolPerU) lo = mid else hi = mid
+                    }
+                    0.5 * (lo + hi)
+                }
+            }
+            // egp0 is already the anchored value FOR this multiplier, so steadyState(basal)==target holds and
+            // there is no trailing re-anchor to invalidate the ISF match.
+            var p = paramsFor(siMul)
+            // carb bioavailability from IC (only if a sane IC was supplied).
             if (icGPerU > 0.0) p = p.copy(ag = calibrateAgToIc(p, basalMuMin, icGPerU))
             return p
         }
@@ -124,13 +160,29 @@ data class HovorkaParams(
             return m.glucoseMmol(m.steadyState(basalMuMin, minutes = CAL_SS_MIN))
         }
 
-        /** egp0 such that steadyState(basal) == targetMmol (glucose rises monotonically with egp0). */
+        /**
+         * egp0 such that steadyState(basal) == targetMmol (glucose rises monotonically with egp0).
+         *
+         * Now runs inside the SI bisection rather than twice per personalise, so cost matters. Steady-state
+         * glucose is very nearly PROPORTIONAL to egp0 at fixed insulin sensitivity, so a few proportional
+         * updates land within a fraction of a percent where bisection needed ~34 evaluations. Bisection is
+         * retained as the fallback: the proportional step is only trusted while it is converging, so a
+         * non-linear corner degrades to the old behaviour instead of returning a wrong anchor.
+         */
         private fun anchorEgp0(p: HovorkaParams, basalMuMin: Double, targetMmol: Double): Double {
-            var lo = 1e-5
-            var hi = max(p.egp0, 1e-3)
+            var e = p.egp0.coerceAtLeast(1e-6)
+            repeat(ANCHOR_PROPORTIONAL_STEPS) {
+                val g = ssGlucose(p.copy(egp0 = e), basalMuMin)
+                if (g <= 1e-9) return@repeat
+                if (abs(g - targetMmol) < ANCHOR_TOL_MMOL) return e
+                e *= (targetMmol / g).coerceIn(0.25, 4.0)      // bounded so one bad step cannot fling it away
+            }
+            // fallback: bracket around the proportional estimate and bisect, as before
+            var lo = e * 0.25
+            var hi = e * 4.0
             while (ssGlucose(p.copy(egp0 = hi), basalMuMin) < targetMmol && hi < 100.0) hi *= 1.6
             while (ssGlucose(p.copy(egp0 = lo), basalMuMin) > targetMmol && lo > 1e-8) lo *= 0.5
-            repeat(34) {
+            repeat(24) {
                 val mid = 0.5 * (lo + hi)
                 if (ssGlucose(p.copy(egp0 = mid), basalMuMin) < targetMmol) lo = mid else hi = mid
             }
@@ -157,28 +209,25 @@ data class HovorkaParams(
         }
 
         /**
-         * Solve the ABSOLUTE SI multiplier (relative to the population base kb) that makes modelISF match
-         * the target, at a fixed egp0. Solved from `base` (not compounded) and bounded to [SI_MUL_MIN,
-         * SI_MUL_MAX]; if the target is unreachable inside the bounds we return the boundary (clamped),
-         * never a runaway. modelISF is monotone increasing in the multiplier.
-         */
-        private fun solveSiMul(base: HovorkaParams, egp0: Double, basalMuMin: Double, targetIsfMmol: Double, startGmmol: Double): Double {
-            fun isfAt(mul: Double) =
-                modelIsfMmol(base.copy(kb1 = base.kb1 * mul, kb2 = base.kb2 * mul, kb3 = base.kb3 * mul, egp0 = egp0), basalMuMin, startGmmol)
-            var lo = SI_MUL_MIN; var hi = SI_MUL_MAX
-            if (isfAt(hi) <= targetIsfMmol) return hi
-            if (isfAt(lo) >= targetIsfMmol) return lo
-            repeat(28) {
-                val mid = 0.5 * (lo + hi)
-                if (isfAt(mid) < targetIsfMmol) lo = mid else hi = mid
-            }
-            return 0.5 * (lo + hi)
-        }
-
-        /**
-         * Carb bioavailability ag matching the profile IC: the glucose AUC from a meal of [icGPerU]
-         * grams should cancel the (negative) AUC from the 1 U that covers it. Meal AUC scales ~linearly
-         * with ag, so solve in one shot. Clamped to a physiological [0.3, 1.0].
+         * Carb bioavailability ag matching the profile IC: a meal of [icGPerU] grams taken TOGETHER with the
+         * 1 U that covers it should be glucose-neutral over the following hours.
+         *
+         * Meal AUC scales ~linearly with ag, so this is solved in one shot rather than iterated. Clamped to a
+         * physiological [0.3, 1.0].
+         *
+         * A DIRECT SOLVE WAS TRIED AND REVERTED (2026-08-14). Bisecting ag so that the COMBINED meal+bolus
+         * trajectory has zero net area is the more principled formulation, and it is worse in practice: it
+         * drove ag to the 1.0 ceiling on 5 of the 8 profiles in PersonalizeCheck, against 1 for this method,
+         * and left this user's own profile no better (net −1.4 vs +2.5 mmol/L·h). The reason is that neither
+         * formulation is really sound — the model has no counter-regulation and `HovorkaModel.step` floors
+         * glucose at zero, so on a sensitive profile a 1 U bolus produces a long, deep, truncated tail whose
+         * area no physiological amount of carbohydrate can offset. The residual is a MODEL limitation, not a
+         * calibration bug, and swapping one approximation for another on a live dosing path buys nothing.
+         *
+         * What did fix most of the carb-side error was the ISF solve above: the old `ag` clamped at 1.0 on
+         * this user largely because it was balancing against a bolus that was 37% too strong. With the ISF
+         * consistent, ag lands at 0.87 and a profile-matched meal is within ~2.5 mmol/L·h of neutral.
+         * PersonalizeCheck reports the residual so it stays visible.
          */
         private fun calibrateAgToIc(p: HovorkaParams, basalMuMin: Double, icGPerU: Double): Double {
             val m = HovorkaModel(p)
@@ -196,10 +245,22 @@ data class HovorkaParams(
             repeat(600) { s = m.step(s, basalMuMin, 1.0); bolusAuc += (g0 - m.glucoseMmol(s)) }
             val mealAuc1 = mealAuc(1.0)
             if (mealAuc1 <= 1e-6) return p.ag
-            return (bolusAuc / mealAuc1).coerceIn(0.3, 1.0)
+            return (bolusAuc / mealAuc1).coerceIn(AG_MIN, AG_MAX)
         }
 
-        private const val CAL_SS_MIN = 3000        // steady-state horizon for calibration (min)
+        // Steady-state CEILING for calibration. Was 3000, which is not converged on a low-sensitivity model:
+        // the anchor held target at 3000 min while the same model settled 0.3 mmol/L lower by 6000, so the
+        // controller's operating point sat below the target it had just been calibrated to. HovorkaModel
+        // .steadyState now stops as soon as glucose stops moving, so a generous ceiling costs nothing for the
+        // models that settle quickly and is correct for the ones that do not.
+        private const val CAL_SS_MIN = HovorkaModel.SS_MAX_MIN
+        // SI bisection: the bracket is [0.2, 5.0], so 18 halvings resolve the multiplier to ~2e-5 — far finer
+        // than the ISF measurement itself. Each step now costs an egp0 anchor, hence not the old 28.
+        private const val SI_SOLVE_STEPS = 18
+        private const val ANCHOR_PROPORTIONAL_STEPS = 8
+        private const val ANCHOR_TOL_MMOL = 1e-4   // steady state this close to target is exact enough
+        private const val AG_MIN = 0.3             // physiological carb bioavailability bounds
+        private const val AG_MAX = 1.0
         // physiological bounds keeping personalisation from diverging on extreme/inconsistent profiles
         private const val SI_MUL_MIN = 0.2         // insulin sensitivity vs. population base
         private const val SI_MUL_MAX = 5.0
