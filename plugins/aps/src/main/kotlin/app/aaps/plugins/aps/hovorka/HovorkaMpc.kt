@@ -39,6 +39,16 @@ class HovorkaMpc(
     private val refTauFastMin: Double = 60.0,
     private val refTauSlowMin: Double = 180.0,
     private val refBreakMmol: Double = 13.0,
+    // DESCENT-RATE CEILING (2026-08-13, report/hovorka-correction-rate-plan.md). The exponential above has NO
+    // ceiling: its demanded fall is (G−target)·60/τ mmol/L/h, so above the breakpoint the higher glucose is,
+    // the faster it insists glucose come down — 8.9 mmol/L/h from 15.9. The fixed zone-slopes it replaced were
+    // bounded (2.5 / 1.7 / 1.0), and it is the BOUND that makes a controller structurally unable to stack
+    // correction into a site absorbing late: it simply waits. The in-silico A/B that chose the exponential
+    // could not have caught this — its cohort drew tMaxI 40–70 min, so no virtual patient's insulin ever
+    // arrived late enough for decisiveness to be punished (fixed in HovorkaParams: the cohort now spans 110).
+    // When true, clamp the reference so it never demands more than [maxDescentRateMmolPerH]. Only ever RAISES
+    // the reference (asks for LESS insulin), so it cannot by itself cause a low. Pref-gated, default OFF.
+    private val descentRateCap: Boolean = false,
     // below-target attenuation: how hard to penalise glucose RISING above the setpoint while still ≤ the
     // (raised) control target. 0.0 = the rise toward target is free (fullest back-off, most CamAPS-like);
     // a small value trades a touch of that back-off against fewer rebound highs.
@@ -244,7 +254,14 @@ class HovorkaMpc(
             val g = ref[i]
             val tauMin = if (g > refBreakMmol) refTauFastMin else refTauSlowMin
             val decay = exp(-stepMin / tauMin)          // per ref-step exponential decay toward target
-            ref[i + 1] = targetMmol + (g - targetMmol) * decay
+            var next = targetMmol + (g - targetMmol) * decay
+            // ZONE CEILING on the demanded descent, evaluated per step on the reference's own glucose (as the
+            // original zone slopes were). max() takes the SLOWER of the two, so it only ever raises the
+            // reference. Below target the exponential RISES toward target and always wins the max, so the
+            // ceiling is inert there and can never pin a recovering glucose down.
+            if (descentRateCap)
+                next = max(next, g - maxDescentRateMmolPerH(g) * stepMin / 60.0)
+            ref[i + 1] = next
         }
         return ref
     }
@@ -293,4 +310,21 @@ class HovorkaMpc(
         val smbU: Double = 0.0,           // 3b: immediate microbolus (U) to deliver alongside the TBR
         val eventualMmol: Double = 0.0    // predicted glucose at horizon-end under the optimised plan (forward projection)
     )
+
+    companion object {
+        /**
+         * The maximum rate of fall the controller may ASK for, by glucose zone (mmol/L/h). These are the
+         * CamAPS DetermineSetPoint zone slopes read from the binary (report/algorithm-spec.md §5), converted
+         * from per-minute: −1/24 → 2.5, −0.02833 → 1.7, −1/60 → 1.0.
+         *
+         * Shared deliberately between the reference-trajectory ceiling here and the HIGH-CORR floor's horizon
+         * in HovorkaMpcPlugin: both were unbounded in exactly the same way — a bigger high implying a faster
+         * demanded fall — and bounding one without the other just moves the behaviour rather than removing it.
+         */
+        fun maxDescentRateMmolPerH(g: Double): Double = when {
+            g > 13.0 -> 2.5
+            g > 10.0 -> 1.7
+            else     -> 1.0
+        }
+    }
 }

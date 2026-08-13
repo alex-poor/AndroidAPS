@@ -186,6 +186,24 @@ class HovorkaMpcPlugin @Inject constructor(
                     dialogMessage = R.string.hovorka_site_change_guard_h_summary, title = R.string.hovorka_site_change_guard_h_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaHighCorrectionFloor,
+                    summary = R.string.hovorka_high_correction_floor_summary, title = R.string.hovorka_high_correction_floor_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaCorrectionBudgetU,
+                    dialogMessage = R.string.hovorka_correction_budget_summary, title = R.string.hovorka_correction_budget_title
+                )
+            )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.HovorkaDescentRateCap,
+                    summary = R.string.hovorka_descent_rate_cap_summary, title = R.string.hovorka_descent_rate_cap_title
+                )
+            )
             // Read-only transparency block: the last re-tune's timestamp, whether it changed anything, and what.
             addPreference(
                 Preference(context).apply {
@@ -303,6 +321,13 @@ class HovorkaMpcPlugin @Inject constructor(
         // rather than clamping forever on a database that simply has no site history.
         val siteGuardActive = siteGuardOn && siteAgeH != null && siteAgeH < siteGuardWindowH
 
+        // --- DESCENT-RATE CEILING (2026-08-13) — bounds how fast the loop may ASK glucose to fall ---
+        // One pref drives BOTH halves, because they are the same unbounded property in two places: the MPC's
+        // reference trajectory (handled inside HovorkaMpc) and the HIGH-CORR floor's fixed 90-minute horizon
+        // below. Splitting them into separate switches would let the floor reintroduce exactly the rate the
+        // reference ceiling had just removed. Default OFF; see report/hovorka-correction-rate-plan.md.
+        val descentRateCapOn = preferences.get(BooleanKey.HovorkaDescentRateCap)
+
         val cobNowG = iobCobCalculator.getCobInfo("HovorkaSmbGate").displayCob ?: 0.0
         val recentMealMs = now - T.mins(SMB_MEAL_WINDOW_MIN).msecs()
         val hasRecentMeal = persistenceLayer.getCarbsFromTimeToTimeExpanded(recentMealMs, now, false).any { it.amount > 0.0 }
@@ -415,6 +440,7 @@ class HovorkaMpcPlugin @Inject constructor(
             rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalBasalMuMin, maxBasalMuPerMin = maxBasalMuMin,
             refTauFastMin = preferences.get(DoubleKey.HovorkaCorrectionTauMin),
+            descentRateCap = descentRateCapOn,
             // in closed loop honour a model-requested full suspend (post-bolus) instead of the anti-spam floor
             allowFullSuspend = constraintsChecker.isClosedLoopAllowed().value(),
             enableSmb = smbAllowed, maxSmbU = maxSmbU
@@ -511,7 +537,22 @@ class HovorkaMpcPlugin @Inject constructor(
         // for a ≤0.1 mmol/L peak gain. Firing on a high alone cannot distinguish LATE insulin (the common case,
         // where extra dosing stacks into a hypo) from MISSING insulin (the rare real failure). The stalled-meal
         // detector below adds the missing discriminator — TIME — and is gated far more tightly.
-        if (!rawHypoSuspend && rawCgmMmol > controlTargetMmol + HIGH_CORRECTION_MIN_HIGH_MMOL && isfMmol > 0.0 &&
+        // GATE (2026-08-14) — the floor is now switchable, default ON so behaviour is unchanged until the
+        // user chooses otherwise. It is here because the floor's own stated justification has been undermined:
+        // it was built because "the more-sensitive ISF made the model over-credit ~2U IOB as a 6 mmol/L drop
+        // that wasn't happening", and that over-crediting was a bug in `personalize` (37% too insulin-
+        // sensitive), fixed 2026-08-14. Re-measured against the corrected model (HighCorrFloorAB):
+        //   - ordinary days and a whole slow-absorption day: floor ON is IDENTICAL to floor OFF, in both the
+        //     old and the new model. The floor was never doing anything there;
+        //   - day-1 site, 30% of the bolus delivered: with the OLD model the floor was worth +2.6 points of
+        //     TIR and −3.1 of time-high; with the CORRECTED model that benefit disappears (−0.7 TIR, +1.1
+        //     time-below at n=8, i.e. neutral-to-slightly-harmful).
+        // So its value was contingent on the model being wrong. It is not deleted, because that is a live
+        // dosing behaviour and two dosing changes should not land at once — install the calibration fix,
+        // watch, then turn this off.
+        val highCorrectionFloorOn = preferences.get(BooleanKey.HovorkaHighCorrectionFloor)
+        if (highCorrectionFloorOn &&
+            !rawHypoSuspend && rawCgmMmol > controlTargetMmol + HIGH_CORRECTION_MIN_HIGH_MMOL && isfMmol > 0.0 &&
             eventualForCorrection > controlTargetMmol + HIGH_CORRECTION_MARGIN_MMOL) {
             val excessUnits = (eventualForCorrection - controlTargetMmol) / isfMmol
             // HIGH-CORR SMB (2026-07-08): at a genuine high the model rollout goes over-optimistic (predicts a
@@ -546,9 +587,28 @@ class HovorkaMpcPlugin @Inject constructor(
             }
             // basal clears only the excess the front-loaded SMB does NOT cover (no double-dosing this tick)
             val residualExcess = max(0.0, excessUnits - hcSmbU)
-            val floorUhr = (operatingBasalUhr + residualExcess / HIGH_CORRECTION_HORIZON_H).coerceAtMost(maxBasalUhr)
+            // DESCENT-RATE CEILING, second half (2026-08-13). A FIXED horizon clears any excess in the same
+            // 90 minutes, so a bigger high implies a faster demanded fall — the identical unbounded property
+            // the reference trajectory had, in a place the reference ceiling cannot reach (this floor is
+            // applied AFTER the MPC and overrides it upward). Stretch the horizon so the implied rate never
+            // exceeds the zone maximum: 9 mmol/L over target gets 3.6 h at 2.5 mmol/L/h, not 1.5 h. max()
+            // keeps the nominal horizon as a FLOOR, so this only ever lengthens — i.e. only ever lowers the
+            // rate — and can never make the correction more aggressive than it is today.
+            //
+            // The numerator is how far GLUCOSE has to travel, NOT how many units mass balance is short. The
+            // two come apart exactly when this matters: mid-excursion the booked meal bolus keeps the MB
+            // excess small even at 16 mmol/L, so a horizon derived from it never exceeds 1.5 h and the bound
+            // is inert (measured in silico: identical total insulin to baseline). A rate limit has to be
+            // governed by the distance glucose must fall, which is what makes it a rate limit at all.
+            val correctionHorizonH =
+                if (descentRateCapOn)
+                    max(HIGH_CORRECTION_HORIZON_H,
+                        (rawCgmMmol - controlTargetMmol) / HovorkaMpc.maxDescentRateMmolPerH(rawCgmMmol))
+                else HIGH_CORRECTION_HORIZON_H
+            val floorUhr = (operatingBasalUhr + residualExcess / correctionHorizonH).coerceAtMost(maxBasalUhr)
             if (floorUhr > rateUhr) {
-                corrNote = " | HIGH-CORR %.2f→%.2f U/hr (MB %.1f>target %.1f)".format(rateUhr, floorUhr, eventualForCorrection, controlTargetMmol)
+                corrNote = " | HIGH-CORR %.2f→%.2f U/hr over %.1fh (MB %.1f>target %.1f)"
+                    .format(rateUhr, floorUhr, correctionHorizonH, eventualForCorrection, controlTargetMmol)
                 rateUhr = round(floorUhr * 100.0) / 100.0
             }
             if (hcSmbU > smbU) {
@@ -629,6 +689,60 @@ class HovorkaMpcPlugin @Inject constructor(
         // What survives is the pair of actions that are correct under every reading of the mechanism,
         // both applied above: SMB suppression and the divergence stand-down. Both withhold AGGRESSION
         // rather than basal, so widening their window is safe where capping basal was not.
+        // --- CORRECTION BUDGET (2026-08-14) — bound the CUMULATIVE loop-added insulin, not its rate ---
+        // Applied LAST, after every other bound, so nothing downstream can lift it; it only ever clamps DOWN
+        // to the operating basal, so it composes safely with the descent guard and every hypo suspend (all of
+        // which bound from below) and can never cause a low on its own.
+        //
+        // WHY A QUANTITY BOUND AND NOT A RATE BOUND. A rate ceiling on the correction was built, validated and
+        // rejected (report/hovorka-correction-rate-plan.md): it only redistributed insulin, leaving total
+        // delivery in the day-1 scenario at 8.99 U against 8.92 U uncapped. What the loop actually contributes
+        // to a day-1 excursion is +0.7 to +3.3 U of QUANTITY beyond its own no-loop counterfactual, so
+        // quantity is what has to be bounded. In silico, a 2 U / 5 h budget leaves ordinary days untouched
+        // (TIR 95.3% in both arms) while lifting the day-1 cases by 3.7-5.7 points of TIR, halving time below
+        // range, and leaving time ABOVE range unchanged — the trade the rate ceiling could never make.
+        //
+        // THIS IS NOT THE POST-SITE-CHANGE CAP DELETED ABOVE, and it answers its three objections directly:
+        //   (a) WRONG TIMESCALE — no clock and no site dependency at all. The budget is spent by BEHAVIOUR,
+        //       so it works whether a site opens in 4 h or 30 h and cannot expire mid-excursion.
+        //   (b) WRONG ACTOR — it makes no claim on the user's own bolusing. It bounds only the loop's
+        //       contribution, which is exactly and only what this plugin controls.
+        //   (c) COULD BACKFIRE — nominal basal is never withheld, so insulin VOLUME keeps going in at the
+        //       profile rate. If a site opens on cumulative volume, this does not slow that down.
+        // It is also not site-specific: it is a general anti-stacking bound that bites hardest exactly when
+        // insulin is not working, because that is when the loop keeps correcting to no effect.
+        var budgetNote = ""
+        val correctionBudgetU = preferences.get(DoubleKey.HovorkaCorrectionBudgetU)
+        if (correctionBudgetU > 0.0) {
+            val from = now - T.mins(CORRECTION_BUDGET_WINDOW_MIN).msecs()
+            // Above-nominal basal already delivered inside the window. The operating basal is taken as it is
+            // NOW rather than as it was at each past tick: profile blocks change it by ~0.15 U/hr on this
+            // user, which is far below the resolution this bound needs, and using the current value keeps the
+            // computation cheap and stateless.
+            var spentU = persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(from, now).sumOf { tb ->
+                val start = max(tb.timestamp, from)
+                val end = min(tb.timestamp + tb.duration, now)
+                if (end <= start) 0.0 else {
+                    val tbUhr = if (tb.isAbsolute) tb.rate else operatingBasalUhr * tb.rate / 100.0
+                    max(0.0, tbUhr - operatingBasalUhr) * (end - start) / T.hours(1).msecs().toDouble()
+                }
+            }
+            // An SMB is loop-added insulin by definition, so it counts in full rather than as an excess.
+            spentU += persistenceLayer.getBolusesFromTimeToTime(from, now, false)
+                .filter { it.type == BS.Type.SMB }.sumOf { it.amount }
+            if (spentU >= correctionBudgetU) {
+                if (rateUhr > operatingBasalUhr) {
+                    budgetNote = " | CORRECTION-BUDGET %.2f→%.2f U/hr (%.2f of %.2f U spent in %dh)"
+                        .format(rateUhr, operatingBasalUhr, spentU, correctionBudgetU, CORRECTION_BUDGET_WINDOW_MIN / 60)
+                    rateUhr = round(operatingBasalUhr * 100.0) / 100.0
+                }
+                if (smbU > 0.0) {
+                    budgetNote += " | CORRECTION-BUDGET-SMB %.2f→0".format(smbU)
+                    smbU = 0.0
+                }
+            }
+        }
+
         var siteNote = ""
         if (siteGuardActive)
             siteNote = " | SITE-GUARD armed (cannula %.1fh old, <%.0fh: no SMB, divergence off)"
@@ -637,7 +751,7 @@ class HovorkaMpcPlugin @Inject constructor(
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
         val todNote = if (carbAbsorptionMin != carbAbsorptionBase) " | tMaxG=%.0f (ToD)".format(carbAbsorptionMin) else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, corrNote, siteNote, todNote, reIdNote, decision.reason)
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, corrNote, budgetNote, siteNote, todNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -953,6 +1067,10 @@ class HovorkaMpcPlugin @Inject constructor(
         const val EVENTUAL_MAX_MMOL = 30.0
         const val HIGH_CORRECTION_MIN_HIGH_MMOL = 2.0  // correction floor needs a GENUINE high (target+this), not merely >target
         const val HIGH_CORRECTION_MARGIN_MMOL = 0.6   // high-glucose correction floor fires only when mass-balance eventual exceeds target by this
+        // CORRECTION BUDGET window. 5 h is long enough to span a whole post-meal excursion (so the loop
+        // cannot simply wait out the bound and resume stacking) and short enough that the allowance is fully
+        // restored by the next meal. In silico the result is flat across 4-6 h; it is not a fitted edge.
+        const val CORRECTION_BUDGET_WINDOW_MIN = 300L
         const val HIGH_CORRECTION_HORIZON_H = 1.5     // clear the residual mass-balance excess over this many hours (in-silico 2026-07-07: 1.5h beats 2h on highs, still zero added lows)
         const val HIGH_CORR_SMB_FRACTION = 0.3        // 2026-07-08: share of the mass-balance high-glucose excess delivered NOW as an SMB (rest ramps via the basal floor); self-tapers as IOB builds. Raise → more aggressive at highs (0.5 stacked into a meal bolus → hypo; cut to 0.3)
         const val HIGH_CORR_SMB_MIN_U = 0.05          // skip sub-resolution high-corr microboluses

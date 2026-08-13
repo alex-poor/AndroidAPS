@@ -38,6 +38,7 @@ enum class DoubleKey(
     HovorkaCarbAbsorptionMin("hovorka_carb_absorption_min", 40.0, 20.0, 120.0),
     HovorkaCorrectionTauMin("hovorka_correction_tau_min", 60.0, 20.0, 180.0),
     HovorkaSiteChangeGuardH("hovorka_site_change_guard_h", 24.0, 1.0, 72.0),
+    HovorkaCorrectionBudgetU("hovorka_correction_budget_u", 0.0, 0.0, 10.0),
     AbsorptionCutOff("absorption_cutoff", 6.0, 4.0, 10.0),
     AbsorptionMaxTime("absorption_maxtime", 6.0, 4.0, 10.0),
     AutosensMin("autosens_min", 0.7, 0.1, 1.0, defaultedBySM = true, hideParentScreenIfHidden = true),

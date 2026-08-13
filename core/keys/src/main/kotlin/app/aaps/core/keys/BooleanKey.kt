@@ -25,6 +25,8 @@ enum class BooleanKey(
     HovorkaCarbAbsorptionByTod("hovorka_carb_absorption_by_tod", false),
     HovorkaParamId("hovorka_param_id", false),
     HovorkaSiteChangeGuard("hovorka_site_change_guard", false),
+    HovorkaDescentRateCap("hovorka_descent_rate_cap", false),
+    HovorkaHighCorrectionFloor("hovorka_high_correction_floor", true),
     GeneralSetupWizardProcessed("startupwizard_processed", false),
     OverviewKeepScreenOn("keep_screen_on", false, calculatedDefaultValue = true),
     OverviewShowTreatmentButton("show_treatment_button", false, defaultedBySM = true, hideParentScreenIfHidden = true),
