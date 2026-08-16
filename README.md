@@ -18,21 +18,35 @@
 
 ## What this fork adds
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Four independent workstreams:
+Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Five workstreams:
 
-| # | Area | What it is | Branch | Status |
-|---|------|-----------|--------|--------|
-| 1 | **[YpsoPump driver](#1-ypsopump-pump-driver)** | Loops a pump AAPS lists as "Not Loopable" | `ypsopump-integration` | Alpha, dosing-capable |
-| 2 | **[HovorkaMPC](#2-hovorkampc--a-model-predictive-controller)** | A nonlinear-MPC APS algorithm alongside oref1 | `ypsopump-integration` | Experimental, runs live |
-| 3 | **[Infusion-site handling](#3-infusion-site-handling)** | Treats a fresh cannula as a distinct physiological state, across the algorithm, wizard and careportal | `ui-redesign` | Running |
-| 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | `ui-redesign` | Running |
-| 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | `ui-redesign` | Running |
+| # | Area | What it is | Status |
+|---|------|-----------|--------|
+| 1 | **[YpsoPump driver](#1-ypsopump-pump-driver)** | Loops a pump AAPS lists as "Not Loopable" | Alpha, dosing-capable |
+| 2 | **[HovorkaMPC](#2-hovorkampc--a-model-predictive-controller)** | A nonlinear-MPC APS algorithm alongside oref1 | Experimental, runs live |
+| 3 | **[Infusion-site handling](#3-infusion-site-handling)** | Treats a fresh cannula as a distinct physiological state, across the algorithm, wizard and careportal | Running |
+| 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | Running |
+| 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | Running |
 
 Plus a number of [smaller changes](#smaller-changes) — Nightscout over a private network, wizard fields
 the redesign had dropped, and pump-driver reliability fixes.
 
-`ui-redesign` contains everything — the algorithm/pump branch is merged into it. Use
-`ypsopump-integration` if you want the loop without the UI rewrite.
+All of it lives on **`main`** — the workstreams are separable as ideas, not as code (the fresh-site
+work is algorithm *and* wizard; the slim build is gradle config *and* workers *and* UI), so a single
+branch is the honest representation.
+
+### Branches
+
+| Branch | What it is |
+|---|---|
+| **`main`** | Everything above. This is the build that runs on hardware. |
+| **`master`** | An untouched mirror of `nightscout/AndroidAPS` at the fork point, kept so upstream can be merged and diffed cleanly. No work of this fork's is on it. |
+| *others* | Short-lived feature branches, merged and deleted. |
+
+An earlier layout split the algorithm and the UI across two long-lived branches. It was retired in
+August 2026 after the loop branch drifted to 0 commits ahead and 74 behind, six commit subjects were
+applied twice, and a repair commit had to be written to carry algorithm fixes back across. Its tip
+survives as the tag `loop-only-3.4.2.3`.
 
 ---
 
