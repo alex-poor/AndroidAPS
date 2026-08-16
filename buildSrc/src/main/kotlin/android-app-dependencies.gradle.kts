@@ -44,6 +44,12 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
             isDebuggable = false
+            // R8, shrink-only — obfuscation is disabled in proguard-rules.pro because AAPS resolves
+            // plugin fragments and automation triggers by class name at runtime. 85% of the dex is
+            // library code the app barely calls; only reachability analysis can cut inside a
+            // dependency that has to stay.
+            isMinifyEnabled = true
+            isShrinkResources = true
         }
         buildTypes {
             create("benchmark") {

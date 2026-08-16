@@ -17,7 +17,13 @@ dependencies {
     implementation(project(":core:utils"))
     implementation(project(":core:ui"))
 
-    api(libs.com.thoughtworks.xstream)
+    // XStream backs PumpSyncStorage (pending bolus/TBR sync entries). Its mxparser transitive
+    // drags in xmlpull:xmlpull, whose org.xmlpull.v1.XmlPullParser is ALSO part of android.jar —
+    // R8 rejects that as "library class ... implements program class". The framework provides the
+    // interface at runtime, so exclude the bundled copy and let mxparser bind against Android's.
+    api(libs.com.thoughtworks.xstream) {
+        exclude(group = "xmlpull", module = "xmlpull")
+    }
     api(libs.com.google.code.gson)
     implementation(project(":core:keys"))
 
