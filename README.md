@@ -24,8 +24,12 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Four independent 
 |---|------|-----------|--------|--------|
 | 1 | **[YpsoPump driver](#1-ypsopump-pump-driver)** | Loops a pump AAPS lists as "Not Loopable" | `ypsopump-integration` | Alpha, dosing-capable |
 | 2 | **[HovorkaMPC](#2-hovorkampc--a-model-predictive-controller)** | A nonlinear-MPC APS algorithm alongside oref1 | `ypsopump-integration` | Experimental, runs live |
-| 3 | **[Compose UI redesign](#3-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | `ui-redesign` | Presentation-only |
-| 4 | **[Slim loop build](#4-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | `ui-redesign` | Running |
+| 3 | **[Infusion-site handling](#3-infusion-site-handling)** | Treats a fresh cannula as a distinct physiological state, across the algorithm, wizard and careportal | `ui-redesign` | Running |
+| 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | `ui-redesign` | Running |
+| 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | `ui-redesign` | Running |
+
+Plus a number of [smaller changes](#smaller-changes) — Nightscout over a private network, wizard fields
+the redesign had dropped, and pump-driver reliability fixes.
 
 `ui-redesign` contains everything — the algorithm/pump branch is merged into it. Use
 `ypsopump-integration` if you want the loop without the UI rewrite.
@@ -99,6 +103,8 @@ Each of these exists because the failure it prevents happened first:
   discounted, so a failed infusion site cannot silence the correction path at a high
 - **High-glucose correction floor** — ramps basal while the mass-balance eventual stays above target
 - **SMB gates** — fed-state, rising, post-hypo lockout, rolling stack cap, maxIOB/maxBolus ceilings
+- **SITE-GUARD** — a fresh cannula suppresses SMB and stands the divergence detector down; see
+  [section 3](#3-infusion-site-handling)
 
 **Validated in-silico only**, plus replay against recorded logs. Not clinically validated. Note that
 several changes which passed the virtual-patient cohort were later rejected when fitted against real
@@ -106,20 +112,68 @@ data — where that happened, the code comments record what was tried and why it
 
 ---
 
-## 3. Compose UI redesign
+## 3. Infusion-site handling
+
+**`plugins/aps/.../hovorka/` (SITE-GUARD) · `ui/.../dialogs/` (wizard advisory, back-dated recording)**
+
+The largest single effect found in this user's own data, and it is not an algorithm parameter — it is the
+cannula. Across 17 days: for roughly six hours after a site change, glucose averaged **13.5 mmol/L against
+7.6 in the same clock hours on non-change days, while taking four times the bolus insulin** (2.15 vs
+0.51 U/h). Six changes out of six, paired sign test p=0.016. The cleanest case involved zero carbs, ~13 U
+of bolus over six hours, and still averaged 11.8.
+
+The important part is what that implies. A normal loop response there is not merely ineffective, it is
+**actively harmful**: the insulin is not absorbed, it accumulates, and when the site opens it all arrives
+at once. The change where the loop pushed hardest ended at 2.2 mmol/L.
+
+So a fresh site is handled as its own state, in three places:
+
+- **SITE-GUARD** — for the first 24 hours (configurable), SMB is suppressed (irreversible dosing has no
+  place in a window where the high is caused by insulin *not arriving*), and the IOB-divergence detector
+  is stood down. That detector fires on exactly this signature — glucose rising while booked IOB says it
+  should fall — and responds by discounting IOB and adding correction. It was written for a site that has
+  **failed**; a fresh site is **late**, and the two need opposite responses. An earlier version also
+  capped basal; that was removed as the wrong instrument on the wrong timescale. The guard **fails open**:
+  with no cannula change ever recorded it stays off rather than clamping forever on an empty history.
+- **Fresh-site bolus advisory** — insulin peaks about twice as slowly at a day-1 site (time-to-peak
+  110 min vs 56 min, Hildebrandt 1991), and a large single bolus compounds it. Splitting a dose is the
+  user's call and the loop cannot do it for them, so the wizard carries the advisory: amber, informational,
+  and only for boluses of 1.5 U or more, since a basal trickle is handled fine.
+- **Back-dated site recording** — a cannula change is routinely made away from the phone. Prime/Fill used
+  to stamp the current time with no way to correct it, so changes went unrecorded and were invisible to
+  both the analysis and the guard. There is now a "changed N minutes ago" field with quick chips. It
+  back-dates the **therapy event only** — the prime bolus is still delivered now, because insulin cannot
+  be given retroactively and a fictional delivery time would corrupt IOB.
+
+Armed on `CANNULA_CHANGE`, so a tubing- or reservoir-only fill does not trigger it.
+
+---
+
+## 4. Compose UI redesign
 
 **`core/compose/` (design system) + Compose screens throughout `plugins/main/`**
 
 A full-app rewrite of the interface in Jetpack Compose and Material 3, on a shared design-system module.
-**Presentation-only**: it reuses the existing logic, constraints and protection paths underneath.
+It reuses the existing dosing logic, constraints and protection paths underneath — every delivery still
+goes through `BolusWizard.confirmAndExecute` and the same constraint chain.
 
 Rewritten: Home (hero card, graph, actions), Bolus/Carb wizard, Loop control, Temp target, Profile switch,
 Actions & Careportal, Statistics, History timeline, Profile view and editor, Config Builder, preference
 screens, YpsoPump status, and around a dozen legacy dialogs.
 
+**Not purely cosmetic, despite the above.** Some inputs that affect dosing changed:
+
+- **Pre-bolus (carb time)** — restored after the first pass of the redesign dropped it
+- **Extended carbs** — an absorption-duration field, with a `carbDurationHours` parameter threaded
+  through the wizard calculation
+- **Record-only insulin entry** — logs a bolus delivered by pump or pen into IOB *without* re-delivering
+  it, reachable from the Home "+" menu
+- **Fresh-site advisory** — see [section 3](#3-infusion-site-handling)
+- The second confirmation popup was removed; the hold-to-deliver control is the confirmation
+
 ---
 
-## 4. Slim loop build
+## 5. Slim loop build
 
 **`loop` build type in `buildSrc/`, plus removals across the module tree**
 
@@ -182,6 +236,29 @@ Only two touch behaviour, and neither is on the dosing path:
 
 Plus: Nightscout upload/download failures back off and log one stack per distinct error rather than one per
 record, and `deviceStatus` — write-only rows that existed to be uploaded — is kept for 7 days instead of 186.
+
+---
+
+## Smaller changes
+
+Things that do not warrant a section but are still differences from upstream.
+
+**Nightscout over a private network.** NSClient v3 is HTTPS-only at four separate gates — the URL
+validator, the plugin's scheme handling, the `nssdk` request builder, and Android's own
+`network_security_config`. The last is the quiet one: it fails with `UnknownServiceException: CLEARTEXT
+... not permitted` and only in AAPS's internal log. All four are patched so a Nightscout on a Tailscale
+or LAN address works. **For private networks only** — do not point this at anything reachable from the
+internet over plain HTTP.
+
+**Nightscout failure handling.** Upload and download failures back off (30 s doubling to 30 min) and log
+one stack per distinct error instead of one per record. With the mesh down, the previous behaviour was
+416 failures in three hours and 55% of every line the app wrote.
+
+**Pump-driver reliability.** A BLE watchdog that unwedges stalled operations (the recurring "pump
+unreachable"), a fix for delivered boluses being discarded by an AAPS one-minute freshness gate, bolus
+under-recording corrected by decoding pump status and reconciling against pump history, and the pump's
+own 28-day session-key expiry identified and surfaced (`0x8C NO_SHARED_KEY`) rather than presenting as a
+generic connection failure.
 
 ---
 
