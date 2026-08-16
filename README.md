@@ -18,13 +18,14 @@
 
 ## What this fork adds
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Three independent workstreams:
+Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Four independent workstreams:
 
 | # | Area | What it is | Branch | Status |
 |---|------|-----------|--------|--------|
 | 1 | **[YpsoPump driver](#1-ypsopump-pump-driver)** | Loops a pump AAPS lists as "Not Loopable" | `ypsopump-integration` | Alpha, dosing-capable |
 | 2 | **[HovorkaMPC](#2-hovorkampc--a-model-predictive-controller)** | A nonlinear-MPC APS algorithm alongside oref1 | `ypsopump-integration` | Experimental, runs live |
 | 3 | **[Compose UI redesign](#3-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | `ui-redesign` | Presentation-only |
+| 4 | **[Slim loop build](#4-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | `ui-redesign` | Running |
 
 `ui-redesign` contains everything — the algorithm/pump branch is merged into it. Use
 `ypsopump-integration` if you want the loop without the UI rewrite.
@@ -118,9 +119,82 @@ screens, YpsoPump status, and around a dozen legacy dialogs.
 
 ---
 
+## 4. Slim loop build
+
+**`loop` build type in `buildSrc/`, plus removals across the module tree**
+
+Upstream ships every pump driver, every algorithm and every integration, because upstream serves everyone.
+This fork serves one pump and one algorithm, so it carries what it uses. Measured on device before and after:
+
+| | Before | After |
+|---|---|---|
+| APK on disk | 189 MB | 67 MB |
+| Dex files | 34 | 7 |
+| `resources.arsc` | 10.2 MB | 1.2 MB |
+| Native ABIs | 7 | 1 (`arm64-v8a`) |
+| Dexopt state | `run-from-apk` | `speed` |
+| Idle CPU, screen off | 4.72%* | 2.59% of a core |
+
+\* The before figure is a 56-hour mixed foreground/background average rather than a matched screen-off
+window, so treat that one pair as indicative. The protocol-matched measurement is 3.04% → 2.59% across the
+legacy-overview change alone, over identical 15-minute screen-off windows.
+
+### The `loop` build type
+
+The important part is not the size. **Android refuses to ahead-of-time compile a `DEBUGGABLE` package** —
+`cmd package compile -m speed` reports success and silently downgrades to `verify`, so a debug build runs
+`status=run-from-apk` and JIT-compiles every dex file, forever.
+
+The `loop` build type is the debug build with `isDebuggable = false`, **signed with the same debug
+keystore**. That signing choice is deliberate and load-bearing: the signature still matches what is
+installed, so `adb install -r` remains an *update* rather than a reinstall, `/data` survives, and the pump
+driver keeps its session key. Give it a different `signingConfig` and every install becomes an uninstall.
+
+```bash
+./gradlew :app:assembleFullLoop
+adb install -r app/build/outputs/apk/full/loop/app-full-loop.apk
+adb shell cmd package compile -m speed -f info.nightscout.androidaps   # not automatic after install
+adb shell cmd package dump info.nightscout.androidaps | grep -A3 'Dexopt state'   # want status=speed
+```
+
+Build `assembleFullDebug` instead when you need a debugger, and rebuild `loop` afterwards.
+
+### What was removed
+
+Twelve unused pump drivers and the RileyLink radio only Medtronic/Omnipod need (YpsoPump plus
+Medtrum, virtual and `pump:common` are kept); Firebase Analytics,
+Crashlytics and Remote Config (`FabricPrivacy` now logs to the AAPS log instead, so its call sites are
+unchanged); LeakCanary; Wear support and fourteen bundled watchfaces; all locales but `en`; all ABIs but
+`arm64-v8a`. `material-icons-extended` was 19.7 MB of dex to draw 33 icons — the 25 that only exist there
+are vendored into `core/compose` as path data extracted from the library itself, so they render identically.
+
+### Runtime changes
+
+Only two touch behaviour, and neither is on the dosing path:
+
+- **Graph work is gated on UI visibility.** Every CGM tick ran a 16-worker chain, of which 14 built
+  overview graph series by querying the database — with the screen off, and with the dosing decision
+  queued thirteenth. The chain now runs IOB/COB and the loop first, and prepares graph series only while
+  a screen is visible; `OverviewFragment` rebuilds them on resume. Hidden cycles run 5 workers in under a
+  second against 17 taking several.
+- **The hidden legacy overview no longer runs or draws.** The Compose home is an opaque overlay over the
+  original layout, which was still being fed ~120 values per refresh and redrawing its own graphs.
+
+Plus: Nightscout upload/download failures back off and log one stack per distinct error rather than one per
+record, and `deviceStatus` — write-only rows that existed to be uploaded — is kept for 7 days instead of 186.
+
+---
+
 ## Building
 
-Standard AAPS build: `./gradlew assembleFullDebug`.
+Two variants matter:
+
+```bash
+./gradlew :app:assembleFullLoop     # the build that drives the pump — non-debuggable, AOT-eligible
+./gradlew :app:assembleFullDebug    # debuggable, for attaching a debugger
+```
+
+Both are signed with the debug keystore, so `install -r` between them preserves app data.
 
 If the build fails inside KSP with `PROCESSING_ERROR`, run `./gradlew :app:clean` first — the annotation
 processor caches stale generated types across large refactors.
