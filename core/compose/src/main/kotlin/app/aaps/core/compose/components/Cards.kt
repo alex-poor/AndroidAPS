@@ -1,5 +1,6 @@
 package app.aaps.core.compose.components
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,8 +12,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -88,7 +87,7 @@ fun StatCard(
 @Composable
 internal fun Chevron() {
     Icon(
-        imageVector = Icons.Rounded.ChevronRight,
+        imageVector = AapsIcons.ChevronRight,
         contentDescription = null,
         tint = AapsTheme.colors.textTertiary,
         modifier = Modifier.size(16.dp)

@@ -70,6 +70,17 @@ class WizardDialog : DaggerDialogFragment() {
         aapsLogger.debug(LTag.APS, "Dialog opened: ${this.javaClass.simpleName}")
     }
 
+    /**
+     * The HandlerThread started above is not a daemon, so without this it outlives the dialog and
+     * one thread leaks per wizard open — ten of them were live on device. ErrorDialog already does
+     * exactly this; the wizard was simply missing it.
+     */
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacksAndMessages(null)
+        handler.looper.quitSafely()
+    }
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         arguments?.let { initialCarbs = it.getDouble("carbs_input", 0.0).toInt() }
         dialog?.window?.requestFeature(Window.FEATURE_NO_TITLE)

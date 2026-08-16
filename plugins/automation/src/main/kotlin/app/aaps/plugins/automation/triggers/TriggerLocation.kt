@@ -3,7 +3,6 @@ package app.aaps.plugins.automation.triggers
 import android.content.Context
 import android.location.Location
 import android.widget.LinearLayout
-import app.aaps.core.data.firebase.RemoteConfigKeys
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.JsonHelper
@@ -17,8 +16,6 @@ import app.aaps.plugins.automation.elements.LayoutBuilder
 import app.aaps.plugins.automation.elements.StaticLabel
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.libraries.places.api.model.Place
-import com.google.firebase.Firebase
-import com.google.firebase.remoteconfig.remoteConfig
 import com.rtchagas.pingplacepicker.PingPlacePicker
 import dagger.android.HasAndroidInjector
 import org.json.JSONObject
@@ -48,7 +45,10 @@ class TriggerLocation(injector: HasAndroidInjector) : Trigger(injector), PingPla
         val builder = PingPlacePicker.Builder()
         builder
             .setAndroidApiKey(rh.gs(R.string.key_google_apis_android))
-            .setMapsApiKey(Firebase.remoteConfig.getString(RemoteConfigKeys.KEY_MAPS_API))
+            // Upstream fetches a separate Maps key from Firebase Remote Config. With Firebase gone
+            // this falls back to the bundled Android key. The place picker is only reachable from
+            // the Location automation trigger, which this build does not use.
+            .setMapsApiKey(rh.gs(R.string.key_google_apis_android))
             .setOnPlaceSelectedListener(this)
 
         // Set a initial location.

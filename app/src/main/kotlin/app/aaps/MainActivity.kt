@@ -71,7 +71,6 @@ import app.aaps.ui.activities.TreatmentsActivity
 import app.aaps.ui.tabs.TabPageAdapter
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayoutMediator
-import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.joanzapata.iconify.Iconify
 import com.joanzapata.iconify.fonts.FontAwesomeModule
 import io.reactivex.rxjava3.disposables.CompositeDisposable
@@ -494,15 +493,12 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         fabricPrivacy.setUserProperty("Profile", activePlugin.activeProfileSource.javaClass.simpleName)
         activePlugin.activeSensitivity.let { fabricPrivacy.setUserProperty("Sensitivity", it::class.java.simpleName) }
         activePlugin.activeInsulin.let { fabricPrivacy.setUserProperty("Insulin", it::class.java.simpleName) }
-        // Add to crash log too
-        FirebaseCrashlytics.getInstance().setCustomKey("HEAD", BuildConfig.HEAD)
-        FirebaseCrashlytics.getInstance().setCustomKey("Version", config.VERSION_NAME)
-        FirebaseCrashlytics.getInstance().setCustomKey("BuildType", config.BUILD_TYPE)
-        FirebaseCrashlytics.getInstance().setCustomKey("BuildFlavor", config.FLAVOR)
-        FirebaseCrashlytics.getInstance().setCustomKey("Remote", remote)
-        FirebaseCrashlytics.getInstance().setCustomKey("Committed", config.COMMITTED)
-        FirebaseCrashlytics.getInstance().setCustomKey("Hash", hashes[0])
-        FirebaseCrashlytics.getInstance().setCustomKey("Email", preferences.get(StringKey.MaintenanceIdentification))
+        // Build identity, formerly attached to Crashlytics crash reports. It goes to the AAPS log
+        // instead, which is where a crash on this device is actually investigated from.
+        fabricPrivacy.logMessage(
+            "Build: HEAD=${BuildConfig.HEAD} version=${config.VERSION_NAME} type=${config.BUILD_TYPE} " +
+                "flavor=${config.FLAVOR} remote=$remote committed=${config.COMMITTED} hash=${hashes[0]}"
+        )
     }
 
     /**

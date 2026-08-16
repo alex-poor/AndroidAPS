@@ -70,4 +70,13 @@ interface CalculationWorkflow {
      * There may be me necessary display larger time interval thus run new calculation
      */
     fun runOnScaleChanged(iobCobCalculator: IobCobCalculator, overviewData: OverviewData)
+
+    /**
+     * Rebuild every graph series without touching IOB/COB or invoking the loop.
+     *
+     * [runCalculation] skips the graph workers while no AAPS screen is visible, so the series are
+     * stale whenever the overview comes back. Call this from onResume to catch up; it is the
+     * presentation half of the chain and nothing in it can affect dosing.
+     */
+    fun runGraphsOnly(iobCobCalculator: IobCobCalculator, overviewData: OverviewData)
 }

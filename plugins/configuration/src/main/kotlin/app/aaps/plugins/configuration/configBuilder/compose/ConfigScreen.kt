@@ -1,5 +1,6 @@
 package app.aaps.plugins.configuration.configBuilder.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,8 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -99,7 +98,7 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(p.name, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                                Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
+                                Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
                             }
                         }
                     }

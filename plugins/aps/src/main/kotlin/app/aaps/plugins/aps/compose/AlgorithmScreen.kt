@@ -1,5 +1,6 @@
 package app.aaps.plugins.aps.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -13,8 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -100,7 +99,7 @@ fun AlgorithmScreen(
                     val sub = state.bodyWeight?.let { "Body weight ${fmt1(it)} kg · all parameters" } ?: "All algorithm parameters"
                     Text(sub, style = AapsType.caption, color = colors.textTertiary)
                 }
-                Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
+                Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
             }
         }
     }

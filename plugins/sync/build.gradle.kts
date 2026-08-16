@@ -53,7 +53,6 @@ dependencies {
     api(libs.net.openid.appauth)
 
     // DataLayerListenerService
-    api(libs.com.google.android.gms.playservices.wearable)
 
     // Garmin
     api(libs.com.garmin.connectiq) { artifact { type = "aar" } }
@@ -69,6 +68,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.foundation)
-    implementation(libs.androidx.compose.material.icons.extended)
 }

@@ -1,5 +1,6 @@
 package app.aaps.plugins.configuration.maintenance.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,11 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.CloudUpload
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,7 +52,7 @@ fun MaintenanceScreen(
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), color = AapsSemantic.inRange.copy(alpha = 0.10f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(Modifier.size(36.dp).clip(CircleShape).background(colors.controlFill), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.CloudUpload, contentDescription = null, tint = AapsSemantic.inRange, modifier = Modifier.size(20.dp))
+                    Icon(AapsIcons.CloudUpload, contentDescription = null, tint = AapsSemantic.inRange, modifier = Modifier.size(20.dp))
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("Back up your settings", style = AapsType.listTitle, color = colors.textPrimary)
@@ -73,11 +69,11 @@ fun MaintenanceScreen(
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
-                ActionRow(Icons.Rounded.Download, "Import settings", "Restore from a backup file", onImport)
+                ActionRow(AapsIcons.Download, "Import settings", "Restore from a backup file", onImport)
                 Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                ActionRow(Icons.Rounded.Description, "Export log files", "Share diagnostics logs", onExportLogs)
+                ActionRow(AapsIcons.Description, "Export log files", "Share diagnostics logs", onExportLogs)
                 Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                ActionRow(Icons.Rounded.ChevronRight, "More options", "Cloud backup, CSV, database tools", onMore)
+                ActionRow(AapsIcons.ChevronRight, "More options", "Cloud backup, CSV, database tools", onMore)
             }
         }
 
@@ -104,6 +100,6 @@ private fun ActionRow(icon: ImageVector, title: String, sub: String, onClick: ()
             Text(title, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
             Text(sub, style = AapsType.caption, color = colors.textTertiary)
         }
-        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.textTertiary)
+        Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary)
     }
 }

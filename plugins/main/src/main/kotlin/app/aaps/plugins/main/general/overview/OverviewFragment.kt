@@ -84,6 +84,7 @@ import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.source.DexcomBoyda
 import app.aaps.core.interfaces.source.XDripSource
 import app.aaps.core.interfaces.ui.UiInteraction
+import app.aaps.core.interfaces.workflow.CalculationWorkflow
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.TrendCalculator
@@ -177,6 +178,7 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var graphDataProvider: Provider<GraphData>
     @Inject lateinit var commandQueue: CommandQueue
+    @Inject lateinit var calculationWorkflow: CalculationWorkflow
 
     private val disposable = CompositeDisposable()
 
@@ -419,6 +421,11 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
             handler.postDelayed(refreshLoop, 60 * 1000L)
         }
         handler.postDelayed(refreshLoop, 60 * 1000L)
+
+        // Graph series are not prepared while the overview is off screen (see
+        // CalculationWorkflowImpl.runCalculation), so rebuild them now rather than showing a stale
+        // or empty chart until the next CGM tick. Presentation only - no IOB/COB, no loop.
+        calculationWorkflow.runGraphsOnly(iobCobCalculator, overviewData)
 
         handler.post { refreshAll() }
         updatePumpStatus()

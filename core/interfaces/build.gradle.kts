@@ -25,6 +25,10 @@ dependencies {
 
     api(libs.androidx.appcompat)
     api(libs.androidx.preference)
+    // DocumentFile appears in public signatures here (Storage, FileListProvider), so it must be
+    // `api`. It used to arrive implicitly as a transitive of the Firebase/GMS stack; removing
+    // Firebase surfaced that it was never declared by the modules that actually use it.
+    api(libs.androidx.documentfile)
 
     api(platform(libs.kotlinx.serialization.bom))
     api(libs.kotlinx.serialization.json)

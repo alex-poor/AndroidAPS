@@ -1,5 +1,6 @@
 package app.aaps.plugins.main.general.actions.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,23 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Autorenew
-import androidx.compose.material.icons.rounded.BatteryChargingFull
-import androidx.compose.material.icons.rounded.Bloodtype
-import androidx.compose.material.icons.rounded.Campaign
-import androidx.compose.material.icons.rounded.ChevronRight
-import androidx.compose.material.icons.rounded.Colorize
-import androidx.compose.material.icons.rounded.DirectionsRun
-import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.GpsFixed
-import androidx.compose.material.icons.rounded.HelpOutline
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Insights
-import androidx.compose.material.icons.rounded.Sensors
-import androidx.compose.material.icons.rounded.SwapHoriz
-import androidx.compose.material.icons.rounded.Timelapse
-import androidx.compose.material.icons.rounded.Timeline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -161,24 +145,24 @@ private fun ToolRow(tool: ToolAction, onAction: (ActionId) -> Unit) {
     ) {
         TintIcon(iconFor(tool.id), tint = colors.accent, background = colors.accentTint, size = 34.dp)
         Text(tool.label, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
+        Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
     }
 }
 
 private fun iconFor(id: ActionId): ImageVector = when (id) {
-    ActionId.TEMP_TARGET                              -> Icons.Rounded.GpsFixed
-    ActionId.TEMP_BASAL, ActionId.TEMP_BASAL_CANCEL   -> Icons.Rounded.Timeline
-    ActionId.EXTENDED_BOLUS, ActionId.EXTENDED_BOLUS_CANCEL -> Icons.Rounded.Timelapse
-    ActionId.PROFILE_SWITCH                           -> Icons.Rounded.SwapHoriz
-    ActionId.FILL                                     -> Icons.Rounded.Colorize
-    ActionId.SENSOR_INSERT                            -> Icons.Rounded.Sensors
-    ActionId.BATTERY_CHANGE                           -> Icons.Rounded.BatteryChargingFull
-    ActionId.BG_CHECK                                 -> Icons.Rounded.Bloodtype
-    ActionId.NOTE                                     -> Icons.Rounded.EditNote
-    ActionId.EXERCISE                                 -> Icons.Rounded.DirectionsRun
-    ActionId.ANNOUNCEMENT                             -> Icons.Rounded.Campaign
-    ActionId.QUESTION                                 -> Icons.Rounded.HelpOutline
-    ActionId.SITE_ROTATION                            -> Icons.Rounded.Autorenew
-    ActionId.HISTORY                                  -> Icons.Rounded.History
-    ActionId.TDD                                      -> Icons.Rounded.Insights
+    ActionId.TEMP_TARGET                              -> AapsIcons.GpsFixed
+    ActionId.TEMP_BASAL, ActionId.TEMP_BASAL_CANCEL   -> AapsIcons.Timeline
+    ActionId.EXTENDED_BOLUS, ActionId.EXTENDED_BOLUS_CANCEL -> AapsIcons.Timelapse
+    ActionId.PROFILE_SWITCH                           -> AapsIcons.SwapHoriz
+    ActionId.FILL                                     -> AapsIcons.Colorize
+    ActionId.SENSOR_INSERT                            -> AapsIcons.Sensors
+    ActionId.BATTERY_CHANGE                           -> AapsIcons.BatteryChargingFull
+    ActionId.BG_CHECK                                 -> AapsIcons.Bloodtype
+    ActionId.NOTE                                     -> AapsIcons.EditNote
+    ActionId.EXERCISE                                 -> AapsIcons.DirectionsRun
+    ActionId.ANNOUNCEMENT                             -> AapsIcons.Campaign
+    ActionId.QUESTION                                 -> AapsIcons.HelpOutline
+    ActionId.SITE_ROTATION                            -> AapsIcons.Autorenew
+    ActionId.HISTORY                                  -> AapsIcons.History
+    ActionId.TDD                                      -> AapsIcons.Insights
 }

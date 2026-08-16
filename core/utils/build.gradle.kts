@@ -21,14 +21,10 @@ dependencies {
 
     api(libs.net.danlew.android.joda)
 
-    //Firebase
-    api(platform(libs.com.google.firebase.bom))
-    api(libs.com.google.firebase.analytics)
-    api(libs.com.google.firebase.crashlytics)
-    // StatsActivity not in use now
-    // api(libs.com.google.firebase.messaging)
-    // api(libs.com.google.firebase.auth)
-    // api(libs.com.google.firebase.database)
+    // Firebase removed: this is a personal single-user loop, so Analytics and Crashlytics only
+    // shipped health telemetry off-device for reports nobody reads. FabricPrivacyImpl now logs
+    // the same information to AndroidAPS.log. Cost recovered: ~4.9 MB of dex (GMS + Firebase +
+    // datatransport), 6 background threads, and two telemetry databases.
 
     //CryptoUtil
     api(libs.com.madgag.spongycastle)

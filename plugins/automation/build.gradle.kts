@@ -37,7 +37,6 @@ dependencies {
     // Places SDK
     api(libs.com.google.android.places)
     api(libs.com.github.rtchagas.pingplacepicker)
-    api(libs.com.google.firebase.config)
 
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)
@@ -49,6 +48,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.foundation)
-    implementation(libs.androidx.compose.material.icons.extended)
 }

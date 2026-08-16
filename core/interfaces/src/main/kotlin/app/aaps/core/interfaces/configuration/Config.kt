@@ -35,9 +35,4 @@ interface Config {
     fun doNotSendSmsOnProfileChange(): Boolean
     fun enableAutotune(): Boolean
     fun enableOmnipodDriftCompensation(): Boolean
-
-    /**
-     * Disable LeakCanary (memory leaks detection). By default it's enabled in DEBUG builds.
-     */
-    fun disableLeakCanary(): Boolean
 }

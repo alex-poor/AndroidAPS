@@ -40,15 +40,6 @@ import app.aaps.plugins.constraints.objectives.objectives.Objective8
 import app.aaps.plugins.constraints.objectives.objectives.Objective9
 import app.aaps.plugins.constraints.safety.SafetyPlugin
 import app.aaps.plugins.source.GlimpPlugin
-import app.aaps.pump.dana.DanaPump
-import app.aaps.pump.dana.database.DanaHistoryDatabase
-import app.aaps.pump.dana.keys.DanaStringKey
-import app.aaps.pump.danar.DanaRPlugin
-import app.aaps.pump.danars.DanaRSPlugin
-import app.aaps.pump.insight.InsightPlugin
-import app.aaps.pump.insight.database.InsightDatabase
-import app.aaps.pump.insight.database.InsightDatabaseDao
-import app.aaps.pump.insight.database.InsightDbHelper
 import app.aaps.pump.virtual.VirtualPumpPlugin
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -70,10 +61,7 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
     @Mock lateinit var profiler: Profiler
     @Mock lateinit var persistenceLayer: PersistenceLayer
     @Mock lateinit var pumpSync: PumpSync
-    @Mock lateinit var insightDatabaseDao: InsightDatabaseDao
     @Mock lateinit var uiInteraction: UiInteraction
-    @Mock lateinit var danaHistoryDatabase: DanaHistoryDatabase
-    @Mock lateinit var insightDatabase: InsightDatabase
     @Mock lateinit var bgQualityCheck: BgQualityCheck
     @Mock lateinit var tddCalculator: TddCalculator
     @Mock lateinit var determineBasalSMB: DetermineBasalSMB
@@ -81,14 +69,9 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
     @Mock lateinit var loop: Loop
     @Mock lateinit var passwordCheck: PasswordCheck
 
-    private lateinit var danaPump: DanaPump
-    private lateinit var insightDbHelper: InsightDbHelper
     private lateinit var constraintChecker: ConstraintsCheckerImpl
     private lateinit var safetyPlugin: SafetyPlugin
     private lateinit var objectivesPlugin: ObjectivesPlugin
-    private lateinit var danaRPlugin: DanaRPlugin
-    private lateinit var danaRSPlugin: DanaRSPlugin
-    private lateinit var insightPlugin: InsightPlugin
     private lateinit var openAPSSMBPlugin: OpenAPSSMBPlugin
     private lateinit var openAPSAMAPlugin: OpenAPSAMAPlugin
 
@@ -120,16 +103,11 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
         whenever(rh.gs(R.string.objectivenotstarted)).thenReturn("Objective %1\$d not started")
 
         // RS constructor
-        whenever(preferences.get(DanaStringKey.RsName)).thenReturn("")
-        whenever(preferences.get(DanaStringKey.MacAddress)).thenReturn("")
         // R
-        whenever(preferences.get(DanaStringKey.RName)).thenReturn("")
 
         //SafetyPlugin
         constraintChecker = ConstraintsCheckerImpl(activePlugin, aapsLogger)
 
-        insightDbHelper = InsightDbHelper(insightDatabaseDao)
-        danaPump = DanaPump(aapsLogger, preferences, dateUtil, decimalFormatter, profileStoreProvider)
         val objectives = listOf(
             Objective0(preferences, rh, dateUtil, activePlugin, virtualPumpPlugin, persistenceLayer, loop, iobCobCalculator, passwordCheck),
             Objective1(preferences, rh, dateUtil, activePlugin),
@@ -144,20 +122,6 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
         )
         objectivesPlugin = ObjectivesPlugin(aapsLogger, rh, preferences, config, objectives)
         objectivesPlugin.onStart()
-        danaRPlugin = DanaRPlugin(
-            aapsLogger, rh, preferences, commandQueue, aapsSchedulers, rxBus, context, constraintChecker, activePlugin, danaPump, dateUtil, fabricPrivacy, pumpSync,
-            uiInteraction, danaHistoryDatabase, decimalFormatter, pumpEnactResultProvider
-        )
-        danaRSPlugin =
-            DanaRSPlugin(
-                aapsLogger, rh, preferences, commandQueue, aapsSchedulers, rxBus, context, constraintChecker, profileFunction,
-                danaPump, pumpSync, detailedBolusInfoStorage, temporaryBasalStorage,
-                fabricPrivacy, dateUtil, uiInteraction, danaHistoryDatabase, decimalFormatter, pumpEnactResultProvider
-            )
-        insightPlugin = InsightPlugin(
-            aapsLogger, rh, preferences, commandQueue, rxBus, profileFunction,
-            context, dateUtil, insightDbHelper, pumpSync, insightDatabase, pumpEnactResultProvider
-        )
         openAPSSMBPlugin =
             OpenAPSSMBPlugin(
                 aapsLogger, rxBus, constraintChecker, rh, profileFunction, profileUtil, config, activePlugin, iobCobCalculator,
@@ -178,9 +142,6 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
         val constraintsPluginsList = ArrayList<PluginBase>()
         constraintsPluginsList.add(safetyPlugin)
         constraintsPluginsList.add(objectivesPlugin)
-        constraintsPluginsList.add(danaRPlugin)
-        constraintsPluginsList.add(danaRSPlugin)
-        constraintsPluginsList.add(insightPlugin)
         constraintsPluginsList.add(openAPSAMAPlugin)
         constraintsPluginsList.add(openAPSSMBPlugin)
         whenever(activePlugin.getSpecificPluginsListByInterface(PluginConstraints::class.java)).thenReturn(constraintsPluginsList)
@@ -255,19 +216,12 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
     // applyBasalConstraints tests
     @Test
     fun basalRateShouldBeLimited() {
-        whenever(activePlugin.activePump).thenReturn(danaRPlugin)
-        // DanaR, RS
-        danaRPlugin.setPluginEnabledBlocking(PluginType.PUMP, true)
-        danaRSPlugin.setPluginEnabledBlocking(PluginType.PUMP, true)
-        danaPump.maxBasal = 0.8
+        // Upstream drove this from the DanaR/DanaRS pump limit (0.8 U/h). Those drivers are not
+        // built any more, so the binding constraint is Safety's age-based hard limit — which is the
+        // one that actually protects this build.
+        whenever(activePlugin.activePump).thenReturn(virtualPumpPlugin)
+        whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
 
-        // Insight
-//        insightPlugin.setPluginEnabledBlocking(PluginType.PUMP, true);
-//        StatusTaskRunner.Result result = new StatusTaskRunner.Result();
-//        result.maximumBasalAmount = 1.1d;
-//        insightPlugin.setStatusResult(result);
-
-        // No limit by default
         whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.0)
         whenever(preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier)).thenReturn(4.0)
         whenever(preferences.get(DoubleKey.ApsMaxDailyMultiplier)).thenReturn(3.0)
@@ -275,26 +229,17 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
 
         // Apply all limits
         val d = constraintChecker.getMaxBasalAllowed(validProfile)
-        assertThat(d.value()).isWithin(0.01).of(0.8)
-        assertThat(d.reasonList).hasSize(3)
-        assertThat(d.getMostLimitedReasons()).isEqualTo("DanaR: Limiting max basal rate to 0.80 U/h because of pump limit")
+        // child hard limit, from HardLimitsMock.MAX_BASAL[CHILD]
+        assertThat(d.value()).isWithin(0.01).of(2.0)
+        assertThat(d.getMostLimitedReasons()).contains("Safety")
+        assertThat(d.getMostLimitedReasons()).contains("hard limit")
     }
 
     @Test
     fun percentBasalRateShouldBeLimited() {
-        whenever(activePlugin.activePump).thenReturn(danaRPlugin)
-        // DanaR, RS
-        danaRPlugin.setPluginEnabledBlocking(PluginType.PUMP, true)
-        danaRSPlugin.setPluginEnabledBlocking(PluginType.PUMP, true)
-        danaPump.maxBasal = 0.8
+        whenever(activePlugin.activePump).thenReturn(virtualPumpPlugin)
+        whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
 
-        // Insight
-//        insightPlugin.setPluginEnabledBlocking(PluginType.PUMP, true);
-//        StatusTaskRunner.Result result = new StatusTaskRunner.Result();
-//        result.maximumBasalAmount = 1.1d;
-//        insightPlugin.setStatusResult(result);
-
-        // No limit by default
         whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.0)
         whenever(preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier)).thenReturn(4.0)
         whenever(preferences.get(DoubleKey.ApsMaxDailyMultiplier)).thenReturn(3.0)
@@ -303,7 +248,6 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
         // Apply all limits
         val i = constraintChecker.getMaxBasalPercentAllowed(validProfile)
         assertThat(i.value()).isEqualTo(200)
-        assertThat(i.reasonList).hasSize(6)
         assertThat(i.getMostLimitedReasons()).isEqualTo("Safety: Limiting max percent rate to 200% because of pump limit")
     }
 
@@ -312,25 +256,14 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
     fun bolusAmountShouldBeLimited() {
         whenever(activePlugin.activePump).thenReturn(virtualPumpPlugin)
         whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
-        // DanaR, RS
-        danaRPlugin.setPluginEnabledBlocking(PluginType.PUMP, true)
-        danaRSPlugin.setPluginEnabledBlocking(PluginType.PUMP, true)
-        danaPump.maxBolus = 6.0
-
-        // Insight
-//        insightPlugin.setPluginEnabledBlocking(PluginType.PUMP, true);
-//        StatusTaskRunner.Result result = new StatusTaskRunner.Result();
-//        result.maximumBolusAmount = 7d;
-//        insightPlugin.setStatusResult(result);
-
-        // No limit by default
+        // The preference limit (3.0 U) still wins over the child hard limit (5.0 U); only the
+        // now-absent Dana reasons drop out of the list.
         whenever(preferences.get(DoubleKey.SafetyMaxBolus)).thenReturn(3.0)
         whenever(preferences.get(StringKey.SafetyAge)).thenReturn("child")
 
         // Apply all limits
         val d = constraintChecker.getMaxBolusAllowed()
         assertThat(d.value()).isWithin(0.01).of(3.0)
-        assertThat(d.reasonList).hasSize(4) // 2x Safety & RS & R
         assertThat(d.getMostLimitedReasons()).isEqualTo("Safety: Limiting bolus to 3.0 U because of max value in preferences")
     }
 

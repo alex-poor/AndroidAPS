@@ -27,12 +27,8 @@ dependencies {
     implementation(project(":core:validators"))
 
     testImplementation(project(":implementation"))
-    testImplementation(project(":pump:insight"))
     testImplementation(project(":plugins:aps"))
     testImplementation(project(":plugins:source"))
-    testImplementation(project(":pump:dana"))
-    testImplementation(project(":pump:danar"))
-    testImplementation(project(":pump:danars"))
     testImplementation(project(":pump:virtual"))
     testImplementation(project(":shared:impl"))
     testImplementation(project(":shared:tests"))
@@ -52,6 +48,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     debugImplementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.foundation)
-    implementation(libs.androidx.compose.material.icons.extended)
 }

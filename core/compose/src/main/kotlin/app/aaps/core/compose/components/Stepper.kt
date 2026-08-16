@@ -1,5 +1,6 @@
 package app.aaps.core.compose.components
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,7 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,7 +56,7 @@ private fun StepBtn(minus: Boolean, onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            if (minus) Icons.Rounded.Remove else Icons.Rounded.Add,
+            if (minus) AapsIcons.Remove else Icons.Rounded.Add,
             contentDescription = if (minus) "decrease" else "increase",
             tint = if (minus) colors.textPrimary else colors.accentOnLight,
             modifier = Modifier.size(24.dp)

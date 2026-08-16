@@ -6,8 +6,6 @@ plugins {
     alias(libs.plugins.ksp)
     id("com.android.application")
     id("kotlin-android")
-    id("com.google.gms.google-services")
-    id("com.google.firebase.crashlytics")
     id("android-app-dependencies")
     id("test-app-dependencies")
     id("jacoco-app-dependencies")
@@ -97,6 +95,17 @@ android {
 
         // For Dagger injected instrumentation tests in app module
         testInstrumentationRunner = "app.aaps.runners.InjectedTestRunner"
+
+        // This is a single-device personal build. Upstream ships ~150 locale configurations and
+        // native libraries for 7 ABIs; a Pixel 7 uses one of each. Everything else is dead weight
+        // in resources.arsc and lib/.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    androidResources {
+        localeFilters += "en"
     }
 
     flavorDimensions.add("standard")
@@ -180,22 +189,13 @@ dependencies {
     implementation(project(":implementation"))
     implementation(project(":database:impl"))
     implementation(project(":database:persistence"))
-    implementation(project(":pump:combov2"))
-    implementation(project(":pump:dana"))
-    implementation(project(":pump:danars"))
-    implementation(project(":pump:danar"))
-    implementation(project(":pump:diaconn"))
-    implementation(project(":pump:eopatch"))
+    // Pump drivers. This build talks to one pump; Medtrum is kept on request as a fallback.
+    // The other 12 drivers (Combo, Dana ×4, Diaconn, EOPatch, Equil, Insight, Medtronic,
+    // Omnipod ×3 and the RileyLink radio they need) cost 4.4 MB of dex and 6.2 MB of artwork —
+    // equil_ic_pump2.png alone was the single largest file in the APK at 3.7 MB.
     implementation(project(":pump:medtrum"))
-    implementation(project(":pump:equil"))
     implementation(project(":pump:ypsopump"))
-    implementation(project(":pump:insight"))
-    implementation(project(":pump:medtronic"))
     implementation(project(":pump:common"))
-    implementation(project(":pump:omnipod:common"))
-    implementation(project(":pump:omnipod:eros"))
-    implementation(project(":pump:omnipod:dash"))
-    implementation(project(":pump:rileylink"))
     implementation(project(":pump:virtual"))
     implementation(project(":workflow"))
 
@@ -204,8 +204,11 @@ dependencies {
     androidTestImplementation(libs.androidx.test.rules)
     androidTestImplementation(libs.org.skyscreamer.jsonassert)
 
-    debugImplementation(libs.com.squareup.leakcanary.android)
-
+    // LeakCanary deliberately NOT included. This app is installed from a debug build onto a device
+    // that delivers insulin, so a debugImplementation dependency runs in production: it had taken
+    // 322 full heap dumps of a ~100 MB heap, each one a multi-second stop-the-world pause, plus
+    // 376 s of CPU and a 2.7 MB leaks.db. Re-add it temporarily when hunting a leak, never in a
+    // build you install on the pump.
 
     kspAndroidTest(libs.com.google.dagger.android.processor)
 
@@ -217,8 +220,6 @@ dependencies {
 
     // MainApp
     api(libs.com.uber.rxdogtag2.rxdogtag)
-    // Remote config
-    api(libs.com.google.firebase.config)
 }
 
 println("-------------------")

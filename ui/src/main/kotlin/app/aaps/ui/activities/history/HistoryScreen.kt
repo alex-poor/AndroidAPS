@@ -1,5 +1,6 @@
 package app.aaps.ui.activities.history
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,9 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.EventNote
-import androidx.compose.material.icons.rounded.Restaurant
-import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -113,9 +111,9 @@ private fun HistoryRow(item: HistoryItem) {
 }
 
 private fun iconFor(kind: HistoryKind): ImageVector = when (kind) {
-    HistoryKind.BOLUS, HistoryKind.SMB -> Icons.Rounded.WaterDrop
-    HistoryKind.CARBS                  -> Icons.Rounded.Restaurant
-    HistoryKind.EVENT                  -> Icons.Rounded.EventNote
+    HistoryKind.BOLUS, HistoryKind.SMB -> AapsIcons.WaterDrop
+    HistoryKind.CARBS                  -> AapsIcons.Restaurant
+    HistoryKind.EVENT                  -> AapsIcons.EventNote
 }
 
 private fun tintFor(kind: HistoryKind): Color = when (kind) {

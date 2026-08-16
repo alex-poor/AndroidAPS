@@ -1,5 +1,6 @@
 package app.aaps.plugins.sync.nsShared.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,7 +62,7 @@ fun ConnectivityScreen(state: ConnectivityUiState, onCard: (id: String) -> Unit)
                         Text(c.name, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(c.sub, style = AapsType.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
-                    if (c.tappable) Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.textTertiary)
+                    if (c.tappable) Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary)
                 }
             }
         }

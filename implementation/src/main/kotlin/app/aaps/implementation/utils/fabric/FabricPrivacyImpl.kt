@@ -1,16 +1,10 @@
 package app.aaps.implementation.utils.fabric
 
-import android.content.SharedPreferences
 import android.os.Bundle
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
-import app.aaps.core.keys.BooleanKey
-import com.google.firebase.analytics.FirebaseAnalytics
-import com.google.firebase.analytics.analytics
-import com.google.firebase.crashlytics.FirebaseCrashlytics
-import com.google.firebase.Firebase
 import dagger.Reusable
 import java.io.ByteArrayInputStream
 import java.io.IOException
@@ -18,101 +12,57 @@ import java.io.ObjectInputStream
 import javax.inject.Inject
 
 /**
- * Some users do not wish to be tracked, Fabric Answers and Crashlytics do not provide an easy way
- * to disable them and make calls from a potentially invalid singleton reference. This wrapper
- * emulates the methods but ignores the request if the instance is null or invalid.
+ * Local-only implementation of [FabricPrivacy]: everything is written to the AAPS log, nothing
+ * leaves the device.
+ *
+ * Upstream routes these calls to Firebase Analytics and Crashlytics. On a personal single-user
+ * loop that is pure cost — it shipped health telemetry to Google for a crash report nobody reads,
+ * cost ~4.9 MB of dex (GMS + Firebase + transport), ran four Firebase background threads, and kept
+ * two telemetry databases (`google_app_measurement_local.db`,
+ * `com.google.android.datatransport.events`) in the app's data directory.
+ *
+ * The interface is kept intact so the ~40 call sites are unchanged, and the information they report
+ * is not lost — it goes to AndroidAPS.log, which is on the device, survives longer than logcat's
+ * ~30 minutes, and is the log actually consulted when something goes wrong.
  */
 @Reusable
 class FabricPrivacyImpl @Inject constructor(
-    private val aapsLogger: AAPSLogger,
-    private val sharedPreferences: SharedPreferences // Injecting Preferences is causing circular dependencies
+    private val aapsLogger: AAPSLogger
 ) : FabricPrivacy {
 
-    private val firebaseAnalytics: FirebaseAnalytics = Firebase.analytics
-
-    init {
-        firebaseAnalytics.setAnalyticsCollectionEnabled(!java.lang.Boolean.getBoolean("disableFirebase") && fabricEnabled())
-        FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = !java.lang.Boolean.getBoolean("disableFirebase") && fabricEnabled()
-    }
-
     override fun setUserProperty(key: String, value: String) {
-        firebaseAnalytics.setUserProperty(key, value)
+        aapsLogger.debug(LTag.CORE, "Property $key = $value")
     }
 
-    // Analytics logCustom
-    @Suppress("unused")
     override fun logCustom(name: String, event: Bundle) {
-        try {
-            if (fabricEnabled()) {
-                firebaseAnalytics.logEvent(name, event)
-            } else {
-                aapsLogger.debug(LTag.CORE, "Ignoring recently opted-out event: $event")
-            }
-        } catch (e: NullPointerException) {
-            aapsLogger.debug(LTag.CORE, "Ignoring opted-out non-initialized event: $event")
-        } catch (e: IllegalStateException) {
-            aapsLogger.debug(LTag.CORE, "Ignoring opted-out non-initialized event: $event")
-        }
+        aapsLogger.debug(LTag.CORE, "Event $name: $event")
     }
 
-    // Analytics logCustom
-    @Suppress("unused")
-    fun logCustom(event: Bundle) {
-        try {
-            if (fabricEnabled()) {
-                firebaseAnalytics.logEvent(FirebaseAnalytics.Event.SELECT_ITEM, event)
-            } else {
-                aapsLogger.debug(LTag.CORE, "Ignoring recently opted-out event: $event")
-            }
-        } catch (e: NullPointerException) {
-            aapsLogger.debug(LTag.CORE, "Ignoring opted-out non-initialized event: $event")
-        } catch (e: IllegalStateException) {
-            aapsLogger.debug(LTag.CORE, "Ignoring opted-out non-initialized event: $event")
-        }
-    }
-
-    // Analytics logCustom
     override fun logCustom(event: String) {
-        try {
-            if (fabricEnabled()) {
-                firebaseAnalytics.logEvent(event, Bundle())
-            } else {
-                aapsLogger.debug(LTag.CORE, "Ignoring recently opted-out event: $event")
-            }
-        } catch (_: NullPointerException) {
-            aapsLogger.debug(LTag.CORE, "Ignoring opted-out non-initialized event: $event")
-        } catch (_: IllegalStateException) {
-            aapsLogger.debug(LTag.CORE, "Ignoring opted-out non-initialized event: $event")
-        }
+        aapsLogger.debug(LTag.CORE, "Event $event")
     }
 
-    // Crashlytics log message
     override fun logMessage(message: String) {
-        aapsLogger.info(LTag.CORE, "Crashlytics log message: $message")
-        FirebaseCrashlytics.getInstance().log(message)
+        aapsLogger.info(LTag.CORE, message)
     }
 
-    // Crashlytics logException
     override fun logException(throwable: Throwable) {
-        aapsLogger.error("Crashlytics log exception: ", throwable)
-        FirebaseCrashlytics.getInstance().recordException(throwable)
+        aapsLogger.error("Exception: ", throwable)
     }
 
-    override fun fabricEnabled(): Boolean {
-        return sharedPreferences.getBoolean(BooleanKey.MaintenanceEnableFabric.key, true)
-    }
+    /**
+     * Analytics is never collected, so this is always false. Call sites use it to decide whether to
+     * report; they now skip that work entirely.
+     */
+    override fun fabricEnabled(): Boolean = false
 
     override fun logWearException(wearException: EventData.WearException) {
-        aapsLogger.debug(LTag.WEAR, "logWearException")
-        FirebaseCrashlytics.getInstance().apply {
-            setCustomKey("wear_exception", true)
-            setCustomKey("wear_board", wearException.board)
-            setCustomKey("wear_fingerprint", wearException.fingerprint)
-            setCustomKey("wear_sdk", wearException.sdk)
-            setCustomKey("wear_model", wearException.model)
-            setCustomKey("wear_manufacturer", wearException.manufacturer)
-            setCustomKey("wear_product", wearException.product)
-        }
+        aapsLogger.debug(
+            LTag.WEAR,
+            "Wear exception on ${wearException.manufacturer} ${wearException.model} " +
+                "(board=${wearException.board}, sdk=${wearException.sdk}, product=${wearException.product}, " +
+                "fingerprint=${wearException.fingerprint})"
+        )
         logException(byteArrayToThrowable(wearException.exception))
     }
 
@@ -122,9 +72,9 @@ class FabricPrivacyImpl @Inject constructor(
             val ois = ObjectInputStream(bis)
             return ois.readObject() as Throwable
         } catch (e: IOException) {
-            e.printStackTrace()
+            aapsLogger.error("Wear exception could not be de-serialized", e)
         } catch (e: ClassNotFoundException) {
-            e.printStackTrace()
+            aapsLogger.error("Wear exception could not be de-serialized", e)
         }
         return IllegalArgumentException("Wear Exception could not be de-serialized")
     }

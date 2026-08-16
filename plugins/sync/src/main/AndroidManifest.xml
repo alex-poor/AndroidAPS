@@ -3,13 +3,6 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="app.aaps.weardata.permission" />
-
-    <permission
-        android:name="app.aaps.weardata.permission"
-        android:label="AAPS WEAR DATA"
-        android:protectionLevel="signature" />
-
     <application>
 
         <service
@@ -38,17 +31,6 @@
                     android:scheme="androidaps" />
             </intent-filter>
         </activity>
-
-        <receiver
-            android:name="app.aaps.plugins.sync.wear.receivers.WearDataReceiver"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="app.aaps.weardata.permission">
-            <intent-filter>
-                <!-- Receiver from aapsclient -->
-                <action android:name="app.aaps.aapsclient.weardata" />
-            </intent-filter>
-        </receiver>
 
         <activity
             android:name="net.openid.appauth.RedirectUriReceiverActivity"

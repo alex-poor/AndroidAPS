@@ -142,6 +142,12 @@ class NSClientV3Plugin @Inject constructor(
     companion object {
 
         const val RECORDS_TO_LOAD = 500
+
+        /** First retry delay after an upload failure; doubles per consecutive failure. */
+        const val UPLOAD_BACKOFF_BASE_MS = 30_000L
+
+        /** Ceiling for the doubling above. */
+        const val UPLOAD_BACKOFF_MAX_MS = 30 * 60 * 1000L
     }
 
     private val disposable = CompositeDisposable()
@@ -164,6 +170,41 @@ class NSClientV3Plugin @Inject constructor(
                 else                                                                                  -> rh.gs(app.aaps.core.ui.R.string.unknown)
             }
     var lastOperationError: String? = null
+
+    // ---- upload backoff -------------------------------------------------------------------
+    // This Nightscout lives behind a Tailscale mesh, so whenever the mesh is down every upload
+    // fails with UnknownHostException. Upstream retried on every triggering event and logged a
+    // full stack per failed record: 416 failures in a three-hour window, 55% of every line AAPS
+    // wrote, and a device-status queue that never drained because it restarted from the same
+    // record each time. Back off instead, and log the stack once per distinct failure.
+    private var uploadFailures = 0
+    private var retryNotBefore = 0L
+    private var lastFailureKind: String? = null
+
+    private fun uploadBackoffActive(): Boolean = dateUtil.now() < retryNotBefore
+
+    private fun noteUploadFailure(e: Exception) {
+        uploadFailures++
+        // 30 s doubling to a 30 min ceiling
+        val delay = (UPLOAD_BACKOFF_BASE_MS shl (uploadFailures - 1).coerceAtMost(6)).coerceAtMost(UPLOAD_BACKOFF_MAX_MS)
+        retryNotBefore = dateUtil.now() + delay
+        val kind = e.javaClass.simpleName + ": " + (e.message ?: "")
+        if (kind != lastFailureKind) {
+            lastFailureKind = kind
+            aapsLogger.error(LTag.NSCLIENT, "Upload exception, backing off ${delay / 1000}s", e)
+        } else {
+            aapsLogger.debug(LTag.NSCLIENT, "Upload still failing ($kind); attempt $uploadFailures, retry in ${delay / 1000}s")
+        }
+    }
+
+    private fun noteUploadSuccess() {
+        if (uploadFailures > 0) {
+            aapsLogger.debug(LTag.NSCLIENT, "Nightscout reachable again after $uploadFailures failed attempts")
+            uploadFailures = 0
+            retryNotBefore = 0L
+            lastFailureKind = null
+        }
+    }
 
     internal var nsAndroidClient: NSAndroidClient? = null
     internal var nsClientV3Service: NSClientV3Service? = null
@@ -471,11 +512,12 @@ class NSClientV3Plugin @Inject constructor(
                         return config.ignoreNightscoutV3Errors()
                     }
                 }
+                noteUploadSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            aapsLogger.error(LTag.NSCLIENT, "Upload exception", e)
+            noteUploadFailure(e)
             return false
         }
         return false
@@ -501,11 +543,12 @@ class NSClientV3Plugin @Inject constructor(
                     storeDataForDb.addToNsIdDeviceStatuses(dataPair.value)
                     preferences.put(BooleanNonKey.ObjectivesPumpStatusIsAvailableInNS, true)
                 }
+                noteUploadSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            aapsLogger.error(LTag.NSCLIENT, "Upload exception", e)
+            noteUploadFailure(e)
             return false
         }
         return false
@@ -547,11 +590,12 @@ class NSClientV3Plugin @Inject constructor(
                     dataPair.value.ids.nightscoutId = it
                     storeDataForDb.addToNsIdGlucoseValues(dataPair.value)
                 }
+                noteUploadSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            aapsLogger.error(LTag.NSCLIENT, "Upload exception", e)
+            noteUploadFailure(e)
             return false
         }
         return false
@@ -593,11 +637,12 @@ class NSClientV3Plugin @Inject constructor(
                     dataPair.value.ids.nightscoutId = it
                     storeDataForDb.addToNsIdFoods(dataPair.value)
                 }
+                noteUploadSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            aapsLogger.error(LTag.NSCLIENT, "Upload exception", e)
+            noteUploadFailure(e)
             return false
         }
         return false
@@ -713,12 +758,13 @@ class NSClientV3Plugin @Inject constructor(
                             }
                         }
                     }
-                    slowDown()
+                    noteUploadSuccess()
+                slowDown()
                     return true
                 }
             } catch (e: Exception) {
                 rxBus.send(EventNSClientNewLog("◄ ERROR", e.localizedMessage))
-                aapsLogger.error(LTag.NSCLIENT, "Upload exception", e)
+                noteUploadFailure(e)
                 return false
             }
         }
@@ -794,6 +840,11 @@ class NSClientV3Plugin @Inject constructor(
         }
         if (!isAllowed) {
             rxBus.send(EventNSClientNewLog("● RUN", blockingReason))
+            return
+        }
+        if (uploadBackoffActive() && !forceNew) {
+            val waitS = (retryNotBefore - dateUtil.now()) / 1000
+            rxBus.send(EventNSClientNewLog("● RUN", "backing off, retry in ${waitS}s"))
             return
         }
         if (workIsRunning()) {

@@ -39,6 +39,12 @@ class AppRepository @Inject internal constructor(
     internal val database: AppDatabase
 ) {
 
+    companion object {
+
+        /** Retention for the write-only DeviceStatus snapshots. See cleanupDatabase. */
+        const val DEVICE_STATUS_KEEP_DAYS = 7L
+    }
+
     private val changeSubject = PublishSubject.create<List<DBEntry>>()
 
     fun changeObservable(): Observable<List<DBEntry>> = changeSubject.subscribeOn(Schedulers.io())
@@ -81,6 +87,14 @@ class AppRepository @Inject internal constructor(
 
     fun cleanupDatabase(keepDays: Long, deleteTrackedChanges: Boolean): String {
         val than = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(keepDays)
+        // DeviceStatus is kept on a much shorter leash than everything else. Nothing in AAPS ever
+        // reads it back - each row is a large JSON snapshot that exists only to be uploaded to
+        // Nightscout - but it is written every loop cycle, so at the normal retention it had grown
+        // to 17.5 MB, 53% of the entire database payload and more than glucose, boluses, carbs,
+        // basals and treatments combined. A week is far longer than any upload backlog worth
+        // retrying.
+        val deviceStatusThan = System.currentTimeMillis() -
+            TimeUnit.DAYS.toMillis(keepDays.coerceAtMost(DEVICE_STATUS_KEEP_DAYS))
         val removed = mutableListOf<Pair<String, Int>>()
         removed.add(Pair("APSResult", database.apsResultDao.deleteOlderThan(than)))
         removed.add(Pair("GlucoseValue", database.glucoseValueDao.deleteOlderThan(than)))
@@ -101,7 +115,7 @@ class AppRepository @Inject internal constructor(
         removed.add(Pair("UserEntry", database.userEntryDao.deleteOlderThan(than)))
         removed.add(Pair("PreferenceChange", database.preferenceChangeDao.deleteOlderThan(than)))
         // keep foods database.foodDao.deleteOlderThan(than)
-        removed.add(Pair("DeviceStatus", database.deviceStatusDao.deleteOlderThan(than)))
+        removed.add(Pair("DeviceStatus", database.deviceStatusDao.deleteOlderThan(deviceStatusThan)))
         removed.add(Pair("RunningMode", database.runningModeDao.deleteOlderThan(than)))
         removed.add(Pair("HeartRate", database.heartRateDao.deleteOlderThan(than)))
         removed.add(Pair("StepsCount", database.stepsCountDao.deleteOlderThan(than)))

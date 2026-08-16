@@ -1,5 +1,6 @@
 package app.aaps.ui.dialogs.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
@@ -19,8 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Remove
-import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -141,7 +140,7 @@ private fun InputStep(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("CARBS", style = AapsType.label, color = colors.textSecondary)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        StepperButton(Icons.Rounded.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                        StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
                             onInputs(inputs.copy(carbs = (inputs.carbs - 5).coerceAtLeast(0)))
                         }
                         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -179,7 +178,7 @@ private fun InputStep(
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("PRE-BOLUS", style = AapsType.label, color = colors.textSecondary)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            StepperButton(Icons.Rounded.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                            StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
                                 onInputs(inputs.copy(carbTime = (inputs.carbTime - 5).coerceAtLeast(-60)))
                             }
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -227,7 +226,7 @@ private fun InputStep(
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("CARB ABSORPTION", style = AapsType.label, color = colors.textSecondary)
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            StepperButton(Icons.Rounded.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                            StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
                                 onInputs(inputs.copy(carbDurationHours = (inputs.carbDurationHours - 1).coerceAtLeast(0)))
                             }
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -329,7 +328,7 @@ private fun ConfirmStep(
         Box(
             Modifier.size(64.dp).clip(CircleShape).background(colors.accentTint),
             contentAlignment = Alignment.Center
-        ) { Icon(Icons.Rounded.WaterDrop, contentDescription = null, tint = colors.accent, modifier = Modifier.size(30.dp)) }
+        ) { Icon(AapsIcons.WaterDrop, contentDescription = null, tint = colors.accent, modifier = Modifier.size(30.dp)) }
         Text(result.totalText, style = AapsType.hero, color = colors.textPrimary)
         Text("insulin to deliver", style = AapsType.caption, color = colors.textTertiary)
 

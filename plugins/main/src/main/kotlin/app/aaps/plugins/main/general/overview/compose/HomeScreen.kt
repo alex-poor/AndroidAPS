@@ -1,5 +1,6 @@
 package app.aaps.plugins.main.general.overview.compose
 
+import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,9 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.Restaurant
-import androidx.compose.material.icons.rounded.Vaccines
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -258,7 +256,7 @@ private fun DetailsHandle(onClick: () -> Unit) {
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(Icons.Rounded.ExpandLess, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.padding(end = 6.dp))
+        Icon(AapsIcons.ExpandLess, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.padding(end = 6.dp))
         Text("Details — status, sensitivity & graphs", style = AapsType.caption, color = colors.textTertiary)
     }
 }
@@ -377,9 +375,9 @@ private fun ActionBar(actions: HomeActions) {
     ) {
         // Two primary actions for a closed loop: announce Carbs, or bolus (the wizard-calculated dose).
         // A raw manual bolus (type-the-units, no calc) is the rare case — it lives in the "+" menu.
-        ActionBarButton("Carbs", Icons.Rounded.Restaurant, actions.onCarbs, Modifier.weight(1f))
+        ActionBarButton("Carbs", AapsIcons.Restaurant, actions.onCarbs, Modifier.weight(1f))
         ActionBarButton(
-            "Bolus", Icons.Rounded.Vaccines, actions.onWizard, Modifier.weight(1.4f),
+            "Bolus", AapsIcons.Vaccines, actions.onWizard, Modifier.weight(1.4f),
             container = colors.inRange, content = colors.onAccent
         )
         MoreMenu(actions)
