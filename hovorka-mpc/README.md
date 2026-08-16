@@ -10,6 +10,19 @@ The controller is a clean-room Hovorka nonlinear-MPC reimplemented from the publ
 model + our CamAPS FX reverse-engineering — NOT a binary port. See the design + decoded evidence in
 `report/algorithm-spec.md` and `report/hovorka-plugin-plan.md` (outside this repo).
 
+## What this harness cannot see
+
+Read in-silico results with this in mind. The harness runs the *algorithm* files only; the plugin's
+safety layers live in `HovorkaMpcPlugin` and are **not modelled here** — SITE-GUARD, the IOB-divergence
+detector and the hypo suspend all depend on AAPS state (therapy events, persisted records) this harness
+has no concept of.
+
+More importantly, the virtual cohort cannot express some of the effects that turned out to matter most.
+Its insulin time-to-peak is 40–70 min; a day-one infusion site is nearer 110 min, so **no A/B run here
+could have surfaced the site-change effect** that is the largest single signal in the real data. Several
+changes that passed this cohort were later rejected when fitted against recorded logs. A pass here is a
+necessary check before hardware, not evidence that something helps.
+
 ## Run
 
 ```bash

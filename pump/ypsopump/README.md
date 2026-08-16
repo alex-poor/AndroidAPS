@@ -43,21 +43,32 @@ vicktor's SDK and SandraK82's driver is very welcome.
 
 - **Read** — connect over the OS BLE bond → `MD5(mac+salt)` auth → XChaCha20-Poly1305 → multi-frame read +
   decrypt of system status, reservoir, battery, event history.
-- **Bolus** — a 0.1 U immediate bolus was delivered and confirmed on the pump.
-- **TBR** — percent temp basals set and confirmed (duration must be in **15-minute steps**).
-- **Loop** — an open-loop enact (`setTempBasalPercent`) validated end-to-end: Dexcom G6 → xDrip+ → AAPS →
-  OpenAPS SMB → this driver → pump (an 80 % / 15 min TBR was accepted by the pump).
+- **Bolus** — delivered and **confirmed by reading back pump status** rather than trusting the write
+  acknowledgement, with a working cancel. Under-recording was fixed by decoding pump status properly and
+  reconciling against pump history; a separate bug had AAPS discarding correctly-delivered boluses because
+  of a one-minute record-freshness gate, which silently under-counted IOB.
+- **TBR** — percent temp basals set and confirmed (duration must be in **15-minute steps**). A pump-side
+  suspend is reflected back into AAPS as a 0-rate `PUMP_SUSPEND` TBR, so the loop knows delivery stopped.
+- **Closed loop** — running continuously since 2026-07-02: Dexcom G6 → xDrip+ → AAPS → HovorkaMPC → this
+  driver → pump, enacting real temp basals unattended.
 - **Write counter** — AAPS **owns and persists** the pump's write counter, so it stays in sync across
-  reconnects once the genuine app is off (sole controller).
+  reconnects once the genuine app is off (sole controller). It self-heals from a dropped write-ack
+  (`0x8B` counter-behind) by scanning forward with benign canaries — **TBR only**; a bolus fails closed
+  rather than risk a double dose.
+- **Session key at runtime** — the key, pump MAC and reboot counter are read from device preferences at
+  startup, never compiled in and never committed. A rebuilt APK installed over the top keeps working
+  without re-seeding.
+- **Connection watchdog** — unwedges stalled BLE operations, which was the cause of recurring
+  "pump unreachable" alarms.
 
 ### Not done / caveats
-- Bolus/SMB has only been exercised manually, not yet driven by the loop over time.
-- Closed loop not attempted (open loop only so far).
 - TBR *cancel* uses a 100 % TBR (no dedicated stop command reverse-engineered yet).
 - The basal **profile is programmed on the pump**, not written by the driver — your AAPS profile basal
-  **must match** the pump's, because TBRs are percentage-relative.
-- The captured key is currently a build-time constant (empty in source); a runtime key-load from prefs is a
-  TODO. A pump battery change bumps the reboot counter and requires re-seeding.
+  **must match** the pump's, because TBRs are percentage-relative. Change one and you must hand-mirror the
+  other, or every TBR under-delivers and IOB is overcounted, silently.
+- The pump enforces a **28-day session-key expiry** (see below), after which every encrypted read fails
+  while the connection still looks healthy.
+- A pump battery change bumps the reboot counter.
 
 ---
 
@@ -73,6 +84,12 @@ On-hardware validation and specifics needed to actually *write* to the pump:
 - A working **AndroidAPS `Pump` plugin** wiring `setTempBasal*` / `deliverTreatment` into the loop via
   `pumpSync`, with a canary-gated safe write path (aborts before touching the therapy characteristic if the
   counter is wrong).
+- **Failure-mode recovery** for what the pump actually does in service: `0x86` means a TBR is already
+  running and must be stopped before a new one is accepted; `0x8B` means the write counter is behind,
+  which a dropped ATT write-response causes because the pump advances its counter on accept even when the
+  response is lost; `0x8C` means the 28-day key has expired.
+- **The key lifetime itself** — that the pump enforces a 28-day expiry at all was not previously
+  documented, and it presents as healthy GATT with every read failing.
 
 See `pump/ypsopump/` for the code; the protocol write-up lives in SandraK82's research repo.
 
