@@ -26,12 +26,13 @@ class LoadLastModificationWorker(
             nsClientV3Plugin.newestDataOnServer = lm
             aapsLogger.debug(LTag.NSCLIENT, "LAST MODIFIED: ${nsClientV3Plugin.newestDataOnServer}")
         } catch (error: Exception) {
-            aapsLogger.error(LTag.NSCLIENT, "Error: ", error)
+            nsClientV3Plugin.noteSyncFailure(error)
             rxBus.send(EventNSClientNewLog("◄ ERROR", error.localizedMessage))
             nsClientV3Plugin.lastOperationError = error.localizedMessage
             return Result.failure(workDataOf("Error" to error.localizedMessage))
         }
         nsClientV3Plugin.lastOperationError = null
+        nsClientV3Plugin.noteSyncSuccess()
         return Result.success()
     }
 }

@@ -64,7 +64,7 @@ class LoadProfileStoreWorker(
                 rxBus.send(EventNSClientNewLog("◄ RCV PROFILE END", "No data from ${dateUtil.dateAndTimeAndSecondsString(lastLoaded)}"))
             }
         } catch (error: Exception) {
-            aapsLogger.error("Error: ", error)
+            nsClientV3Plugin.noteSyncFailure(error)
             rxBus.send(EventNSClientNewLog("◄ ERROR", error.localizedMessage))
             return Result.failure(workDataOf("Error" to error.localizedMessage))
         }

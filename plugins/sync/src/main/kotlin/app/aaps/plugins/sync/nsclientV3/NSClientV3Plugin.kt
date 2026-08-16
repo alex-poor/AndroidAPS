@@ -183,7 +183,12 @@ class NSClientV3Plugin @Inject constructor(
 
     private fun uploadBackoffActive(): Boolean = dateUtil.now() < retryNotBefore
 
-    private fun noteUploadFailure(e: Exception) {
+    /**
+     * Record a failed Nightscout operation: apply backoff and log the stack only when the failure
+     * is different from the last one. Used by both the upload path here and the Load* download
+     * workers, which otherwise each logged a full stack per attempt.
+     */
+    fun noteSyncFailure(e: Exception) {
         uploadFailures++
         // 30 s doubling to a 30 min ceiling
         val delay = (UPLOAD_BACKOFF_BASE_MS shl (uploadFailures - 1).coerceAtMost(6)).coerceAtMost(UPLOAD_BACKOFF_MAX_MS)
@@ -197,7 +202,7 @@ class NSClientV3Plugin @Inject constructor(
         }
     }
 
-    private fun noteUploadSuccess() {
+    fun noteSyncSuccess() {
         if (uploadFailures > 0) {
             aapsLogger.debug(LTag.NSCLIENT, "Nightscout reachable again after $uploadFailures failed attempts")
             uploadFailures = 0
@@ -512,12 +517,12 @@ class NSClientV3Plugin @Inject constructor(
                         return config.ignoreNightscoutV3Errors()
                     }
                 }
-                noteUploadSuccess()
+                noteSyncSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            noteUploadFailure(e)
+            noteSyncFailure(e)
             return false
         }
         return false
@@ -543,12 +548,12 @@ class NSClientV3Plugin @Inject constructor(
                     storeDataForDb.addToNsIdDeviceStatuses(dataPair.value)
                     preferences.put(BooleanNonKey.ObjectivesPumpStatusIsAvailableInNS, true)
                 }
-                noteUploadSuccess()
+                noteSyncSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            noteUploadFailure(e)
+            noteSyncFailure(e)
             return false
         }
         return false
@@ -590,12 +595,12 @@ class NSClientV3Plugin @Inject constructor(
                     dataPair.value.ids.nightscoutId = it
                     storeDataForDb.addToNsIdGlucoseValues(dataPair.value)
                 }
-                noteUploadSuccess()
+                noteSyncSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            noteUploadFailure(e)
+            noteSyncFailure(e)
             return false
         }
         return false
@@ -637,12 +642,12 @@ class NSClientV3Plugin @Inject constructor(
                     dataPair.value.ids.nightscoutId = it
                     storeDataForDb.addToNsIdFoods(dataPair.value)
                 }
-                noteUploadSuccess()
+                noteSyncSuccess()
                 slowDown()
                 return true
             }
         } catch (e: Exception) {
-            noteUploadFailure(e)
+            noteSyncFailure(e)
             return false
         }
         return false
@@ -758,13 +763,13 @@ class NSClientV3Plugin @Inject constructor(
                             }
                         }
                     }
-                    noteUploadSuccess()
+                    noteSyncSuccess()
                 slowDown()
                     return true
                 }
             } catch (e: Exception) {
                 rxBus.send(EventNSClientNewLog("◄ ERROR", e.localizedMessage))
-                noteUploadFailure(e)
+                noteSyncFailure(e)
                 return false
             }
         }
