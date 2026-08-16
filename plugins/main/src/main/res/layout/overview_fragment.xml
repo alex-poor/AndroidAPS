@@ -11,10 +11,18 @@
     android:layout_height="match_parent"
     tools:context=".general.overview.OverviewFragment">
 
+    <!--
+      ~ Legacy overview. Permanently covered by the opaque compose_home overlay below, so it is
+      ~ GONE at inflate time and its update functions are no longer called (see OverviewFragment).
+      ~ Kept rather than deleted because the 4 skin classes and OverviewMenus still bind against
+      ~ these ids; removing the XML is a separate change.
+      -->
     <LinearLayout
+        android:id="@+id/legacy_overview"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:visibility="gone">
 
     <androidx.core.widget.NestedScrollView
         android:id="@+id/top_part_scrollbar"

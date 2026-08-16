@@ -201,6 +201,19 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
     private var homeGraph: GraphView? = null
 
+    /**
+     * The legacy overview layout is inflated but `android:visibility="gone"` and covered by the
+     * opaque Compose home, so nothing in it is ever seen. With this set, its update functions
+     * return immediately instead of formatting ~120 values into invisible views and redrawing the
+     * legacy primary and secondary GraphViews on every refresh, and the hidden subtree costs no
+     * measure/layout/draw.
+     *
+     * Flip to false to bring the legacy overview back (it also needs its `visibility` removed in
+     * overview_fragment.xml) — useful if something in the redesign needs comparing against it.
+     */
+    private val LEGACY_OVERVIEW_HIDDEN = true
+
+
     private var _binding: OverviewFragmentBinding? = null
 
     // This property is only valid between onCreateView and
@@ -436,21 +449,16 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
 
     fun refreshAll() {
         if (!config.appInitialized) return
-        runOnUiThread {
-            _binding ?: return@runOnUiThread
-            updateTime()
-            updateSensitivity()
-            updateGraph()
-            updateNotification()
-        }
-        updateBg()
-        updateTemporaryBasal()
-        updateExtendedBolus()
+        // The legacy overview pipeline (updateTime/Sensitivity/Graph/Notification/Bg/
+        // TemporaryBasal/ExtendedBolus/ButtonsVisibility/Aps/Profile/TemporaryTarget) used to run
+        // here too. Every one of those binds values into views that sit under the opaque Compose
+        // home and cannot be seen, and updateGraph() rebuilt the legacy primary AND secondary
+        // GraphViews from scratch each time. See LEGACY_OVERVIEW_HIDDEN.
+        //
+        // updateIobCob() is deliberately still called: it is the fast path that refreshes the
+        // Compose hero's IOB/COB about a second after a carb entry, instead of waiting for the
+        // next 60 s tick.
         updateIobCob()
-        processButtonsVisibility()
-        processAps()
-        updateProfile()
-        updateTemporaryTarget()
         runOnUiThread {
             _binding ?: return@runOnUiThread
             buildHomeState()
@@ -893,6 +901,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
 
     @SuppressLint("SetTextI18n")
     private fun processButtonsVisibility() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val lastBG = iobCobCalculator.ads.lastBg()
         val pump = activePlugin.activePump
         val profile = profileFunction.getProfile()
@@ -1018,6 +1028,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun processAps() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val pump = activePlugin.activePump
 
         // aps mode
@@ -1165,6 +1177,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
 
     @SuppressLint("SetTextI18n")
     fun updateBg() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val lastBg = lastBgData.lastBg()
         val lastBgColor = lastBgData.lastBgColor(context)
         val isActualBg = lastBgData.isActualBg()
@@ -1222,6 +1236,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateProfile() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val profile = profileFunction.getProfile()
         runOnUiThread {
             _binding ?: return@runOnUiThread
@@ -1245,6 +1261,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateTemporaryBasal() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val temporaryBasalText = overviewData.temporaryBasalText()
         val temporaryBasalColor = overviewData.temporaryBasalColor(context)
         val temporaryBasalIcon = overviewData.temporaryBasalIcon()
@@ -1259,6 +1277,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateExtendedBolus() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val pump = activePlugin.activePump
         val extendedBolus = persistenceLayer.getExtendedBolusActiveAt(dateUtil.now())
         val extendedBolusText = overviewData.extendedBolusText()
@@ -1272,6 +1292,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateTime() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         _binding ?: return
         binding.graphsLayout.scaleButton.text = overviewMenus.scaleString(overviewData.rangeToDisplay)
         binding.infoLayout.time.text = dateUtil.timeString(dateUtil.now())
@@ -1363,6 +1385,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
 
     @SuppressLint("SetTextI18n")
     fun updateTemporaryTarget() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         val units = profileFunction.getUnits()
         val tempTarget = persistenceLayer.getTemporaryTargetActiveAt(dateUtil.now())
         runOnUiThread {
@@ -1413,6 +1437,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateGraph() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         _binding ?: return
         val pump = activePlugin.activePump
         val graphData = graphDataProvider.get().with(binding.graphsLayout.bgGraph, overviewData)
@@ -1519,6 +1545,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateSensitivity() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         _binding ?: return
         val lastAutosensData = iobCobCalculator.ads.getLastAutosensData("Overview", aapsLogger, dateUtil)
         val lastAutosensRatio = lastAutosensData?.let { it.autosensResult.ratio * 100 }
@@ -1609,6 +1637,8 @@ class OverviewFragment : DaggerFragment(), View.OnClickListener, OnLongClickList
     }
 
     private fun updateNotification() {
+        // Legacy view, permanently hidden behind the Compose home. See LEGACY_OVERVIEW_HIDDEN.
+        if (LEGACY_OVERVIEW_HIDDEN) return
         _binding ?: return
         binding.notifications.let { notificationStore.updateNotifications(it) }
     }
