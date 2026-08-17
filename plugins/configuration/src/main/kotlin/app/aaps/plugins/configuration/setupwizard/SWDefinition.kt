@@ -242,16 +242,9 @@ class SWDefinition @Inject constructor(
                      .text(R.string.askforpermission)
                     .visibility { androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_FINE_LOCATION) }
                     .action { androidPermission.askForPermission(requireActivity(), Manifest.permission.ACCESS_FINE_LOCATION) })
-            .add(swBreakProvider.get())
-            .add(swInfoTextProvider.get().label(rh.gs(R.string.need_background_location_permission)))
-            .add(swBreakProvider.get())
-            .add(
-                swButtonProvider.get()
-                     .text(R.string.askforpermission)
-                    .visibility { androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) }
-                    .action { androidPermission.askForPermission(requireActivity(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) })
-            .visibility { androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_FINE_LOCATION) || androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) }
-            .validator { !androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_FINE_LOCATION) && !androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) }
+
+            .visibility { androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_FINE_LOCATION) }
+            .validator { !androidPermission.permissionNotGranted(requireActivity(), Manifest.permission.ACCESS_FINE_LOCATION) }
 
     private val screenImport
         get() = swScreenProvider.get().with(R.string.import_setting)

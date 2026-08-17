@@ -162,16 +162,11 @@ class AndroidPermissionImpl @Inject constructor(
                 action = { askForPermission(activity, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
                 validityCheck = { permissionNotGranted(activity, Manifest.permission.ACCESS_FINE_LOCATION) || permissionNotGranted(activity, Manifest.permission.ACCESS_COARSE_LOCATION) }
             )
-        } else if (permissionNotGranted(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
-            uiInteraction.addNotification(
-                id = Notification.PERMISSION_LOCATION,
-                text = rh.gs(R.string.need_background_location_permission),
-                level = Notification.URGENT,
-                actionButtonId = R.string.request,
-                action = { askForPermission(activity, arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) },
-                validityCheck = { permissionNotGranted(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION) }
-            )
         } else uiInteraction.dismissNotification(Notification.PERMISSION_LOCATION)
+        // Foreground location is still required for the BLE scan that finds the pump. BACKGROUND
+        // location was only ever declared by the Automation plugin (for its geofence triggers); with
+        // that plugin gone the permission is no longer in the merged manifest, so asking for it could
+        // never succeed and the URGENT notification could never be dismissed.
     }
 
     @Synchronized override fun notifyForSystemWindowPermissions(activity: FragmentActivity) {
