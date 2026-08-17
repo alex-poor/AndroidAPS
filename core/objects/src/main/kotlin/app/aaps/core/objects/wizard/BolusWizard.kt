@@ -14,7 +14,6 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.aps.GlucoseStatus
 import app.aaps.core.interfaces.aps.Loop
-import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -72,7 +71,6 @@ class BolusWizard @Inject constructor(
     private val dateUtil: DateUtil,
     private val config: Config,
     private val uel: UserEntryLogger,
-    private val automation: Automation,
     private val glucoseStatusProvider: GlucoseStatusProvider,
     private val uiInteraction: UiInteraction,
     private val persistenceLayer: PersistenceLayer,
@@ -409,10 +407,6 @@ class BolusWizard @Inject constructor(
                 return
             }
             accepted = true
-            if (calculatedTotalInsulin > 0.0)
-                automation.removeAutomationEventBolusReminder()
-            if (carbs > 0.0)
-                automation.removeAutomationEventEatReminder()
             if (preferences.get(BooleanKey.OverviewUseBolusAdvisor) && profileUtil.convertToMgdl(bg, profile.units) > 180 && carbs > 0 && carbTime >= 0)
                 OKDialog.showYesNoCancel(
                     ctx, rh.gs(app.aaps.core.ui.R.string.bolus_advisor), rh.gs(app.aaps.core.ui.R.string.bolus_advisor_message),
@@ -457,10 +451,8 @@ class BolusWizard @Inject constructor(
                 if (insulin > 0) {
                     commandQueue.bolus(this, object : Callback() {
                         override fun run() {
-                            if (!result.success) {
+                            if (!result.success)
                                 uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                            } else
-                                automation.scheduleAutomationEventEatReminder()
                         }
                     })
                 }
@@ -569,11 +561,8 @@ class BolusWizard @Inject constructor(
                         )
                         commandQueue.bolus(this, object : Callback() {
                             override fun run() {
-                                if (!result.success) {
+                                if (!result.success)
                                     uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                                } else if (useAlarm && carbs > 0 && carbTime > 0) {
-                                    automation.scheduleTimeToEatReminder(T.mins(carbTime.toLong()).secs().toInt())
-                                }
                             }
                         })
                     }

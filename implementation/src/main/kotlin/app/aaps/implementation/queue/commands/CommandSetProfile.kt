@@ -11,7 +11,6 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
-import app.aaps.core.interfaces.smsCommunicator.SmsCommunicator
 import app.aaps.core.interfaces.utils.DateUtil
 import dagger.android.HasAndroidInjector
 import javax.inject.Inject
@@ -26,7 +25,6 @@ class CommandSetProfile(
 
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var rh: ResourceHelper
-    @Inject lateinit var smsCommunicator: SmsCommunicator
     @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var commandQueue: CommandQueue
@@ -49,12 +47,6 @@ class CommandSetProfile(
         val r = activePlugin.activePump.setNewBasalProfile(profile)
         aapsLogger.debug(LTag.PUMPQUEUE, "Result success: ${r.success} enacted: ${r.enacted} profile: $profile")
         callback?.result(r)?.run()
-        // Send SMS notification if ProfileSwitch is coming from NS
-        val profileSwitch = persistenceLayer.getEffectiveProfileSwitchActiveAt(dateUtil.now())
-        if (profileSwitch != null && r.enacted && hasNsId && !config.AAPSCLIENT) {
-            if (smsCommunicator.isEnabled() && !config.doNotSendSmsOnProfileChange())
-                smsCommunicator.sendNotificationToAllNumbers(rh.gs(app.aaps.core.ui.R.string.profile_set_ok))
-        }
     }
 
     override fun status(): String = rh.gs(app.aaps.core.ui.R.string.set_profile)

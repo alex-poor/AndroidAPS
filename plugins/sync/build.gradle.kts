@@ -36,27 +36,14 @@ dependencies {
     testImplementation(project(":plugins:aps"))
     androidTestImplementation(project(":shared:tests"))
 
-    // OpenHuman
-    api(libs.com.squareup.okhttp3.okhttp)
-    api(libs.com.squareup.retrofit2.retrofit)
-    api(libs.androidx.browser)
+    // NSClientV3. The retrofit / okhttp / gson stack arrives transitively from :core:nssdk,
+    // which api()s it. The OpenHumans (appauth, browser) and Garmin (connectiq) stacks went with
+    // those plugins; appauth in particular also contributed a manifest placeholder
+    // (appAuthRedirectScheme) that had to be satisfied at merge time.
     api(libs.androidx.work.runtime)
-    api(libs.androidx.gridlayout)
     api(libs.com.google.android.material)
-
-    // NSClient, Tidepool
+    // socket.io is NSClientV3's websocket transport (NSClientV3Service), not only the retired v1 client.
     api(libs.io.socket.client)
-    api(libs.com.squareup.okhttp3.logging.interceptor)
-    api(libs.com.squareup.retrofit2.adapter.rxjava3)
-    api(libs.com.squareup.retrofit2.converter.gson)
-    api(libs.com.google.code.gson)
-    api(libs.net.openid.appauth)
-
-    // DataLayerListenerService
-
-    // Garmin
-    api(libs.com.garmin.connectiq) { artifact { type = "aar" } }
-    androidTestImplementation(libs.com.garmin.connectiq) { artifact { type = "aar" } }
 
     ksp(libs.com.google.dagger.compiler)
     ksp(libs.com.google.dagger.android.processor)

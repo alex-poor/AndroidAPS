@@ -8,7 +8,6 @@ import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.pump.Pump
 import app.aaps.core.interfaces.resources.ResourceHelper
-import app.aaps.core.interfaces.smsCommunicator.SmsCommunicator
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
@@ -30,7 +29,6 @@ class LocalAlertUtilsImplTest : TestBase() {
     @Mock lateinit var rh: ResourceHelper
     @Mock lateinit var activePlugin: ActivePlugin
     @Mock lateinit var profileFunction: ProfileFunction
-    @Mock lateinit var smsCommunicator: SmsCommunicator
     @Mock lateinit var config: Config
     @Mock lateinit var persistenceLayer: PersistenceLayer
     @Mock lateinit var dateUtil: DateUtil
@@ -50,7 +48,6 @@ class LocalAlertUtilsImplTest : TestBase() {
             rh,
             activePlugin,
             profileFunction,
-            smsCommunicator,
             config,
             persistenceLayer,
             dateUtil

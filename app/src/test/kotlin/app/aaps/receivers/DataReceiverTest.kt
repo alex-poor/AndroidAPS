@@ -3,20 +3,10 @@ package app.aaps.receivers
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.provider.Telephony
 import androidx.work.OneTimeWorkRequest
 import app.aaps.core.interfaces.receivers.Intents
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.utils.receivers.DataWorkerStorage
-import app.aaps.plugins.main.general.smsCommunicator.SmsCommunicatorPlugin
-import app.aaps.plugins.source.DexcomPlugin
-import app.aaps.plugins.source.GlimpPlugin
-import app.aaps.plugins.source.MM640gPlugin
-import app.aaps.plugins.source.PatchedSiAppPlugin
-import app.aaps.plugins.source.PatchedSinoAppPlugin
-import app.aaps.plugins.source.PoctechPlugin
-import app.aaps.plugins.source.SyaiPlugin
-import app.aaps.plugins.source.TomatoPlugin
 import app.aaps.plugins.source.XdripSourcePlugin
 import app.aaps.shared.tests.TestBase
 import org.junit.jupiter.api.BeforeEach
@@ -30,6 +20,11 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import kotlin.reflect.KClass
 
+/**
+ * xDrip is the only local BG broadcast this build accepts. The Dexcom / Glimp / Poctech / Tomato /
+ * MM640g / Ottai / Syai / SI / Sino source plugins and the SMS command channel were removed, so the
+ * receiver's `when` has a single arm and everything else must fall through to the else branch.
+ */
 class DataReceiverTest : TestBase() {
 
     // The System Under Test
@@ -81,125 +76,15 @@ class DataReceiverTest : TestBase() {
     }
 
     @Test
-    fun `processIntent enqueues PoctechWorker for POCTECH_BG`() {
+    fun `processIntent ignores broadcasts from removed BG sources`() {
         // Arrange
-        val intent = createIntent(Intents.POCTECH_BG)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
+        for (action in listOf(Intents.POCTECH_BG, Intents.GLIMP_BG, Intents.TOMATO_BG, Intents.NS_EMULATOR, Intents.DEXCOM_BG)) {
+            // Act
+            dataReceiver.processIntent(context, createIntent(action))
+        }
 
         // Assert
-        assertWorkerEnqueued(PoctechPlugin.PoctechWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues GlimpWorker for GLIMP_BG`() {
-        // Arrange
-        val intent = createIntent(Intents.GLIMP_BG)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(GlimpPlugin.GlimpWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues TomatoWorker for TOMATO_BG`() {
-        // Arrange
-        val intent = createIntent(Intents.TOMATO_BG)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(TomatoPlugin.TomatoWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues MM640gWorker for NS_EMULATOR`() {
-        // Arrange
-        val intent = createIntent(Intents.NS_EMULATOR)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(MM640gPlugin.MM640gWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues OttaiWorker for OTTAI_APP`() {
-        // Arrange
-        val intent = createIntent(Intents.OTTAI_APP)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(SyaiPlugin.SyaiWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues SyaiWorker for SYAI_APP`() {
-        // Arrange
-        val intent = createIntent(Intents.SYAI_APP)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(SyaiPlugin.SyaiWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues PatchedSiAppWorker for SI_APP`() {
-        // Arrange
-        val intent = createIntent(Intents.SI_APP)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(PatchedSiAppPlugin.PatchedSiAppWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues PatchedSinoAppWorker for SINO_APP`() {
-        // Arrange
-        val intent = createIntent(Intents.SINO_APP)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(PatchedSinoAppPlugin.PatchedSinoAppWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues SmsCommunicatorWorker for SMS_RECEIVED_ACTION`() {
-        // Arrange
-        val intent = createIntent(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-        whenever(dataWorkerStorage.storeInputData(any(), any())).thenReturn(androidx.work.Data.EMPTY)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(SmsCommunicatorPlugin.SmsCommunicatorWorker::class)
-    }
-
-    @Test
-    fun `processIntent enqueues DexcomWorker for DEXCOM_BG`() {
-        // Arrange
-        val intent = createIntent(Intents.DEXCOM_BG)
-        whenever(dataWorkerStorage.storeInputData(any(), any())).thenReturn(androidx.work.Data.EMPTY)
-
-        // Act
-        dataReceiver.processIntent(context, intent)
-
-        // Assert
-        assertWorkerEnqueued(DexcomPlugin.DexcomWorker::class)
+        verify(dataWorkerStorage, never()).enqueue(any())
     }
 
     @Test

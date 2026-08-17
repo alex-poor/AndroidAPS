@@ -5,7 +5,6 @@ import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.validators.preferences.AdaptiveIntentPreference
 import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
-import app.aaps.plugins.sync.tidepool.utils.RateLimit
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.BeforeEach
@@ -19,7 +18,6 @@ class XdripPluginTest : TestBaseWithProfile() {
     @Mock lateinit var glucoseStatusProvider: GlucoseStatusProvider
 
     private lateinit var xdripPlugin: XdripPlugin
-    private lateinit var rateLimit: RateLimit
 
     init {
         addInjector {
@@ -34,7 +32,6 @@ class XdripPluginTest : TestBaseWithProfile() {
     }
 
     @BeforeEach fun prepare() {
-        rateLimit = RateLimit(dateUtil)
         xdripPlugin = XdripPlugin(
             aapsLogger, rh, preferences, profileFunction, profileUtil, aapsSchedulers, context, fabricPrivacy, loop, iobCobCalculator, processedTbrEbData, rxBus, uiInteraction, dateUtil, config, decimalFormatter, glucoseStatusProvider
         )

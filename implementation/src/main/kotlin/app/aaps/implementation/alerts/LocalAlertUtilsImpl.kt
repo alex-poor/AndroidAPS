@@ -17,7 +17,6 @@ import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventNewNotification
-import app.aaps.core.interfaces.smsCommunicator.SmsCommunicator
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.IntKey
@@ -42,7 +41,6 @@ class LocalAlertUtilsImpl @Inject constructor(
     private val rh: ResourceHelper,
     private val activePlugin: ActivePlugin,
     private val profileFunction: ProfileFunction,
-    private val smsCommunicator: SmsCommunicator,
     private val config: Config,
     private val persistenceLayer: PersistenceLayer,
     private val dateUtil: DateUtil
@@ -80,8 +78,6 @@ class LocalAlertUtilsImpl @Inject constructor(
                         listValues = listOf(ValueWithUnit.TEType(TE.Type.ANNOUNCEMENT))
                     ).subscribe()
             }
-            if (preferences.get(BooleanKey.SmsReportPumpUnreachable))
-                smsCommunicator.sendNotificationToAllNumbers(rh.gs(R.string.pump_unreachable))
         }
         if (!isStatusOutdated && !alarmTimeoutExpired) rxBus.send(EventDismissNotification(Notification.PUMP_UNREACHABLE))
     }

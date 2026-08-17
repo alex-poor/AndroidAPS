@@ -39,7 +39,7 @@ import app.aaps.plugins.constraints.objectives.objectives.Objective7
 import app.aaps.plugins.constraints.objectives.objectives.Objective8
 import app.aaps.plugins.constraints.objectives.objectives.Objective9
 import app.aaps.plugins.constraints.safety.SafetyPlugin
-import app.aaps.plugins.source.GlimpPlugin
+import app.aaps.plugins.source.XdripSourcePlugin
 import app.aaps.pump.virtual.VirtualPumpPlugin
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -57,7 +57,7 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
     @Mock lateinit var commandQueue: CommandQueue
     @Mock lateinit var detailedBolusInfoStorage: DetailedBolusInfoStorage
     @Mock lateinit var temporaryBasalStorage: TemporaryBasalStorage
-    @Mock lateinit var glimpPlugin: GlimpPlugin
+    @Mock lateinit var xdripSourcePlugin: XdripSourcePlugin
     @Mock lateinit var profiler: Profiler
     @Mock lateinit var persistenceLayer: PersistenceLayer
     @Mock lateinit var pumpSync: PumpSync
@@ -184,7 +184,7 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
     // Safety
     @Test
     fun isAdvancedFilteringEnabledTest() {
-        whenever(activePlugin.activeBgSource).thenReturn(glimpPlugin)
+        whenever(activePlugin.activeBgSource).thenReturn(xdripSourcePlugin)
         val c = constraintChecker.isAdvancedFilteringEnabled()
         assertThat(c.reasonList).hasSize(1) // Safety
         assertThat(c.mostLimitedReasonList).hasSize(1) // Safety

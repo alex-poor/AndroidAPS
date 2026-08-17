@@ -98,7 +98,6 @@ class XdripPlugin @Inject constructor(
 ) : XDripBroadcast, Sync, PluginBaseWithPreferences(
     pluginDescription = PluginDescription()
         .mainType(PluginType.SYNC)
-        .fragmentClass(XdripFragment::class.java.name)
         .pluginIcon((app.aaps.core.objects.R.drawable.ic_blooddrop_48))
         .pluginName(R.string.xdrip)
         .shortName(R.string.xdrip_shortname)

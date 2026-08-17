@@ -29,7 +29,6 @@ class OverviewPluginTest : TestBaseWithProfile() {
             aapsLogger, rh, preferences, notificationStore, fabricPrivacy, rxBus,
             aapsSchedulers, overviewData, overviewMenus, context, constraintsChecker, uiInteraction, nsSettingsStatus, config, activePlugin
         )
-        whenever(uiInteraction.quickWizardListActivity).thenReturn(Activity::class.java)
     }
 
     @Test

@@ -4,7 +4,6 @@ import app.aaps.core.data.pump.defs.PumpDescription
 import app.aaps.core.interfaces.aps.AutosensDataStore
 import app.aaps.core.interfaces.aps.IobTotal
 import app.aaps.core.interfaces.aps.Loop
-import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.constraints.Constraint
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -39,7 +38,6 @@ class BolusWizardTest : TestBaseWithProfile() {
     @Mock lateinit var processedDeviceStatusData: ProcessedDeviceStatusData
     @Mock lateinit var openAPSSMBPlugin: OpenAPSSMBPlugin
     @Mock lateinit var uel: UserEntryLogger
-    @Mock lateinit var automation: Automation
     @Mock lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Mock lateinit var uiInteraction: UiInteraction
     @Mock lateinit var persistenceLayer: PersistenceLayer
@@ -77,7 +75,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         var bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -101,7 +99,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -131,7 +129,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         var bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -155,7 +153,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -185,7 +183,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         var bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
@@ -209,7 +207,7 @@ class BolusWizardTest : TestBaseWithProfile() {
         bw =
             BolusWizard(
                 aapsLogger, rh, rxBus, preferences, profileFunction, profileUtil, constraintChecker, activePlugin,
-                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, automation, glucoseStatusProvider, uiInteraction,
+                commandQueue, loop, iobCobCalculator, dateUtil, config, uel, glucoseStatusProvider, uiInteraction,
                 persistenceLayer, decimalFormatter, processedDeviceStatusData
             ).doCalc(
                 profile,
