@@ -3,12 +3,8 @@ package app.aaps.implementation.utils.fabric
 import android.os.Bundle
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
-import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import dagger.Reusable
-import java.io.ByteArrayInputStream
-import java.io.IOException
-import java.io.ObjectInputStream
 import javax.inject.Inject
 
 /**
@@ -56,26 +52,4 @@ class FabricPrivacyImpl @Inject constructor(
      */
     override fun fabricEnabled(): Boolean = false
 
-    override fun logWearException(wearException: EventData.WearException) {
-        aapsLogger.debug(
-            LTag.WEAR,
-            "Wear exception on ${wearException.manufacturer} ${wearException.model} " +
-                "(board=${wearException.board}, sdk=${wearException.sdk}, product=${wearException.product}, " +
-                "fingerprint=${wearException.fingerprint})"
-        )
-        logException(byteArrayToThrowable(wearException.exception))
-    }
-
-    private fun byteArrayToThrowable(wearExceptionData: ByteArray): Throwable {
-        val bis = ByteArrayInputStream(wearExceptionData)
-        try {
-            val ois = ObjectInputStream(bis)
-            return ois.readObject() as Throwable
-        } catch (e: IOException) {
-            aapsLogger.error("Wear exception could not be de-serialized", e)
-        } catch (e: ClassNotFoundException) {
-            aapsLogger.error("Wear exception could not be de-serialized", e)
-        }
-        return IllegalArgumentException("Wear Exception could not be de-serialized")
-    }
 }

@@ -42,8 +42,6 @@ import app.aaps.core.interfaces.protection.PasswordCheck
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventDiaconnG8PumpLogReset
-import app.aaps.core.interfaces.rx.weardata.CwfData
-import app.aaps.core.interfaces.rx.weardata.CwfMetadataKey
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.interfaces.storage.Storage
 import app.aaps.core.interfaces.ui.UiInteraction
@@ -76,7 +74,6 @@ import app.aaps.plugins.configuration.maintenance.cloud.ExportOptionsDialog
 import app.aaps.plugins.configuration.maintenance.cloud.ImportSourceDialog
 import app.aaps.plugins.configuration.maintenance.PrefsMetadataKeyImpl
 import app.aaps.plugins.configuration.maintenance.activities.CloudPrefImportListActivity
-import app.aaps.shared.impl.weardata.ZipWatchfaceFormat
 import dagger.Reusable
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
@@ -825,30 +822,6 @@ class ImportExportPrefsImpl @Inject constructor(
         }
     }
 
-    override fun importCustomWatchface(fragment: Fragment) {
-        fragment.activity?.let { importCustomWatchface(it) }
-    }
-
-    override fun importCustomWatchface(activity: FragmentActivity) {
-        try {
-            if (activity is DaggerAppCompatActivityWithResult)
-                activity.callForCustomWatchfaceFile?.launch(null)
-        } catch (e: IllegalArgumentException) {
-            // this exception happens on some early implementations of ActivityResult contracts
-            // when registered and called for the second time
-            ToastUtils.errorToast(activity, rh.gs(R.string.goto_main_try_again))
-            aapsLogger.error(LTag.CORE, "Internal android framework exception", e)
-        }
-    }
-
-    override fun exportCustomWatchface(customWatchface: CwfData, withDate: Boolean) {
-        prefFileList.ensureExportDirExists()
-        val newFile = prefFileList.newCwfFile(customWatchface.metadata[CwfMetadataKey.CWF_FILENAME] ?: "", withDate) ?: return
-        ZipWatchfaceFormat.saveCustomWatchface(context.contentResolver, newFile, customWatchface)
-    }
-
-    // Do not pass full file through intent. It crash on large file
-    // override fun importSharedPreferences(activity: FragmentActivity, importFile: PrefsFile) {
     override fun doImportSharedPreferences(activity: FragmentActivity) {
 
         // File should be prepared here

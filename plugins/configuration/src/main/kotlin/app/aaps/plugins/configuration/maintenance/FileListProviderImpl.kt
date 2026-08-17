@@ -11,8 +11,6 @@ import app.aaps.core.interfaces.maintenance.PrefsFile
 import app.aaps.core.interfaces.maintenance.PrefsMetadataKey
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
-import app.aaps.core.interfaces.rx.weardata.CwfFile
-import app.aaps.core.interfaces.rx.weardata.EventData
 import app.aaps.core.interfaces.storage.Storage
 import app.aaps.core.interfaces.versionChecker.VersionCheckerUtils
 import app.aaps.core.keys.BooleanKey
@@ -23,7 +21,6 @@ import app.aaps.plugins.configuration.R
 import app.aaps.plugins.configuration.maintenance.data.PrefMetadataMap
 import app.aaps.plugins.configuration.maintenance.data.PrefsStatusImpl
 import app.aaps.plugins.configuration.maintenance.formats.EncryptedPrefsFormat
-import app.aaps.shared.impl.weardata.ZipWatchfaceFormat
 import dagger.Lazy
 import dagger.Reusable
 import org.joda.time.DateTime
@@ -92,43 +89,6 @@ class FileListProviderImpl @Inject constructor(
         return filtered
     }
 
-    override fun listCustomWatchfaceFiles(): MutableList<CwfFile> {
-        val customWatchfaceFiles = mutableListOf<CwfFile>()
-        val customWatchfaceAuthorization = preferences.get().get(BooleanKey.WearCustomWatchfaceAuthorization)
-
-        ensureExportDirExists()?.listFiles()?.filter { it.isFile && it.name?.endsWith(ZipWatchfaceFormat.CWF_EXTENSION) == true }?.forEach {
-            try {
-                storage.getBinaryFileContents(context.contentResolver, it)?.let { content ->
-                    ZipWatchfaceFormat.loadCustomWatchface(content, it?.name ?: "", customWatchfaceAuthorization)?.also { customWatchface ->
-                        customWatchfaceFiles.add(customWatchface)
-                    }
-                }
-            } catch (_: SecurityException) {
-                ToastUtils.errorToast(context, rh.gs(R.string.error_accessing_filesystem_select_aaps_directory_properly))
-                return mutableListOf()
-            }
-        }
-
-        if (customWatchfaceFiles.isEmpty()) {
-            try {
-                val assetFiles = context.assets.list("") ?: arrayOf()
-                for (assetFileName in assetFiles) {
-                    if (assetFileName.endsWith(ZipWatchfaceFormat.CWF_EXTENSION)) {
-                        val assetByteArray = context.assets.open(assetFileName).readBytes()
-                        ZipWatchfaceFormat.loadCustomWatchface(assetByteArray, assetFileName, customWatchfaceAuthorization)?.also { customWatchface ->
-                            customWatchfaceFiles.add(customWatchface)
-                            rxBus.send(EventData.ActionGetCustomWatchface(EventData.ActionSetCustomWatchface(customWatchface.cwfData), exportFile = true, withDate = false))
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-                // Handle any exceptions that may occur while accessing assets
-            }
-        }
-
-        return customWatchfaceFiles
-    }
-
     private fun metadataFor(contents: String): PrefMetadataMap =
         checkMetadata(encryptedPrefsFormat.loadMetadata(contents))
 
@@ -181,12 +141,6 @@ class FileListProviderImpl @Inject constructor(
         val timeLocal = LocalDateTime.now().toString(DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
         val dir = ensureExportDirExists()
         return dir?.createFile("application/csv", timeLocal + "_UserEntry.csv")
-    }
-
-    override fun newCwfFile(filename: String, withDate: Boolean): DocumentFile? {
-        val timeLocal = LocalDateTime.now().toString(DateTimeFormat.forPattern("yyyy-MM-dd'_'HHmmss"))
-        val dir = ensureExportDirExists()
-        return dir?.createFile("application/${ZipWatchfaceFormat.CWF_EXTENSION}", if (withDate) "${filename}_$timeLocal" else filename)
     }
 
     override fun newResultFile(): File {
