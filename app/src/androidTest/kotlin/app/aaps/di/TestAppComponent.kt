@@ -6,13 +6,11 @@ import app.aaps.database.di.TestDatabaseModule
 import app.aaps.database.persistence.di.PersistenceModule
 import app.aaps.implementation.di.ImplementationModule
 import app.aaps.plugins.aps.di.ApsModule
-import app.aaps.plugins.automation.di.AutomationModule
 import app.aaps.plugins.configuration.di.ConfigurationModule
 import app.aaps.plugins.constraints.di.PluginsConstraintsModule
 import app.aaps.plugins.insulin.di.InsulinModule
 import app.aaps.plugins.main.di.PluginsModule
 import app.aaps.plugins.source.di.SourceModule
-import app.aaps.plugins.sync.di.OpenHumansModule
 import app.aaps.plugins.sync.di.SyncModule
 import app.aaps.pump.common.di.PumpCommonModule
 import app.aaps.pump.medtrum.di.MedtrumModule
@@ -43,7 +41,6 @@ import javax.inject.Singleton
         PersistenceModule::class,
 
         // Gradle modules
-        AutomationModule::class,
         ApsModule::class,
         ConfigurationModule::class,
         CoreModule::class,
@@ -51,7 +48,6 @@ import javax.inject.Singleton
         TestDatabaseModule::class,
         ImplementationModule::class,
         InsulinModule::class,
-        OpenHumansModule::class,
         PluginsModule::class,
         SharedImplModule::class,
         LoggerModule::class,

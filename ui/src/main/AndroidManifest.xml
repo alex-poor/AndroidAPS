@@ -25,10 +25,6 @@
         </receiver>
 
         <activity
-            android:name=".activities.TDDStatsActivity"
-            android:exported="false"
-            android:theme="@style/AppTheme" />
-        <activity
             android:name="app.aaps.ui.activities.BolusProgressHelperActivity"
             android:exported="false"
             android:theme="@style/Theme.MaterialComponents.Translucent" />
@@ -36,10 +32,6 @@
             android:name=".activities.ErrorHelperActivity"
             android:exported="false"
             android:theme="@style/Theme.MaterialComponents.Translucent" />
-        <activity
-            android:name=".activities.SurveyActivity"
-            android:exported="false"
-            android:theme="@style/AppTheme.NoActionBar" />
         <activity
             android:name=".activities.StatsActivity"
             android:exported="false"
@@ -52,16 +44,6 @@
             android:name=".activities.ProfileHelperActivity"
             android:exported="false"
             android:theme="@style/AppTheme" />
-        <activity
-            android:name="app.aaps.ui.activities.QuickWizardListActivity"
-            android:exported="false"
-            android:theme="@style/AppTheme">
-            <intent-filter>
-                <action android:name="app.aaps.ui.activities.QuickWizardListActivity" />
-
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
 
         <service
             android:name=".services.AlarmSoundService"

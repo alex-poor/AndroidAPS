@@ -15,8 +15,11 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.UserEntryLogger
 import app.aaps.core.interfaces.ui.UiInteraction
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
-import app.aaps.ui.databinding.DialogErrorBinding
+import app.aaps.ui.dialogs.compose.ErrorSheet
 import dagger.android.support.DaggerDialogFragment
 import javax.inject.Inject
 
@@ -32,12 +35,6 @@ class ErrorDialog : DaggerDialogFragment() {
     var sound: Int = 0
 
     private val handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
-
-    private var _binding: DialogErrorBinding? = null
-
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
@@ -57,28 +54,35 @@ class ErrorDialog : DaggerDialogFragment() {
             sound = bundle.getInt("sound", app.aaps.core.ui.R.raw.error)
         }
         aapsLogger.debug("Error dialog displayed")
-        _binding = DialogErrorBinding.inflate(inflater, container, false)
-        return binding.root
+        return ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                AapsTheme {
+                    ErrorSheet(
+                        title = title,
+                        status = status,
+                        onMute = {
+                            uel.log(Action.ERROR_DIALOG_MUTE, Sources.Unknown)
+                            stopAlarm("Mute")
+                        },
+                        onMute5Min = {
+                            uel.log(Action.ERROR_DIALOG_MUTE_5MIN, Sources.Unknown)
+                            stopAlarm("Mute 5 min")
+                            handler.postDelayed(this@ErrorDialog::startAlarm, T.mins(5).msecs())
+                        },
+                        onOk = {
+                            uel.log(Action.ERROR_DIALOG_OK, Sources.Unknown)
+                            stopAlarm("Dismiss")
+                            dismiss()
+                        }
+                    )
+                }
+            }
+        }
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
-        binding.title.text = title
-        binding.ok.setOnClickListener {
-            uel.log(Action.ERROR_DIALOG_OK, Sources.Unknown)
-            stopAlarm("Dismiss")
-            dismiss()
-        }
-        binding.mute.setOnClickListener {
-            uel.log(Action.ERROR_DIALOG_MUTE, Sources.Unknown)
-            stopAlarm("Mute")
-        }
-        binding.mute5min.setOnClickListener {
-            uel.log(Action.ERROR_DIALOG_MUTE_5MIN, Sources.Unknown)
-            stopAlarm("Mute 5 min")
-            handler.postDelayed(this::startAlarm, T.mins(5).msecs())
-        }
         startAlarm()
     }
 
@@ -92,16 +96,6 @@ class ErrorDialog : DaggerDialogFragment() {
     override fun onStart() {
         super.onStart()
         dialog?.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        binding.status.text = status
-    }
-
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
     }
 
     override fun onDestroy() {

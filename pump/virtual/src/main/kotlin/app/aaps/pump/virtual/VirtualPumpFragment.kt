@@ -24,7 +24,13 @@ import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.toStringFull
-import app.aaps.pump.virtual.databinding.VirtualPumpFragmentBinding
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.pump.virtual.compose.VirtualPumpRow
+import app.aaps.pump.virtual.compose.VirtualPumpScreen
+import app.aaps.pump.virtual.compose.VirtualPumpState
 import app.aaps.pump.virtual.events.EventVirtualPumpUpdateGui
 import app.aaps.pump.virtual.keys.VirtualBooleanNonPreferenceKey
 import dagger.android.support.DaggerFragment
@@ -50,14 +56,21 @@ class VirtualPumpFragment : DaggerFragment() {
     private lateinit var refreshLoop: Runnable
     private var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
 
-    private var _binding: VirtualPumpFragmentBinding? = null
+    private val state = mutableStateOf(VirtualPumpState())
 
-    // This property is only valid between onCreateView and
-    // onDestroyView.
-    private val binding get() = _binding!!
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
-        VirtualPumpFragmentBinding.inflate(inflater, container, false).also { _binding = it }.root
+        ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                AapsTheme {
+                    VirtualPumpScreen(state.value) { suspended ->
+                        preferences.put(VirtualBooleanNonPreferenceKey.IsSuspended, suspended)
+                        updateGui()
+                    }
+                }
+            }
+        }
 
     @Synchronized
     override fun onResume() {
@@ -80,9 +93,6 @@ class VirtualPumpFragment : DaggerFragment() {
         }
         handler.postDelayed(refreshLoop, T.mins(1).msecs())
 
-        binding.pumpSuspended.isChecked = preferences.get(VirtualBooleanNonPreferenceKey.IsSuspended)
-        binding.pumpSuspended.setOnClickListener { preferences.put(VirtualBooleanNonPreferenceKey.IsSuspended, binding.pumpSuspended.isChecked) }
-
         updateGui()
     }
 
@@ -93,12 +103,6 @@ class VirtualPumpFragment : DaggerFragment() {
         handler.removeCallbacksAndMessages(null)
     }
 
-    @Synchronized
-    override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
@@ -107,22 +111,31 @@ class VirtualPumpFragment : DaggerFragment() {
 
     @Synchronized
     private fun updateGui() {
-        if (_binding == null) return
         val profile = profileFunction.getProfile() ?: return
-        binding.baseBasalRate.text = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, virtualPumpPlugin.baseBasalRate)
-        binding.tempbasal.text = persistenceLayer.getTemporaryBasalActiveAt(dateUtil.now())?.toStringFull(profile, dateUtil, rh)
-            ?: ""
-        binding.extendedbolus.text = persistenceLayer.getExtendedBolusActiveAt(dateUtil.now())?.toStringFull(dateUtil, rh)
-            ?: ""
-        binding.battery.text = rh.gs(app.aaps.core.ui.R.string.format_percent, virtualPumpPlugin.batteryPercent)
-        binding.reservoir.text = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, virtualPumpPlugin.reservoirInUnits.toDouble())
-
         virtualPumpPlugin.refreshConfiguration()
         val pumpType = virtualPumpPlugin.pumpType
-
-        binding.type.text = pumpType?.description
-        binding.typeDef.text = pumpType?.getFullDescription(rh.gs(R.string.virtual_pump_pump_def), pumpType.hasExtendedBasals(), rh)
-        binding.serialNumber.text = virtualPumpPlugin.serialNumber()
+        state.value = VirtualPumpState(
+            suspended = preferences.get(VirtualBooleanNonPreferenceKey.IsSuspended),
+            status = listOf(
+                VirtualPumpRow("Base basal rate", rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, virtualPumpPlugin.baseBasalRate)),
+                VirtualPumpRow(
+                    rh.gs(app.aaps.core.ui.R.string.tempbasal_label),
+                    persistenceLayer.getTemporaryBasalActiveAt(dateUtil.now())?.toStringFull(profile, dateUtil, rh) ?: ""
+                ),
+                VirtualPumpRow(
+                    rh.gs(app.aaps.core.ui.R.string.extended_bolus),
+                    persistenceLayer.getExtendedBolusActiveAt(dateUtil.now())?.toStringFull(dateUtil, rh) ?: ""
+                ),
+                VirtualPumpRow("Battery", rh.gs(app.aaps.core.ui.R.string.format_percent, virtualPumpPlugin.batteryPercent)),
+                VirtualPumpRow(
+                    rh.gs(app.aaps.core.ui.R.string.reservoir_label),
+                    rh.gs(app.aaps.core.ui.R.string.format_insulin_units, virtualPumpPlugin.reservoirInUnits.toDouble())
+                ),
+                VirtualPumpRow("Type", pumpType?.description ?: ""),
+                VirtualPumpRow(rh.gs(app.aaps.core.ui.R.string.serial_number), virtualPumpPlugin.serialNumber())
+            ).filter { it.value.isNotBlank() },
+            definition = pumpType?.getFullDescription(rh.gs(R.string.virtual_pump_pump_def), pumpType.hasExtendedBasals(), rh) ?: ""
+        )
     }
 
     private fun getStep(step: String, stepSize: DoseStepSize?): String =

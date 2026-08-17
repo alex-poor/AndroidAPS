@@ -21,6 +21,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:compose"))
     implementation(project(":core:data"))
     implementation(project(":core:interfaces"))
     implementation(project(":core:keys"))
@@ -44,5 +45,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.foundation)
 
 }

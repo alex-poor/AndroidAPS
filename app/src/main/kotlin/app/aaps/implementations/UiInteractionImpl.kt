@@ -7,7 +7,6 @@ import androidx.annotation.RawRes
 import androidx.annotation.StringRes
 import androidx.fragment.app.FragmentManager
 import app.aaps.MainActivity
-import app.aaps.activities.HistoryBrowseActivity
 import app.aaps.activities.MyPreferenceFragment
 import app.aaps.activities.PreferencesActivity
 import app.aaps.core.interfaces.notifications.Notification
@@ -22,8 +21,7 @@ import app.aaps.plugins.configuration.activities.SingleFragmentActivity
 import app.aaps.plugins.main.general.overview.notifications.NotificationWithAction
 import app.aaps.ui.activities.BolusProgressHelperActivity
 import app.aaps.ui.activities.ErrorHelperActivity
-import app.aaps.ui.activities.QuickWizardListActivity
-import app.aaps.ui.activities.TDDStatsActivity
+import app.aaps.ui.activities.TreatmentsActivity
 import app.aaps.ui.dialogs.BolusProgressDialog
 import app.aaps.ui.dialogs.CalibrationDialog
 import app.aaps.ui.dialogs.CarbsDialog
@@ -34,7 +32,6 @@ import app.aaps.ui.dialogs.InsulinDialog
 import app.aaps.ui.dialogs.LoopDialog
 import app.aaps.ui.dialogs.ProfileSwitchDialog
 import app.aaps.ui.dialogs.ProfileViewerDialog
-import app.aaps.ui.dialogs.SiteRotationDialog
 import app.aaps.ui.dialogs.TempBasalDialog
 import app.aaps.ui.dialogs.TempTargetDialog
 import app.aaps.ui.dialogs.TreatmentDialog
@@ -55,14 +52,12 @@ class UiInteractionImpl @Inject constructor(
 ) : UiInteraction {
 
     override val mainActivity: Class<*> = MainActivity::class.java
-    override val tddStatsActivity: Class<*> = TDDStatsActivity::class.java
-    override val historyBrowseActivity: Class<*> = HistoryBrowseActivity::class.java
+    override val historyActivity: Class<*> = TreatmentsActivity::class.java
     override val errorHelperActivity: Class<*> = ErrorHelperActivity::class.java
     override val bolusProgressHelperActivity: Class<*> = BolusProgressHelperActivity::class.java
     override val singleFragmentActivity: Class<*> = SingleFragmentActivity::class.java
     override val preferencesActivity: Class<*> = PreferencesActivity::class.java
     override val myPreferenceFragment: Class<*> = MyPreferenceFragment::class.java
-    override val quickWizardListActivity: Class<*> = QuickWizardListActivity::class.java
 
     override val unitsEntries = arrayOf<CharSequence>("mg/dL", "mmol/L")
     override val unitsValues = arrayOf<CharSequence>("mg/dl", "mmol")
@@ -140,11 +135,6 @@ class UiInteractionImpl @Inject constructor(
     override fun runFillDialog(fragmentManager: FragmentManager) {
         FillDialog(fragmentManager)
             .show(fragmentManager, "FillDialog")
-    }
-
-    override fun runSiteRotationDialog(fragmentManager: FragmentManager) {
-        SiteRotationDialog()
-            .show(fragmentManager, "SiteRotationDialog")
     }
 
     override fun runProfileViewerDialog(fragmentManager: FragmentManager, time: Long, mode: UiInteraction.Mode, customProfile: String?, customProfileName: String?, customProfile2: String?) {

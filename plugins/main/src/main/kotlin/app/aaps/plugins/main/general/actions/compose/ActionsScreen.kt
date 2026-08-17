@@ -162,7 +162,5 @@ private fun iconFor(id: ActionId): ImageVector = when (id) {
     ActionId.EXERCISE                                 -> AapsIcons.DirectionsRun
     ActionId.ANNOUNCEMENT                             -> AapsIcons.Campaign
     ActionId.QUESTION                                 -> AapsIcons.HelpOutline
-    ActionId.SITE_ROTATION                            -> AapsIcons.Autorenew
     ActionId.HISTORY                                  -> AapsIcons.History
-    ActionId.TDD                                      -> AapsIcons.Insights
 }

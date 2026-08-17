@@ -19,7 +19,6 @@ import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
-import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.iob.GlucoseStatusProvider
@@ -63,7 +62,7 @@ import kotlin.math.ceil
 
 /**
  * Redesigned Carbs dialog. UI is Compose ([CarbsSheet]); [submit] runs the SAME constraint +
- * `OKDialog` confirmation + temp-target / carbs-`commandQueue.bolus` + automation-reminder path as
+ * `OKDialog` confirmation + temp-target / carbs-`commandQueue.bolus` path as
  * the legacy dialog. Event time is expressed as the minutes offset (as before); the notes + duration
  * (extended carbs) + TT presets + eat/bolus reminders are all preserved.
  */
@@ -78,7 +77,6 @@ class CarbsDialog : DaggerDialogFragment() {
     @Inject lateinit var iobCobCalculator: IobCobCalculator
     @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
     @Inject lateinit var uel: UserEntryLogger
-    @Inject lateinit var automation: Automation
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var protectionCheck: ProtectionCheck
@@ -258,16 +256,10 @@ class CarbsDialog : DaggerDialogFragment() {
                         )
                         commandQueue.bolus(detailedBolusInfo, object : Callback() {
                             override fun run() {
-                                automation.removeAutomationEventEatReminder()
-                                if (!result.success) {
+                                if (!result.success)
                                     uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                                } else if (preferences.get(BooleanKey.OverviewUseBolusReminder) && remindBolus)
-                                    automation.scheduleAutomationEventBolusReminder()
                             }
                         })
-                    }
-                    if (useAlarm && carbs > 0 && timeOffset > 0) {
-                        automation.scheduleTimeToEatReminder(T.mins(timeOffset.toLong()).secs().toInt())
                     }
                 }, null)
             }

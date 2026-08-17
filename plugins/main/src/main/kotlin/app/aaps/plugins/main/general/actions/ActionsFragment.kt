@@ -57,7 +57,6 @@ import app.aaps.core.ui.extensions.toVisibility
 import app.aaps.plugins.main.R
 import app.aaps.plugins.main.databinding.ActionsFragmentBinding
 import app.aaps.plugins.main.general.overview.ui.StatusLightHandler
-import app.aaps.plugins.main.skins.SkinProvider
 import dagger.android.support.DaggerFragment
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
@@ -81,7 +80,6 @@ class ActionsFragment : DaggerFragment() {
     @Inject lateinit var commandQueue: CommandQueue
     @Inject lateinit var config: Config
     @Inject lateinit var protectionCheck: ProtectionCheck
-    @Inject lateinit var skinProvider: SkinProvider
     @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var loop: Loop
@@ -105,11 +103,6 @@ class ActionsFragment : DaggerFragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
-        val screenWidth = activity?.window?.decorView?.width ?: 0
-        val screenHeight = activity?.window?.decorView?.height ?: 0
-        val isLandscape = screenHeight < screenWidth
-        skinProvider.activeSkin().preProcessLandscapeActionsLayout(isLandscape, binding)
 
         binding.profileSwitch.setOnClickListener {
             activity?.let { activity ->
@@ -176,8 +169,7 @@ class ActionsFragment : DaggerFragment() {
                 protectionCheck.queryProtection(activity, ProtectionCheck.Protection.BOLUS, UIRunnable { uiInteraction.runFillDialog(childFragmentManager) })
             }
         }
-        binding.historyBrowser.setOnClickListener { startActivity(Intent(context, uiInteraction.historyBrowseActivity)) }
-        binding.tddStats.setOnClickListener { startActivity(Intent(context, uiInteraction.tddStatsActivity)) }
+        binding.historyBrowser.setOnClickListener { startActivity(Intent(context, uiInteraction.historyActivity)) }
         binding.bgCheck.setOnClickListener {
             uiInteraction.runCareDialog(childFragmentManager, UiInteraction.EventType.BGCHECK, app.aaps.core.ui.R.string.careportal_bgcheck)
         }
@@ -199,10 +191,6 @@ class ActionsFragment : DaggerFragment() {
         binding.announcement.setOnClickListener {
             uiInteraction.runCareDialog(childFragmentManager, UiInteraction.EventType.ANNOUNCEMENT, app.aaps.core.ui.R.string.careportal_announcement)
         }
-        binding.siteRotation.setOnClickListener {
-            uiInteraction.runSiteRotationDialog(childFragmentManager)
-        }
-
         preferences.put(BooleanNonKey.ObjectivesActionsUsed, true)
 
         // ---- Redesigned Actions (Compose overlay on top of the legacy layout) ----
@@ -248,9 +236,7 @@ class ActionsFragment : DaggerFragment() {
         }
 
         val tools = buildList {
-            add(ToolAction(ActionId.SITE_ROTATION, "Site rotation"))
-            if (profile != null) add(ToolAction(ActionId.HISTORY, "History browser"))
-            if (pump.pumpDescription.supportsTDDs) add(ToolAction(ActionId.TDD, "Total daily dose"))
+            if (profile != null) add(ToolAction(ActionId.HISTORY, "History"))
         }
 
         return ActionsUiState(therapy, events, tools)
@@ -291,9 +277,7 @@ class ActionsFragment : DaggerFragment() {
             ActionId.EXERCISE      -> care(UiInteraction.EventType.EXERCISE, app.aaps.core.ui.R.string.careportal_exercise)
             ActionId.ANNOUNCEMENT  -> care(UiInteraction.EventType.ANNOUNCEMENT, app.aaps.core.ui.R.string.careportal_announcement)
             ActionId.QUESTION      -> care(UiInteraction.EventType.QUESTION, app.aaps.core.ui.R.string.careportal_question)
-            ActionId.SITE_ROTATION -> uiInteraction.runSiteRotationDialog(childFragmentManager)
-            ActionId.HISTORY       -> startActivity(Intent(context, uiInteraction.historyBrowseActivity))
-            ActionId.TDD           -> startActivity(Intent(context, uiInteraction.tddStatsActivity))
+            ActionId.HISTORY       -> startActivity(Intent(context, uiInteraction.historyActivity))
         }
     }
 
@@ -383,7 +367,6 @@ class ActionsFragment : DaggerFragment() {
         binding.fill.visibility = (pump.pumpDescription.isRefillingCapable && pump.isInitialized()).toVisibility()
         binding.pumpBatteryChange.visibility = (pump.pumpDescription.isBatteryReplaceable || pump.isBatteryChangeLoggingEnabled()).toVisibility()
         binding.tempTarget.visibility = (profile != null && loop.runningMode.isLoopRunning()).toVisibility()
-        binding.tddStats.visibility = pump.pumpDescription.supportsTDDs.toVisibility()
         val isPatchPump = pump.pumpDescription.isPatchPump
         binding.status.apply {
             cannulaOrPatch.text = if (cannulaOrPatch.text.isEmpty()) "" else if (isPatchPump) rh.gs(R.string.patch_pump) else rh.gs(R.string.cannula)

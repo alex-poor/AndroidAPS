@@ -28,7 +28,6 @@ import androidx.appcompat.widget.Toolbar
 import androidx.core.view.GravityCompat
 import androidx.core.view.MenuCompat
 import androidx.core.view.MenuProvider
-import app.aaps.activities.HistoryBrowseActivity
 import app.aaps.activities.PreferencesActivity
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
@@ -46,7 +45,6 @@ import app.aaps.core.interfaces.rx.AapsSchedulers
 import app.aaps.core.interfaces.rx.events.EventAppInitialized
 import app.aaps.core.interfaces.rx.events.EventPreferenceChange
 import app.aaps.core.interfaces.rx.events.EventRebuildTabs
-import app.aaps.core.interfaces.smsCommunicator.SmsCommunicator
 import app.aaps.core.interfaces.ui.IconsProvider
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.fabric.FabricPrivacy
@@ -84,7 +82,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
 
     @Inject lateinit var aapsSchedulers: AapsSchedulers
     @Inject lateinit var versionCheckerUtils: VersionCheckerUtils
-    @Inject lateinit var smsCommunicator: SmsCommunicator
     @Inject lateinit var loop: Loop
     @Inject lateinit var config: Config
     @Inject lateinit var activePlugin: ActivePlugin
@@ -177,11 +174,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                         true
                     }
 
-                    R.id.nav_historybrowser     -> {
-                        startActivity(Intent(this@MainActivity, HistoryBrowseActivity::class.java).setAction("info.nightscout.androidaps.MainActivity"))
-                        true
-                    }
-
                     R.id.nav_treatments         -> {
                         startActivity(Intent(this@MainActivity, TreatmentsActivity::class.java).setAction("info.nightscout.androidaps.MainActivity"))
                         true
@@ -241,12 +233,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                         })
                         true
                     }
-                    /*
-                                R.id.nav_survey             -> {
-                                    startActivity(Intent(this, SurveyActivity::class.java))
-                                    return true
-                                }
-                    */
                     R.id.nav_defaultprofile     -> {
                         startActivity(Intent(this@MainActivity, ProfileHelperActivity::class.java).setAction("info.nightscout.androidaps.MainActivity"))
                         true
@@ -281,8 +267,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         androidPermission.notifyForBatteryOptimizationPermission(this)
         if (!config.AAPSCLIENT) androidPermission.notifyForLocationPermissions(this)
         if (config.PUMPDRIVERS) {
-            if (smsCommunicator.isEnabled())
-                androidPermission.notifyForSMSPermissions(this)
             androidPermission.notifyForSystemWindowPermissions(this)
             androidPermission.notifyForBtConnectPermission(this)
         }

@@ -2,29 +2,32 @@ package app.aaps.plugins.configuration.maintenance.activities
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.lifecycle.lifecycleScope
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.interfaces.maintenance.FileListProvider
 import app.aaps.core.interfaces.maintenance.ImportExportPrefs
 import app.aaps.core.interfaces.maintenance.PrefsFile
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.plugins.configuration.R
-import app.aaps.plugins.configuration.databinding.MaintenanceImportListActivityBinding
-import app.aaps.plugins.configuration.databinding.MaintenanceImportListItemBinding
-import app.aaps.plugins.configuration.maintenance.PrefsMetadataKeyImpl
-import app.aaps.plugins.configuration.maintenance.data.PrefsStatusImpl
 import app.aaps.plugins.configuration.maintenance.ImportExportPrefsImpl
+import app.aaps.plugins.configuration.maintenance.PrefsMetadataKeyImpl
 import app.aaps.plugins.configuration.maintenance.cloud.CloudConstants
 import app.aaps.plugins.configuration.maintenance.cloud.CloudStorageManager
+import app.aaps.plugins.configuration.maintenance.compose.PrefsFileListScreen
+import app.aaps.plugins.configuration.maintenance.compose.PrefsFileRow
+import app.aaps.plugins.configuration.maintenance.data.PrefsStatusImpl
 import app.aaps.plugins.configuration.maintenance.formats.EncryptedPrefsFormat
-import javax.inject.Inject
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
+/**
+ * Cloud counterpart of [PrefImportListActivity], sharing its Compose screen. The listing is paged, so
+ * this one also drives the "load more" footer; the paging logic (token, page size, name filter and
+ * per-entry download) is carried over unchanged from the legacy RecyclerView version.
+ */
 class CloudPrefImportListActivity : TranslatedDaggerAppCompatActivity() {
 
     @Inject lateinit var rh: ResourceHelper
@@ -33,178 +36,101 @@ class CloudPrefImportListActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var cloudStorageManager: CloudStorageManager
     @Inject lateinit var encryptedPrefsFormat: EncryptedPrefsFormat
 
-    private lateinit var binding: MaintenanceImportListActivityBinding
+    private val files = mutableStateOf<List<PrefsFile>>(emptyList())
+    private val loadMoreLabel = mutableStateOf<String?>(null)
+    private val loadMoreEnabled = mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = MaintenanceImportListActivityBinding.inflate(layoutInflater)
-        val view = binding.root
-        setContentView(view)
+        supportActionBar?.hide()
 
-        title = rh.gs(R.string.import_from_cloud)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.setDisplayShowHomeEnabled(true)
-        supportActionBar?.setDisplayShowTitleEnabled(true)
+        files.value = ImportExportPrefsImpl.cloudPrefsFiles.toList()
+        refreshLoadMore()
 
-        binding.recyclerview.layoutManager = LinearLayoutManager(this)
-        
-        // Use cloud file list
-        val cloudFiles = ImportExportPrefsImpl.cloudPrefsFiles.toMutableList()
-        val adapter = RecyclerViewAdapter(cloudFiles)
-        binding.recyclerview.adapter = adapter
-
-        // Update file count display
-        updateFileCountDisplay(cloudFiles.size)
-        
-        // Show or hide "Load More" and update button text
-        updateLoadMoreButton(cloudFiles.size)
-        binding.loadMore.setOnClickListener {
-            // Click load more: fetch PAGE_SIZE more
-            binding.loadMore.isEnabled = false
-            binding.loadMore.text = rh.gs(R.string.loading)
-            lifecycleScope.launch {
-                val nextToken = ImportExportPrefsImpl.cloudNextPageToken
-                if (nextToken == null) {
-                    binding.loadMore.visibility = View.GONE
-                    return@launch
+        setContentView(ComposeView(this).apply {
+            setContent {
+                AapsTheme {
+                    PrefsFileListScreen(
+                        title = rh.gs(R.string.import_from_cloud),
+                        files = files.value.map { it.toRow() },
+                        onSelect = { index ->
+                            importExportPrefs.selectedImportFile = files.value[index]
+                            setResult(RESULT_OK, Intent())
+                            finish()
+                        },
+                        onBack = { finish() },
+                        subtitle = fileCountText(),
+                        loadMoreLabel = loadMoreLabel.value,
+                        loadMoreEnabled = loadMoreEnabled.value,
+                        onLoadMore = ::loadMore
+                    )
                 }
-                
-                // Get active cloud provider
-                val provider = cloudStorageManager.getActiveProvider()
-                if (provider == null) {
-                    binding.loadMore.visibility = View.GONE
-                    return@launch
-                }
-                
-                val currentLoadedCount = cloudFiles.size  // Already loaded count
-                val page = provider.listSettingsFiles(CloudConstants.DEFAULT_PAGE_SIZE, nextToken)
-                ImportExportPrefsImpl.cloudNextPageToken = page.nextPageToken
-                // Download and parse each entry then append
-                val appended = mutableListOf<PrefsFile>()
-                val namePattern = Regex("^\\d{4}-\\d{2}-\\d{2}_\\d{6}.*\\.json$", RegexOption.IGNORE_CASE)
-                val filesToProcess = page.files.filter { namePattern.containsMatchIn(it.name) }
-                var processedCount = 0
-                
-                for (f in filesToProcess) {
-                    try {
-                        // Update progress on button - add current loaded count
-                        processedCount++
-                        val currentItemNumber = currentLoadedCount + processedCount
-                        val totalItemsInThisBatch = currentLoadedCount + filesToProcess.size
-                        runOnUiThread {
-                            binding.loadMore.text = rh.gs(R.string.loading_progress, currentItemNumber, totalItemsInThisBatch)
-                        }
-                        
-                        val bytes = provider.downloadFile(f.id)
-                        if (bytes != null) {
-                            val content = String(bytes, Charsets.UTF_8)
-                            val metadata = encryptedPrefsFormat.loadMetadata(content)
-                            appended.add(PrefsFile(f.name, content, metadata))
-                        }
-                    } catch (_: Exception) {
-                        // Ignore single entry error
-                    }
-                }
-                val start = cloudFiles.size
-                cloudFiles.addAll(appended)
-                adapter.notifyItemRangeInserted(start, appended.size)
-                binding.loadMore.isEnabled = true
-                updateLoadMoreButton(cloudFiles.size)
-                updateFileCountDisplay(cloudFiles.size)
             }
-        }
+        })
     }
 
-    private fun updateLoadMoreButton(currentCount: Int) {
+    private fun fileCountText(): String? {
+        val total = ImportExportPrefsImpl.cloudTotalFilesCount
+        val current = files.value.size
+        if (total <= 0) return null
+        return if (current >= total || ImportExportPrefsImpl.cloudNextPageToken == null)
+            rh.gs(R.string.cloud_import_file_count_all, current)
+        else rh.gs(R.string.cloud_import_file_count, current, total)
+    }
+
+    private fun refreshLoadMore() {
         if (ImportExportPrefsImpl.cloudNextPageToken == null) {
-            binding.loadMore.visibility = View.GONE
-        } else {
-            binding.loadMore.visibility = View.VISIBLE
-            // Calculate remaining files to load
-            val totalCount = ImportExportPrefsImpl.cloudTotalFilesCount
-            val remainingCount = if (totalCount > 0) {
-                minOf(CloudConstants.DEFAULT_PAGE_SIZE, totalCount - currentCount)
-            } else {
-                CloudConstants.DEFAULT_PAGE_SIZE
-            }
-            binding.loadMore.text = rh.gs(R.string.load_more_with_count, remainingCount, currentCount)
+            loadMoreLabel.value = null
+            return
         }
-    }
-    
-    private fun updateFileCountDisplay(currentCount: Int) {
-        val totalCount = ImportExportPrefsImpl.cloudTotalFilesCount
-        if (totalCount > 0) {
-            binding.fileCount.visibility = View.VISIBLE
-            if (currentCount >= totalCount || ImportExportPrefsImpl.cloudNextPageToken == null) {
-                // All files loaded
-                binding.fileCount.text = rh.gs(R.string.cloud_import_file_count_all, currentCount)
-            } else {
-                // Partial files loaded
-                binding.fileCount.text = rh.gs(R.string.cloud_import_file_count, currentCount, totalCount)
-            }
-        } else {
-            binding.fileCount.visibility = View.GONE
-        }
+        val total = ImportExportPrefsImpl.cloudTotalFilesCount
+        val current = files.value.size
+        val remaining = if (total > 0) minOf(CloudConstants.DEFAULT_PAGE_SIZE, total - current) else CloudConstants.DEFAULT_PAGE_SIZE
+        loadMoreLabel.value = rh.gs(R.string.load_more_with_count, remaining, current)
+        loadMoreEnabled.value = true
     }
 
-    inner class RecyclerViewAdapter internal constructor(private var prefFileList: MutableList<PrefsFile>) : RecyclerView.Adapter<RecyclerViewAdapter.PrefFileViewHolder>() {
+    private fun loadMore() {
+        loadMoreEnabled.value = false
+        loadMoreLabel.value = rh.gs(R.string.loading)
+        lifecycleScope.launch {
+            val nextToken = ImportExportPrefsImpl.cloudNextPageToken ?: run { loadMoreLabel.value = null; return@launch }
+            val provider = cloudStorageManager.getActiveProvider() ?: run { loadMoreLabel.value = null; return@launch }
 
-        inner class PrefFileViewHolder(val maintenanceImportListItemBinding: MaintenanceImportListItemBinding) : RecyclerView.ViewHolder(maintenanceImportListItemBinding.root) {
+            val alreadyLoaded = files.value.size
+            val page = provider.listSettingsFiles(CloudConstants.DEFAULT_PAGE_SIZE, nextToken)
+            ImportExportPrefsImpl.cloudNextPageToken = page.nextPageToken
 
-            init {
-                with(maintenanceImportListItemBinding) {
-                    root.isClickable = true
-                    maintenanceImportListItemBinding.root.setOnClickListener {
-                        val i = Intent()
-                        // Set selected file
-                        importExportPrefs.selectedImportFile = prefFileList[filelistName.tag as Int]
-                        setResult(RESULT_OK, i)
-                        finish()
+            val namePattern = Regex("^\\d{4}-\\d{2}-\\d{2}_\\d{6}.*\\.json$", RegexOption.IGNORE_CASE)
+            val toProcess = page.files.filter { namePattern.containsMatchIn(it.name) }
+            val appended = mutableListOf<PrefsFile>()
+            toProcess.forEachIndexed { i, f ->
+                loadMoreLabel.value = rh.gs(R.string.loading_progress, alreadyLoaded + i + 1, alreadyLoaded + toProcess.size)
+                try {
+                    provider.downloadFile(f.id)?.let { bytes ->
+                        val content = String(bytes, Charsets.UTF_8)
+                        appended.add(PrefsFile(f.name, content, encryptedPrefsFormat.loadMetadata(content)))
                     }
+                } catch (_: Exception) {
+                    // Ignore single entry error
                 }
             }
+            files.value = files.value + appended
+            refreshLoadMore()
         }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PrefFileViewHolder {
-            val binding = MaintenanceImportListItemBinding.inflate(LayoutInflater.from(parent.context), parent, false)
-            return PrefFileViewHolder(binding)
-        }
-
-        override fun getItemCount(): Int = prefFileList.size
-
-        override fun onBindViewHolder(holder: PrefFileViewHolder, position: Int) {
-            val prefFile = prefFileList[position]
-            with(holder.maintenanceImportListItemBinding) {
-                filelistName.text = prefFile.name
-                filelistName.tag = position
-
-                metalineName.visibility = View.VISIBLE
-                metaDateTimeIcon.visibility = View.VISIBLE
-                metaAppVersion.visibility = View.VISIBLE
-
-                prefFile.metadata[PrefsMetadataKeyImpl.AAPS_FLAVOUR]?.let {
-                    metaVariantFormat.text = it.value
-                    val colorAttr = if (it.status == PrefsStatusImpl.OK) app.aaps.core.ui.R.attr.metadataTextOkColor else app.aaps.core.ui.R.attr.metadataTextWarningColor
-                    metaVariantFormat.setTextColor(rh.gac(metaVariantFormat.context, colorAttr))
-                }
-
-                prefFile.metadata[PrefsMetadataKeyImpl.CREATED_AT]?.let {
-                    metaDateTime.text = fileListProvider.formatExportedAgo(it.value)
-                }
-
-                prefFile.metadata[PrefsMetadataKeyImpl.AAPS_VERSION]?.let {
-                    metaAppVersion.text = it.value
-                    val colorAttr = if (it.status == PrefsStatusImpl.OK) app.aaps.core.ui.R.attr.metadataTextOkColor else app.aaps.core.ui.R.attr.metadataTextWarningColor
-                    metaAppVersion.setTextColor(rh.gac(metaVariantFormat.context, colorAttr))
-                }
-
-                prefFile.metadata[PrefsMetadataKeyImpl.DEVICE_NAME]?.let {
-                    metaDeviceName.text = it.value
-                }
-
-            }
-        }
-
     }
 
+    private fun PrefsFile.toRow(): PrefsFileRow {
+        val flavour = metadata[PrefsMetadataKeyImpl.AAPS_FLAVOUR]
+        val version = metadata[PrefsMetadataKeyImpl.AAPS_VERSION]
+        return PrefsFileRow(
+            name = name,
+            flavour = flavour?.value ?: "",
+            flavourOk = flavour?.status == PrefsStatusImpl.OK,
+            version = version?.value ?: "",
+            versionOk = version?.status == PrefsStatusImpl.OK,
+            exportedAgo = metadata[PrefsMetadataKeyImpl.CREATED_AT]?.let { fileListProvider.formatExportedAgo(it.value) } ?: "",
+            deviceName = metadata[PrefsMetadataKeyImpl.DEVICE_NAME]?.value ?: ""
+        )
+    }
 }

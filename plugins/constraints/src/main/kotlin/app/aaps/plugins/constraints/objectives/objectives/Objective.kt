@@ -162,18 +162,14 @@ abstract class Objective(
 
     inner class Option internal constructor(@StringRes var option: Int, var isCorrect: Boolean) {
 
-        private var cb: CheckBox? = null // TODO: change it, this will block releasing memory
+        /**
+         * Whether the user has ticked this option. This used to live in a CheckBox the model held a
+         * reference to (which is what the old "this will block releasing memory" TODO was about); the
+         * exam UI is Compose now and drives this flag directly.
+         */
+        var selected: Boolean = false
 
-        fun generate(context: Context): CheckBox {
-            cb = CheckBox(context)
-            cb?.setText(option)
-            return cb!!
-        }
-
-        fun evaluate(): Boolean {
-            val selection = cb!!.isChecked
-            return if (selection && isCorrect) true else !selection && !isCorrect
-        }
+        fun evaluate(): Boolean = if (selected && isCorrect) true else !selected && !isCorrect
     }
 
     inner class Hint internal constructor(@StringRes var hint: Int) {

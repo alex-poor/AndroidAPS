@@ -19,11 +19,6 @@
         app:showAsAction="never"
         android:title="@string/treatments" />
     <item
-        android:id="@+id/nav_historybrowser"
-        android:orderInCategory="1"
-        app:showAsAction="never"
-        android:title="@string/nav_history_browser" />
-    <item
         android:id="@+id/nav_setupwizard"
         android:orderInCategory="1"
         app:showAsAction="never"
@@ -33,12 +28,6 @@
         android:orderInCategory="1"
         app:showAsAction="never"
         android:title="@string/statistics" />
-    <!--    <item
-            android:id="@+id/nav_survey"
-            android:orderInCategory="1"
-            app:showAsAction="never"
-            android:title="@string/nav_survey" />
-    -->
     <item
         android:id="@+id/nav_defaultprofile"
         android:orderInCategory="1"

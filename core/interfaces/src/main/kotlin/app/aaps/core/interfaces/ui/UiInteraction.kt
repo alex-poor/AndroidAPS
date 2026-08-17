@@ -13,14 +13,12 @@ import app.aaps.core.interfaces.nsclient.NSAlarm
 interface UiInteraction {
 
     val mainActivity: Class<*>
-    val tddStatsActivity: Class<*>
-    val historyBrowseActivity: Class<*>
+    val historyActivity: Class<*>
     val errorHelperActivity: Class<*>
     val bolusProgressHelperActivity: Class<*>
     val singleFragmentActivity: Class<*>
     val preferencesActivity: Class<*>
     val myPreferenceFragment: Class<*>
-    val quickWizardListActivity: Class<*>
 
     companion object {
 
@@ -66,7 +64,6 @@ interface UiInteraction {
         VIEW(1),
         EDIT(2)
     }
-    fun runSiteRotationDialog(fragmentManager: FragmentManager)
     fun runBolusProgressDialog(fragmentManager: FragmentManager)
     enum class Mode(val i: Int) {
         RUNNING_PROFILE(1),

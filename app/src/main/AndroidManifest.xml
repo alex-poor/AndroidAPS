@@ -15,7 +15,6 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="com.dexcom.cgm.EXTERNAL_PERMISSION" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
@@ -23,9 +22,6 @@
 
     <!-- To receive data from xdrip. -->
     <uses-permission android:name="com.eveningoutpost.dexdrip.permissions.RECEIVE_BG_ESTIMATE" />
-
-    <!-- To receive data from Aidex -->
-    <uses-permission android:name="com.microtechmd.cgms.aidex.permissions.RECEIVE_BG_ESTIMATE" />
 
     <application
         android:name="app.aaps.MainApp"
@@ -42,16 +38,8 @@
         <profileable android:shell="true" />
 
         <meta-data
-            android:name="com.google.android.gms.version"
-            android:value="@integer/google_play_services_version" />
-
-        <meta-data
             android:name="com.google.android.backup.api_key"
             android:value="AEdPqrEAAAAI3JiApyMrbP2QFzZ2fYfCPsgjkRp53Dm2S1-zPQ" />
-
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
 
         <activity
             android:name="app.aaps.MainActivity"
@@ -68,10 +56,6 @@
             android:name="app.aaps.activities.PreferencesActivity"
             android:exported="false"
             android:theme="@style/AppTheme" />
-        <activity
-            android:name="app.aaps.activities.HistoryBrowseActivity"
-            android:exported="false"
-            android:theme="@style/AppTheme" />
         <!-- Receive new BG readings from other local apps -->
         <receiver
             android:name="app.aaps.receivers.DataReceiver"
@@ -80,40 +64,6 @@
             <intent-filter>
                 <!-- Receiver from xDrip -->
                 <action android:name="com.eveningoutpost.dexdrip.BgEstimate" />
-                <!-- Receiver from 640g uploader -->
-                <action android:name="com.eveningoutpost.dexdrip.NS_EMULATOR" />
-                <!-- Receiver from glimp -->
-                <action android:name="it.ct.glicemia.ACTION_GLUCOSE_MEASURED" />
-                <!-- Receiver from Dexcom -->
-                <action android:name="com.dexcom.cgm.EXTERNAL_BROADCAST" />
-                <action android:name="com.dexcom.g7.EXTERNAL_BROADCAST" />
-                <!-- Receiver from Poctech -->
-                <action android:name="com.china.poctech.data" />
-                <!-- Receiver from Tomato -->
-                <action android:name="com.fanqies.tomatofn.BgEstimate" />
-                <!-- Receiver from GlucoRx Aidex -->
-                <action android:name="com.microtechmd.cgms.aidex.action.BgEstimate" />
-                <!-- Receiver from patched Ottai app (International) -->
-                <action android:name="info.nightscout.androidaps.action.OTTAI_APP" />
-                <!-- Receiver from patched Syai Tag app -->
-                <action android:name="info.nightscout.androidaps.action.SYAI_TAG_APP" />
-                <!-- Receiver from patched Ottai app (China) -->
-                <action android:name="cn.diyaps.sharing.OT_APP" />
-                <!-- Receiver from patched SI app -->
-                <action android:name="cn.diyaps.sharing.SI_APP" />
-                <!-- Receiver from patched Sino app -->
-                <action android:name="cn.diyaps.sharing.SINO_APP" />
-            </intent-filter>
-        </receiver>
-
-        <!-- Receive new SMS messages -->
-        <receiver
-            android:name="app.aaps.receivers.SmsReceiver"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.BROADCAST_SMS">
-            <intent-filter>
-                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
 
