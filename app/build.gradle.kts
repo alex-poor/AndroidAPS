@@ -51,6 +51,17 @@ fun generateDate(): String {
 
 fun isMaster(): Boolean = !Versions.appVersion.contains("-")
 
+/**
+ * Version string plus an optional build-only label, set with `-PappVersionSuffix=pumpfix`.
+ *
+ * Hand-built APKs need to be tellable apart on the phone ("is the running loop the build with the
+ * fix in it?"). This does that without rewriting the committed [Versions.appVersion] — the previous
+ * approach `sed`-ed a tracked file and relied on an EXIT trap to put it back, which left the working
+ * tree dirty whenever a build was killed rather than exiting.
+ */
+fun appVersionName(): String =
+    Versions.appVersion + (properties["appVersionSuffix"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { "-$it" } ?: "")
+
 fun gitAvailable(): Boolean {
     try {
         val processBuilder = ProcessBuilder("git", "--version")
@@ -115,7 +126,7 @@ android {
             applicationId = "info.nightscout.androidaps"
             dimension = "standard"
             resValue("string", "app_name", "AAPS")
-            versionName = Versions.appVersion
+            versionName = appVersionName()
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
             manifestPlaceholders["appIconRound"] = "@mipmap/ic_launcher_round"
         }
@@ -123,7 +134,7 @@ android {
             applicationId = "info.nightscout.aapspumpcontrol"
             dimension = "standard"
             resValue("string", "app_name", "Pumpcontrol")
-            versionName = Versions.appVersion + "-pumpcontrol"
+            versionName = appVersionName() + "-pumpcontrol"
             manifestPlaceholders["appIcon"] = "@mipmap/ic_pumpcontrol"
             manifestPlaceholders["appIconRound"] = "@null"
         }
@@ -131,7 +142,7 @@ android {
             applicationId = "info.nightscout.aapsclient"
             dimension = "standard"
             resValue("string", "app_name", "AAPSClient")
-            versionName = Versions.appVersion + "-aapsclient"
+            versionName = appVersionName() + "-aapsclient"
             manifestPlaceholders["appIcon"] = "@mipmap/ic_yellowowl"
             manifestPlaceholders["appIconRound"] = "@mipmap/ic_yellowowl"
         }
@@ -139,7 +150,7 @@ android {
             applicationId = "info.nightscout.aapsclient2"
             dimension = "standard"
             resValue("string", "app_name", "AAPSClient2")
-            versionName = Versions.appVersion + "-aapsclient"
+            versionName = appVersionName() + "-aapsclient"
             manifestPlaceholders["appIcon"] = "@mipmap/ic_blueowl"
             manifestPlaceholders["appIconRound"] = "@mipmap/ic_blueowl"
         }
