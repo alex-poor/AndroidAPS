@@ -185,6 +185,24 @@ screens, YpsoPump status, and around a dozen legacy dialogs.
 - **Fresh-site advisory** — see [section 3](#3-infusion-site-handling)
 - The second confirmation popup was removed; the hold-to-deliver control is the confirmation
 
+### What it looks like
+
+Captured on the phone that runs the loop, so every number is live data rather than a mock-up.
+
+| | | |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/home.png" width="240" alt="Home screen"> | <img src="docs/screenshots/home-details.png" width="240" alt="Details sheet"> | <img src="docs/screenshots/bolus-wizard.png" width="240" alt="Bolus wizard"> |
+| **Home** — hero card, supplies, glucose graph | **Details** — supplies, loop & sensitivity | **Bolus wizard** — carbs, pre-bolus, absorption |
+| <img src="docs/screenshots/loop-control.png" width="240" alt="Loop control sheet"> | <img src="docs/screenshots/temp-target.png" width="240" alt="Temp target sheet"> | <img src="docs/screenshots/actions.png" width="240" alt="Actions screen"> |
+| **Loop control** — mode, suspend, disconnect | **Temp target** — intent presets, then adjust | **Actions** — therapy, event log, tools |
+| <img src="docs/screenshots/algorithm-hovorkampc.png" width="240" alt="HovorkaMPC screen"> | <img src="docs/screenshots/statistics.png" width="240" alt="Statistics screen"> | <img src="docs/screenshots/history.png" width="240" alt="History timeline"> |
+| **HovorkaMPC** — model response and its switches | **Statistics** — TIR, GMI, CV, TDD | **History** — unified, day-grouped timeline |
+| <img src="docs/screenshots/profile.png" width="240" alt="Profile screen"> | <img src="docs/screenshots/config-builder.png" width="240" alt="Config Builder screen"> | |
+| **Profile** — DIA, basal curve, ISF/IC/target | **Config Builder** — active loop, plugins, settings | |
+
+The dark theme is the only theme; the design is mmol/L-first, and the accent colour is reserved for
+"this is tappable" while greens, ambers and reds mean glucose or loop state and nothing else.
+
 ---
 
 ## 5. Slim loop build
