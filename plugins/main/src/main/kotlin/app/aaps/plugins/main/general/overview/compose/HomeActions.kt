@@ -19,5 +19,6 @@ data class HomeActions(
     val onBasal: () -> Unit = {},
     val onRange: (hours: Int) -> Unit = {},   // graph range segmented control
     val onCalibration: () -> Unit = {},       // "+" overflow → calibrate CGM
-    val onInsulinRecord: () -> Unit = {}      // "+" overflow → log a bolus WITHOUT delivering (reconcile a pump/pen dose AAPS missed)
+    val onInsulinRecord: () -> Unit = {},     // "+" overflow → log a bolus WITHOUT delivering (reconcile a pump/pen dose AAPS missed)
+    val onDismissAlert: (alert: HomeUiState.Alert) -> Unit = {} // snooze/act on a home notification
 )

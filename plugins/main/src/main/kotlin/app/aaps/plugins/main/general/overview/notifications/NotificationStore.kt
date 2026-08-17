@@ -7,11 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.media.RingtoneManager
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
 import androidx.core.app.NotificationCompat
-import androidx.recyclerview.widget.RecyclerView
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.notifications.Notification
@@ -23,8 +19,6 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.plugins.main.R
-import app.aaps.plugins.main.databinding.OverviewNotificationItemBinding
 import app.aaps.plugins.main.general.overview.notifications.events.EventUpdateOverviewNotification
 import app.aaps.plugins.main.general.overview.notifications.receivers.DismissNotificationReceiver
 import java.util.Collections
@@ -145,57 +139,23 @@ class NotificationStore @Inject constructor(
         mNotificationManager.createNotificationChannel(channel)
     }
 
+    /**
+     * Current, non-expired notifications for the Compose home. The RecyclerView path below is the
+     * legacy overview's; this is the same data without a View attached.
+     */
     @Synchronized
-    fun updateNotifications(notificationsView: RecyclerView) {
+    fun snapshot(): List<Notification> {
         removeExpired()
-        val clonedStore = ArrayList(store)
-        if (clonedStore.isNotEmpty()) {
-            val adapter = NotificationRecyclerViewAdapter(clonedStore)
-            notificationsView.adapter = adapter
-            notificationsView.visibility = View.VISIBLE
-        } else {
-            notificationsView.visibility = View.GONE
-        }
+        return ArrayList(store)
     }
 
-    inner class NotificationRecyclerViewAdapter internal constructor(private val notificationsList: List<Notification>) :
-        RecyclerView.Adapter<NotificationRecyclerViewAdapter.NotificationsViewHolder>() {
-
-        override fun onCreateViewHolder(viewGroup: ViewGroup, viewType: Int): NotificationsViewHolder =
-            NotificationsViewHolder(LayoutInflater.from(viewGroup.context).inflate(R.layout.overview_notification_item, viewGroup, false))
-
-        override fun onBindViewHolder(holder: NotificationsViewHolder, position: Int) {
-            val notification = notificationsList[position]
-            holder.binding.dismiss.tag = notification
-            if (notification.buttonText != 0) holder.binding.dismiss.setText(notification.buttonText)
-            else holder.binding.dismiss.setText(app.aaps.core.ui.R.string.snooze)
-            @Suppress("SetTextI18n")
-            holder.binding.text.text = dateUtil.timeString(notification.date) + " " + notification.text
-            when (notification.level) {
-                Notification.URGENT       -> holder.binding.cv.setBackgroundColor(rh.gac(app.aaps.core.ui.R.attr.notificationUrgent))
-                Notification.NORMAL       -> holder.binding.cv.setBackgroundColor(rh.gac(app.aaps.core.ui.R.attr.notificationNormal))
-                Notification.LOW          -> holder.binding.cv.setBackgroundColor(rh.gac(app.aaps.core.ui.R.attr.notificationLow))
-                Notification.INFO         -> holder.binding.cv.setBackgroundColor(rh.gac(app.aaps.core.ui.R.attr.notificationInfo))
-                Notification.ANNOUNCEMENT -> holder.binding.cv.setBackgroundColor(rh.gac(app.aaps.core.ui.R.attr.notificationAnnouncement))
-            }
-        }
-
-        override fun getItemCount(): Int {
-            return notificationsList.size
-        }
-
-        inner class NotificationsViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-
-            val binding = OverviewNotificationItemBinding.bind(itemView)
-
-            init {
-                binding.dismiss.setOnClickListener {
-                    val notification = it.tag as Notification
-                    notification.contextForAction = itemView.context
-                    notification.action?.run()
-                    if (remove(notification.id)) activePlugin.activeOverview.overviewBus.send(EventUpdateOverviewNotification("NotificationCleared"))
-                }
-            }
-        }
+    /**
+     * Dismiss from the Compose home: runs the notification's own action (some carry one, e.g. the
+     * "open settings" notifications) and then removes it, exactly as the legacy dismiss button did.
+     */
+    fun dismiss(notification: Notification, context: Context) {
+        notification.contextForAction = context
+        notification.action?.run()
+        if (remove(notification.id)) activePlugin.activeOverview.overviewBus.send(EventUpdateOverviewNotification("NotificationCleared"))
     }
 }

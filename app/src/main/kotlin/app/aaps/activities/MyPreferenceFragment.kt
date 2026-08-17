@@ -51,10 +51,7 @@ import app.aaps.core.validators.preferences.AdaptiveListPreference
 import app.aaps.core.validators.preferences.AdaptiveStringPreference
 import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
 import app.aaps.plugins.aps.autotune.AutotunePlugin
-import app.aaps.plugins.automation.AutomationPlugin
 import app.aaps.plugins.configuration.maintenance.MaintenancePlugin
-import app.aaps.plugins.main.general.smsCommunicator.SmsCommunicatorPlugin
-import app.aaps.plugins.main.skins.SkinProvider
 import dagger.android.support.AndroidSupportInjection
 import java.util.Vector
 import javax.inject.Inject
@@ -71,11 +68,8 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var config: Config
     @Inject lateinit var passwordCheck: PasswordCheck
-    @Inject lateinit var automationPlugin: AutomationPlugin
     @Inject lateinit var autotunePlugin: AutotunePlugin
-    @Inject lateinit var smsCommunicatorPlugin: SmsCommunicatorPlugin
     @Inject lateinit var maintenancePlugin: MaintenancePlugin
-    @Inject lateinit var skinProvider: SkinProvider
     @Inject lateinit var overview: Overview
 
     companion object {
@@ -149,8 +143,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
             addPumpScreen(rootKey)
             addPreferencesIfEnabled(activePlugin.activeInsulin as PluginBase, rootKey)
             activePlugin.getSpecificPluginsList(PluginType.SYNC).forEach { addPreferencesIfEnabled(it, rootKey) }
-            addPreferencesIfEnabled(smsCommunicatorPlugin, rootKey)
-            addPreferencesIfEnabled(automationPlugin, rootKey)
             addPreferencesIfEnabled(autotunePlugin, rootKey)
             addAlertScreen(rootKey)
             addPreferencesIfEnabled(maintenancePlugin, rootKey)
@@ -372,14 +364,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         val languageValues = arrayOf<CharSequence>("default", "en", "af", "bg", "cs", "de", "dk", "fr", "nl", "es", "el", "ga", "it", "ko", "lt", "nb", "pl", "pt", "pt_BR", "ro", "ru", "sk", "sv", "tr", "zh_TW", "zh_CN")
         assert(languageEntries.size == languageValues.size)
 
-        val skinEntries = Vector<CharSequence>()
-        val skinValues = Vector<CharSequence>()
-
-        for (skin in skinProvider.list) {
-            skinValues.addElement(skin.javaClass.name)
-            skinEntries.addElement(context.getString(skin.description))
-        }
-
         val darkModeEntries = arrayOf<CharSequence>(
             rh.gs(app.aaps.plugins.main.R.string.dark_theme),
             rh.gs(app.aaps.plugins.main.R.string.light_theme),
@@ -406,7 +390,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
                     validatorParams = DefaultEditTextValidator.Parameters(testType = EditTextValidator.TEST_PERSONNAME)
                 )
             )
-            addPreference(AdaptiveListPreference(ctx = context, stringKey = StringKey.GeneralSkin, title = app.aaps.plugins.main.R.string.skin, entries = skinEntries.toTypedArray(), entryValues = skinValues.toTypedArray()))
             addPreference(
                 AdaptiveListPreference(
                     ctx = context,

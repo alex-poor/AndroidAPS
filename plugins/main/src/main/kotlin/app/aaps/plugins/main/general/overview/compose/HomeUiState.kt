@@ -56,8 +56,24 @@ data class HomeUiState(
     val profileName: String = "",
     val tempTarget: String? = null,
 
-    val ready: Boolean = false             // becomes true once first real refresh has run
+    val ready: Boolean = false,            // becomes true once first real refresh has run
+
+    // Active notifications (pump unreachable, NS alarms, profile failures...). The legacy overview
+    // showed these in a RecyclerView under the graph; nothing displayed them after that hierarchy
+    // was hidden, so they live on the hero now.
+    val notifications: List<Alert> = emptyList()
 ) {
+
+    /** One active notification, already resolved to presentation strings. */
+    @Immutable
+    data class Alert(
+        val id: Int,
+        val text: String,
+        val time: String,
+        val level: Int,          // Notification.URGENT / NORMAL / LOW / INFO / ANNOUNCEMENT
+        val buttonText: String
+    )
+
 
     @Immutable
     data class Supply(

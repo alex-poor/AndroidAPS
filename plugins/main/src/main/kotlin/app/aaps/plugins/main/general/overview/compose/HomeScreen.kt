@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -45,6 +46,9 @@ import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsShape
+import app.aaps.core.compose.theme.AapsSemantic
+import app.aaps.core.compose.theme.AapsAccent
+import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -77,6 +81,7 @@ fun HomeScreen(
                     .padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
+                if (state.notifications.isNotEmpty()) AlertsCard(state.notifications, actions.onDismissAlert)
                 HeroCard(state, actions, onCobClick = { showCarbs = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
@@ -87,6 +92,50 @@ fun HomeScreen(
         }
         if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
+    }
+}
+
+/**
+ * Active notifications. Urgent/normal alerts are the reason the loop may not be doing what the hero
+ * says, so they sit above it. Tapping the button runs the notification's action and clears it — the
+ * same behaviour as the legacy dismiss button.
+ */
+@Composable
+private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.Alert) -> Unit) {
+    val colors = AapsTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
+        alerts.forEach { alert ->
+            val tint = when (alert.level) {
+                Notification.URGENT -> AapsSemantic.low
+                Notification.NORMAL -> AapsSemantic.high
+                Notification.LOW    -> AapsSemantic.inRange
+                else                -> AapsAccent.accent
+            }
+            AapsCard(shape = AapsShape.cardSmall) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .padding(end = 10.dp)
+                            .size(width = 3.dp, height = 30.dp)
+                            .clip(AapsShape.pill)
+                            .background(tint)
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(alert.text, style = AapsType.body, color = colors.textPrimary)
+                        Text(alert.time, style = AapsType.caption, color = colors.textTertiary)
+                    }
+                    Text(
+                        alert.buttonText,
+                        style = AapsType.label,
+                        color = tint,
+                        modifier = Modifier
+                            .clip(AapsShape.button)
+                            .clickable { onDismiss(alert) }
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -143,7 +192,9 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                     .background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.07f))
                     .height(1.dp)
             )
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            // Shifted left by exactly the stat's own inset (see HeroStat) so the labels still line up
+            // with the BG value above while their tap/ripple area keeps clear of the rounded corners.
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp).offset(x = -HeroStatInset)) {
                 HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = actions.onIob)
                 HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
                 HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
@@ -151,6 +202,16 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
         }
     }
 }
+
+/**
+ * Inset between a [HeroStat]'s clipped/clickable bounds and its content.
+ *
+ * `cardSmall` is a 14.dp radius, so at the top of the first line the corner curve cuts ~7.dp into the
+ * row — enough to shave the top-left off the label's first glyph ("IOB" rendered as "iOB"). Padding
+ * inside the clip keeps the text clear of the curve; the Row above cancels the indent with a matching
+ * negative offset.
+ */
+private val HeroStatInset = 8.dp
 
 @Composable
 private fun HeroStat(
@@ -163,7 +224,8 @@ private fun HeroStat(
 ) {
     val colors = AapsTheme.colors
     Column(
-        (if (onClick != null) modifier.clip(AapsShape.cardSmall).clickable(onClick = onClick) else modifier).padding(vertical = 2.dp),
+        (if (onClick != null) modifier.clip(AapsShape.cardSmall).clickable(onClick = onClick) else modifier)
+            .padding(horizontal = HeroStatInset, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Text(label, style = AapsType.label, color = colors.textSecondary)

@@ -248,14 +248,6 @@ class OverviewPlugin @Inject constructor(
                 addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.OverviewShowCgmButton, summary = R.string.show_cgm_button_summary, title = R.string.cgm))
                 addPreference(AdaptiveSwitchPreference(ctx = context, booleanKey = BooleanKey.OverviewShowCalibrationButton, summary = R.string.show_calibration_button_summary, title = app.aaps.core.ui.R.string.calibration))
             })
-            addPreference(
-                AdaptiveIntentPreference(
-                    ctx = context,
-                    intentKey = IntentKey.OverviewQuickWizardSettings,
-                    title = R.string.quickwizard_settings,
-                    intent = Intent(context, uiInteraction.quickWizardListActivity)
-                )
-            )
             addPreference(preferenceManager.createPreferenceScreen(context).apply {
                 key = "default_temp_targets_settings"
                 title = rh.gs(R.string.default_temptargets)
