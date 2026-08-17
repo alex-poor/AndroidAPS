@@ -33,6 +33,7 @@ import app.aaps.core.interfaces.utils.DecimalFormatter
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
+import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -132,7 +133,13 @@ class TreatmentDialog : DaggerDialogFragment() {
         }
         if (insulinAfterConstraints > 0 || carbsAfterConstraints > 0) {
             activity?.let { activity ->
-                OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.overview_treatment_label), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
+                // Delivering insulin uses the same press-and-hold as the Bolus Wizard; carbs-only and
+                // record-only stay a plain tap, since nothing reaches the pump.
+                val delivers = insulinAfterConstraints > 0 && !recordOnlyChecked
+                val confirm: (String, android.text.Spanned, Runnable) -> Unit =
+                    if (delivers) { t2, m, r -> HoldConfirmDialog.show(activity, t2, m, r) }
+                    else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
+                confirm(rh.gs(app.aaps.core.ui.R.string.overview_treatment_label), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     val action = when {
                         insulinAfterConstraints.equals(0.0) -> Action.CARBS
                         carbsAfterConstraints == 0          -> Action.BOLUS

@@ -39,6 +39,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
+import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -155,7 +156,10 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
 
         if (insulinAfterConstraints > 0 || siteChange || insulinChange) {
             activity?.let { activity ->
-                OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.prime_fill), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
+                val confirm: (String, android.text.Spanned, Runnable) -> Unit =
+                    if (insulinAfterConstraints > 0) { t2, m, r -> HoldConfirmDialog.show(activity, t2, m, r) }
+                    else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
+                confirm(rh.gs(app.aaps.core.ui.R.string.prime_fill), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (insulinAfterConstraints > 0) {
                         uel.log(
                             action = Action.PRIME_BOLUS, source = Sources.FillDialog,
@@ -178,16 +182,6 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
                                 ValueWithUnit.TEType(TE.Type.CANNULA_CHANGE)
                             )
                         ).subscribe()
-                        if (preferences.get(BooleanKey.SiteRotationManagePump)) {
-                            SiteRotationDialog().also { srd ->
-                                srd.arguments = Bundle().also { args ->
-                                    args.putLong("time", eventTime)
-                                    args.putInt("siteMode", UiInteraction.SiteMode.EDIT.ordinal)
-                                    args.putInt("siteType", TE.Type.CANNULA_CHANGE.ordinal)
-                                }
-                                srd.show(fm, "SiteRotationViewDialog")
-                            }
-                        }
                     }
                     if (insulinChange)
                     // add a second for case of both checked
@@ -204,7 +198,7 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
                                 ValueWithUnit.TEType(TE.Type.INSULIN_CHANGE)
                             )
                         ).subscribe()
-                }, null)
+                })
             }
         } else {
             activity?.let { activity ->

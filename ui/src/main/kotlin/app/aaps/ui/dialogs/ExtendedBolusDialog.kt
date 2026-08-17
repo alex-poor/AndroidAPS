@@ -27,6 +27,7 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
+import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -96,7 +97,7 @@ class ExtendedBolusDialog : DaggerDialogFragment() {
             actions.add(rh.gs(app.aaps.core.ui.R.string.constraint_applied).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
 
         activity?.let { activity ->
-            OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.extended_bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
+            HoldConfirmDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.extended_bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                 uel.log(
                     action = Action.EXTENDED_BOLUS, source = Sources.ExtendedBolusDialog,
                     listValues = listOf(

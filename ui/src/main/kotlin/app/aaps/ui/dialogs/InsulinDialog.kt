@@ -19,7 +19,6 @@ import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.aps.Loop
-import app.aaps.core.interfaces.automation.Automation
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -45,6 +44,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
+import app.aaps.ui.dialogs.compose.HoldConfirmDialog
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -75,7 +75,6 @@ class InsulinDialog : DaggerDialogFragment() {
     @Inject lateinit var activePlugin: ActivePlugin
     @Inject lateinit var ctx: Context
     @Inject lateinit var config: Config
-    @Inject lateinit var automation: Automation
     @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var uiInteraction: UiInteraction
@@ -162,7 +161,11 @@ class InsulinDialog : DaggerDialogFragment() {
 
         if (insulinAfterConstraints > 0 || eatingSoonChecked) {
             activity?.let { activity ->
-                OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
+                val delivers = insulinAfterConstraints > 0 && !recordOnlyChecked
+                val confirm: (String, android.text.Spanned, Runnable) -> Unit =
+                    if (delivers) { t2, m, r -> HoldConfirmDialog.show(activity, t2, m, r) }
+                    else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
+                confirm(rh.gs(app.aaps.core.ui.R.string.bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (eatingSoonChecked) {
                         disposable += persistenceLayer.insertAndCancelCurrentTemporaryTarget(
                             TT(
@@ -195,17 +198,12 @@ class InsulinDialog : DaggerDialogFragment() {
                                 source = Sources.InsulinDialog,
                                 note = rh.gs(app.aaps.core.ui.R.string.record) + if (notes.isNotEmpty()) ": $notes" else ""
                             ).subscribe()
-                            if (timeOffset == 0)
-                                automation.removeAutomationEventBolusReminder()
                         } else {
                             uel.log(Action.BOLUS, Sources.InsulinDialog, notes, ValueWithUnit.Insulin(insulinAfterConstraints))
                             commandQueue.bolus(detailedBolusInfo, object : Callback() {
                                 override fun run() {
-                                    if (!result.success) {
+                                    if (!result.success)
                                         uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
-                                    } else {
-                                        automation.removeAutomationEventBolusReminder()
-                                    }
                                 }
                             })
                         }
