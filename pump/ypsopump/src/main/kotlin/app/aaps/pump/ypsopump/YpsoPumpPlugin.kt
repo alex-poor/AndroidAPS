@@ -19,9 +19,13 @@ import app.aaps.core.interfaces.pump.defs.fillFor
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.notifications.Notification
+import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventOverviewBolusProgress
+import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.ypsopump.ble.YpsoBleManager
 import app.aaps.pump.ypsopump.ble.YpsoBleManager.ConnectionState
@@ -52,6 +56,7 @@ class YpsoPumpPlugin @Inject constructor(
     private val dateUtil: DateUtil,
     private val rxBus: RxBus,
     private val profileFunction: ProfileFunction,
+    private val uiInteraction: UiInteraction,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>
 ) : PumpPluginBase(
     pluginDescription = PluginDescription()
@@ -73,7 +78,9 @@ class YpsoPumpPlugin @Inject constructor(
 
     // ---- state (read-only) ----
     override fun isInitialized(): Boolean = pumpState.lastConnectionTime > 0L
-    override fun isSuspended(): Boolean = pumpState.isSuspended
+    // An empty cartridge is a suspended pump as far as the loop is concerned — this is what puts AAPS
+    // into SUSPENDED_BY_PUMP (LoopPlugin) instead of letting it keep issuing doses into an empty pump.
+    override fun isSuspended(): Boolean = pumpState.isSuspended || reservoirEmpty()
     override fun isBusy(): Boolean = false
     override fun isConnected(): Boolean = pumpState.isConnected
     override fun isConnecting(): Boolean = pumpState.connectionState == ConnectionState.CONNECTING
@@ -170,7 +177,7 @@ class YpsoPumpPlugin @Inject constructor(
                 latch.await(20, java.util.concurrent.TimeUnit.MINUTES)   // counter discovery can take minutes
             }
 
-            else                                            -> bleManager.readStatus { reconcileSuspendTbr() }
+            else                                            -> bleManager.readStatus { onStatusRead() }
         }
     }
 
@@ -226,17 +233,38 @@ class YpsoPumpPlugin @Inject constructor(
         if (!ensureConnected()) return fail("not connected")
         bolusCancelRequested = false
 
+        // PRE-FLIGHT on a FRESH read, not on whatever the last status happened to say. A pump that is
+        // stopped (user Stop, occlusion, or an empty-reservoir auto-stop) accepts nothing, so without
+        // this the bolus used to sit at 0% for the full five-minute confirm window before failing.
+        // Refusing here costs one status read and turns that into an immediate, explainable failure.
+        readStatusBlocking()
+        if (pumpState.isSuspended) return fail(SUSPENDED_MESSAGE)
+        if (reservoirEmpty()) return fail(EMPTY_MESSAGE)
+
         // Baseline (prior-bolus 'injected' the pump still reports) — logged so validation can confirm whether
         // the pump RESETS deliveredUnits per bolus. Attribution only trusts values AFTER status goes
         // 'delivering', so a lingering prior reading alone can never be mistaken for this dose.
         val baseInjected = readBolusStatusBlocking()?.deliveredUnits ?: 0.0
 
-        // 1) START via the canary-gated write. 'started' is only the START-command ACK — droppable while the
-        //    pump still delivers — so it is NEVER used to decide what to record. The pump status is truth.
-        var started = false; var startMsg = ""
+        // 1) START via the canary-gated write. The ACK is droppable while the pump still delivers, so it is
+        //    NEVER used to decide what to record — the pump status is truth. What the outcome DOES decide is
+        //    how hard to look: only [BolusStart.NOT_SENT] proves the bolus characteristic was never written.
+        var startOutcome = YpsoBleManager.BolusStart.NOT_SENT; var startMsg = "no response from pump"
         val startLatch = java.util.concurrent.CountDownLatch(1)
-        bleManager.testBolusCanary(requested, bleManager.writeCounter) { ok, m -> started = ok; startMsg = m; startLatch.countDown() }
-        startLatch.await(2, java.util.concurrent.TimeUnit.MINUTES)
+        bleManager.startBolus(requested, bleManager.writeCounter) { o, m -> startOutcome = o; startMsg = m; startLatch.countDown() }
+        if (!startLatch.await(2, java.util.concurrent.TimeUnit.MINUTES)) {
+            // No callback at all — the write may still have landed. Treat as uncertain, never as "no bolus".
+            startOutcome = YpsoBleManager.BolusStart.UNCERTAIN
+            startMsg = "no start response within 2 min — confirming against the pump"
+        }
+        val started = startOutcome == YpsoBleManager.BolusStart.SENT
+        if (startOutcome == YpsoBleManager.BolusStart.NOT_SENT) {
+            // Certain no-op: the bolus char was never written, so there is nothing to confirm and nothing
+            // to record. Return NOW rather than polling a pump that isn't delivering.
+            rxBus.send(EventOverviewBolusProgress(rh, percent = 100, id = detailedBolusInfo.id))
+            aapsLogger.warn(LTag.PUMP, "YpsoPump bolus NOT SENT: $startMsg")
+            return fail(if (pumpState.isSuspended) SUSPENDED_MESSAGE else "bolus not sent: $startMsg")
+        }
 
         // 2) CONFIRM-BY-READ: poll the pump's status until delivery finishes (or timeout / cancel / disconnect),
         //    tracking the actual delivered units and driving the progress bar (fixes the stuck-at-0%).
@@ -294,6 +322,12 @@ class YpsoPumpPlugin @Inject constructor(
             }
         }
 
+        // 2c) Nothing confirmed? Then find out WHY before deciding what to record. The pre-flight said the
+        //     pump was running with insulin in it, and only a fresh read can tell us whether it stopped or
+        //     ran dry during the delivery — which is exactly the case where banking the requested dose
+        //     would invent IOB. This also raises the empty-reservoir alarm at the moment it happens.
+        if (!(sawDelivering && delivered > 0.0)) readStatusBlocking()
+
         // 3) RECORD the pump's TRUTH — never gated on the droppable start ack.
         return when {
             sawDelivering && delivered > 0.0 -> {                            // confirmed (possibly partial)
@@ -302,10 +336,24 @@ class YpsoPumpPlugin @Inject constructor(
                 pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(delivered)
                     .comment("YpsoPump: delivered %.2fU%s".format(delivered, if (partial) " (PARTIAL of %.2f)".format(requested) else ""))
             }
+            // The pump told us it is not delivering. Recording the request here is what manufactured
+            // phantom IOB the day the reservoir ran dry: every "unconfirmed" dose was banked as real
+            // while nothing went in, and the loop then under-dosed against an IOB that did not exist.
+            // A stopped or empty pump is not an ambiguous read — it is a known no-delivery state.
+            pumpState.isSuspended || reservoirEmpty() -> {
+                aapsLogger.error(LTag.PUMP, "YpsoPump bolus: pump ${if (pumpState.isSuspended) "stopped" else "reservoir empty"} and nothing confirmed — recording NOTHING (start=$startMsg)")
+                notifyNoDelivery()
+                fail(if (pumpState.isSuspended) SUSPENDED_MESSAGE else EMPTY_MESSAGE)
+            }
             started                          -> {                            // ack OK but read never confirmed:
                 // FAIL SAFE for the loop — record the requested dose so IOB is if anything OVER-stated (loop
                 // then UNDER-doses) rather than the dangerous under-count that over-doses. Warn to verify.
                 syncBolus(detailedBolusInfo, requested)
+                uiInteraction.addNotification(
+                    Notification.PUMP_SYNC_ERROR,
+                    "Bolus of %.2f U could not be confirmed on the pump. It was recorded so IOB is not under-counted — check the pump's history and remove it from Recent insulin if it was not delivered.".format(requested),
+                    Notification.URGENT
+                )
                 pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(requested)
                     .comment("YpsoPump: UNCONFIRMED — recorded %.2fU, VERIFY on pump".format(requested))
             }
@@ -360,10 +408,94 @@ class YpsoPumpPlugin @Inject constructor(
     private val suspendTbrWindowMin = 30L
     private var suspendTbrStartMs = 0L
 
+    /** Everything that must happen after a status read lands: mirror a pump-side stop, then check supplies. */
+    private fun onStatusRead() {
+        reconcileSuspendTbr()
+        checkReservoir()
+    }
+
+    /**
+     * Reservoir surveillance.
+     *
+     * The pump running dry is the one failure this app used to be completely silent about: the loop kept
+     * commanding basal and boluses, the reservoir pill on Home *disappeared* at zero (it was only drawn
+     * when `> 0`), and the first sign anything was wrong was the glucose curve. So: warn while there is
+     * still time to act, alarm when there isn't.
+     *
+     * Gated on a status read having actually succeeded — [YpsoPumpState.reservoirUnits] is 0.0 before the
+     * first read and after [YpsoPumpState.reset], and alarming on "not read yet" would train the alarm out.
+     */
+    private fun checkReservoir() {
+        if (pumpState.lastStatusTime <= 0L) return
+        val units = pumpState.reservoirUnits
+        // Thresholds come from the app's OWN reservoir preferences (Overview → status lights), which
+        // already exist, are already translated and are already on a settings screen. They were left
+        // unread when the redesign dropped the status-lights row; this puts them back to work rather
+        // than inventing a second set of numbers nobody can find.
+        //
+        // Only CRITICAL raises a notification. "Warning" is the level the status lights always meant —
+        // a colour, not a nag — and it stays a colour, on the Home reservoir pill.
+        val level = when {
+            units <= RESERVOIR_EMPTY_UNITS                  -> ReservoirLevel.EMPTY
+            units <= preferences.get(IntKey.OverviewResCritical) -> ReservoirLevel.LOW
+            else                                            -> ReservoirLevel.OK
+        }
+        // Clear the other alerts only when the level actually MOVED. Raising is left unconditional: the
+        // store de-dupes by id (so the alarm doesn't re-sound every read) but a user who swipes an empty
+        // reservoir away and does nothing about it gets it back on the next read, which is the point.
+        if (level != lastReservoirLevel) {
+            if (level != ReservoirLevel.EMPTY) rxBus.send(EventDismissNotification(Notification.PUMP_RESERVOIR_EMPTY))
+            if (level != ReservoirLevel.LOW) rxBus.send(EventDismissNotification(Notification.PUMP_RESERVOIR_LOW))
+            lastReservoirLevel = level
+        }
+        when (level) {
+            ReservoirLevel.EMPTY -> uiInteraction.addNotificationWithSound(
+                Notification.PUMP_RESERVOIR_EMPTY,
+                "Pump reservoir is EMPTY — no insulin is being delivered. Change the cartridge now.",
+                Notification.URGENT,
+                app.aaps.core.ui.R.raw.alarm
+            )
+
+            ReservoirLevel.LOW   -> uiInteraction.addNotification(
+                Notification.PUMP_RESERVOIR_LOW,
+                "Pump reservoir low: %.0f U left. Change the cartridge soon.".format(units),
+                Notification.URGENT
+            )
+
+            ReservoirLevel.OK    -> Unit
+        }
+    }
+
+    private enum class ReservoirLevel { OK, LOW, EMPTY }
+
+    private var lastReservoirLevel = ReservoirLevel.OK
+
+    /** True only on a fresh read — see [checkReservoir] for why "0.0" alone is not enough. */
+    private fun reservoirEmpty(): Boolean = pumpState.lastStatusTime > 0L && pumpState.reservoirUnits <= RESERVOIR_EMPTY_UNITS
+
+    /** One blocking status read, so a pre-flight check tests the pump's state now, not minutes ago. */
+    private fun readStatusBlocking(timeoutMs: Long = 8000) {
+        val l = java.util.concurrent.CountDownLatch(1)
+        bleManager.readStatus { onStatusRead(); l.countDown() }
+        l.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    /** Raise the alarm for a dose the pump could not take, so a refusal is never silent. */
+    private fun notifyNoDelivery() {
+        if (reservoirEmpty()) checkReservoir()
+        else uiInteraction.addNotificationWithSound(
+            Notification.PUMP_SUSPENDED, SUSPENDED_MESSAGE, Notification.URGENT, app.aaps.core.ui.R.raw.boluserror
+        )
+    }
+
     private fun reconcileSuspendTbr() {
         val now = dateUtil.now()
+        // An EMPTY reservoir is a not-delivering state exactly like a stop, whether or not the pump has
+        // already flagged itself stopped. Without this the basal IOB kept accruing against insulin that
+        // was never pushed — half of the IOB error after the cartridge ran dry.
+        val notDelivering = pumpState.isSuspended || reservoirEmpty()
         when {
-            pumpState.isSuspended && suspendTbrStartMs == 0L -> {                 // pump just stopped
+            notDelivering && suspendTbrStartMs == 0L -> {                 // pump just stopped
                 suspendTbrStartMs = now
                 pumpSync.syncTemporaryBasalWithPumpId(
                     timestamp = now, rate = 0.0, duration = T.mins(suspendTbrWindowMin).msecs(),
@@ -372,7 +504,7 @@ class YpsoPumpPlugin @Inject constructor(
                 )
                 aapsLogger.info(LTag.PUMP, "YpsoPump: pump suspended -> recorded PUMP_SUSPEND 0-TBR")
             }
-            pumpState.isSuspended && suspendTbrStartMs != 0L -> {                 // still stopped: extend window
+            notDelivering && suspendTbrStartMs != 0L -> {                 // still stopped: extend window
                 pumpSync.syncTemporaryBasalWithPumpId(
                     timestamp = suspendTbrStartMs, rate = 0.0,
                     duration = (now - suspendTbrStartMs) + T.mins(suspendTbrWindowMin).msecs(),
@@ -380,7 +512,7 @@ class YpsoPumpPlugin @Inject constructor(
                     pumpId = suspendTbrStartMs, pumpType = PumpType.YPSOPUMP, pumpSerial = serialNumber()
                 )
             }
-            !pumpState.isSuspended && suspendTbrStartMs != 0L -> {                // resumed: end it
+            !notDelivering && suspendTbrStartMs != 0L -> {                // resumed: end it
                 pumpSync.syncStopTemporaryBasalWithPumpId(now, now, PumpType.YPSOPUMP, serialNumber())
                 aapsLogger.info(LTag.PUMP, "YpsoPump: pump resumed -> ended PUMP_SUSPEND 0-TBR")
                 suspendTbrStartMs = 0L
@@ -391,6 +523,11 @@ class YpsoPumpPlugin @Inject constructor(
     override fun setTempBasalPercent(percent: Int, durationInMinutes: Int, profile: Profile, enforceNew: Boolean, tbrType: PumpSync.TemporaryBasalType): PumpEnactResult {
         val dur = round15(durationInMinutes)
         if (!ensureConnected()) return fail("not connected")
+        // A stopped or empty pump delivers nothing, and recording a TBR against it would overwrite the
+        // 0-rate PUMP_SUSPEND window [reconcileSuspendTbr] keeps — re-inflating IOB with insulin that
+        // never left the cartridge. Refuse instead; the loop switches to SUSPENDED_BY_PUMP on its own.
+        if (pumpState.isSuspended) return fail(SUSPENDED_MESSAGE)
+        if (reservoirEmpty()) return fail(EMPTY_MESSAGE)
         var accepted = false; var msg = ""
         val latch = java.util.concurrent.CountDownLatch(1)
         bleManager.testTbrCanary(percent, dur, bleManager.writeCounter) { ok, m -> accepted = ok; msg = m; latch.countDown() }
@@ -450,4 +587,16 @@ class YpsoPumpPlugin @Inject constructor(
     override fun timezoneOrDSTChanged(timeChangeType: TimeChangeType) {}
     override fun pumpSpecificShortStatus(veryShort: Boolean): String =
         "Reservoir ${pumpState.reservoirUnits}U Battery ${pumpState.batteryPercent}%"
+
+    companion object {
+
+        /** The pump reports remaining insulin in centi-units, so a true empty reads as exactly 0. */
+        private const val RESERVOIR_EMPTY_UNITS = 0.0
+
+        const val SUSPENDED_MESSAGE =
+            "Pump is stopped — it will not deliver insulin. Start it on the pump (Menu \u25b8 Run), then try again."
+
+        const val EMPTY_MESSAGE =
+            "Pump reservoir is empty — it cannot deliver insulin. Change the cartridge, then try again."
+    }
 }

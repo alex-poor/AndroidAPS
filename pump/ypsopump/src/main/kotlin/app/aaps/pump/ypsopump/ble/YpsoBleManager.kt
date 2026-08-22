@@ -567,8 +567,29 @@ class YpsoBleManager @Inject constructor(
      * can't be confirmed it ABORTS and the bolus char is never written. The write counter is persisted
      * after each accepted write so AAPS owns it across reconnects. [onResult] = (accepted, message).
      */
-    fun testBolusCanary(units: Double, seedW: Long, onResult: (Boolean, String) -> Unit) {
-        if (!isConnected || bluetoothGatt == null) { onResult(false, "not connected"); return }
+    fun testBolusCanary(units: Double, seedW: Long, onResult: (Boolean, String) -> Unit) =
+        startBolus(units, seedW) { outcome, msg -> onResult(outcome == BolusStart.SENT, msg) }
+
+    /**
+     * How far a bolus attempt got. The caller needs this to decide how long to keep confirming: only
+     * [NOT_SENT] is a *certain* no-op, and it is the state a stopped/empty pump lands in — knowing that
+     * is what lets the bolus fail in seconds instead of polling a dead pump for five minutes.
+     */
+    enum class BolusStart {
+        /** The bolus characteristic was written and the pump acked it. Confirm-by-read as usual. */
+        SENT,
+
+        /** We aborted BEFORE writing the bolus characteristic — the pump cannot have delivered. */
+        NOT_SENT,
+
+        /** The bolus characteristic WAS written but the ack didn't come back clean. The pump may have
+         *  delivered; the caller MUST confirm by reading the pump's own bolus status/history. */
+        UNCERTAIN
+    }
+
+    /** [testBolusCanary] with the outcome distinguished — see [BolusStart]. */
+    fun startBolus(units: Double, seedW: Long, onResult: (BolusStart, String) -> Unit) {
+        if (!isConnected || bluetoothGatt == null) { onResult(BolusStart.NOT_SENT, "not connected"); return }
         val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
         // SAFETY: unlike the TBR path, the BOLUS canary does NOT scan the counter forward. A dropped ack on a
         // bolus write can mean the pump ALREADY DELIVERED; self-healing the counter would let a retry double
@@ -576,35 +597,41 @@ class YpsoBleManager @Inject constructor(
         // CHAR_BOLUS_STATUS to confirm whether the prior bolus landed before allowing another.
         val candidates = listOf(seedW + 1, seedW, seedW + 2)
         fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(false, "canary failed (tried $candidates) — counter off, NO BOLUS sent (fail-closed; reseed after confirming no bolus was delivered)"); return }
+            if (i >= candidates.size) { onResult(BolusStart.NOT_SENT, "canary failed (tried $candidates) — counter off, NO BOLUS sent (fail-closed; reseed after confirming no bolus was delivered)"); return }
             val c = candidates[i]
             aapsLogger.info(LTag.PUMP, "YpsoPump canary index-write @counter=$c")
             writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
                 when (status) {
-                    BluetoothGatt.GATT_SUCCESS   -> {
+                    BluetoothGatt.GATT_SUCCESS -> {
                         persistWriteCounter()
                         aapsLogger.info(LTag.PUMP, "YpsoPump CANARY ACCEPTED @$c — counter locked; bolus will be @${c + 1}")
-                        sendTestBolus(units, c, onResult)
+                        sendBolus(units, c, onResult)
                     }
                     ERR_WRITE_REJECTED         -> tryCanary(i + 1)
-                    else                         -> onResult(false, "canary write status=$status — ABORT, NO BOLUS")
+                    else                       -> onResult(BolusStart.NOT_SENT, "canary write status=$status — ABORT, NO BOLUS")
                 }
             }
         }
         tryCanary(0)
     }
 
-    private fun sendTestBolus(units: Double, lockedCounter: Long, onResult: (Boolean, String) -> Unit) {
+    private fun sendBolus(units: Double, lockedCounter: Long, onResult: (BolusStart, String) -> Unit) {
         val cmd = BolusCommand(units)                          // standard/immediate bolus
         val boIns = cmd.encode()
         aapsLogger.info(LTag.PUMP, "YpsoPump >>> SENDING BOLUS ${units}U @counter=${lockedCounter + 1} raw=${boIns.joinToString("") { "%02x".format(it) }}")
         writeOnceAt(CHAR_BOLUS_START_STOP, YpsoCrc.appendCrc(boIns), lockedCounter + 1) { status ->
-            if (status != BluetoothGatt.GATT_SUCCESS) { onResult(false, "bolus REJECTED status=$status @${lockedCounter + 1} — check pump, likely not delivered"); return@writeOnceAt }
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                // The bolus char WAS written. An app-level rejection (138/139/…) means the pump refused
+                // it outright, but a link-level failure can also be a dropped ack on a delivered dose —
+                // so this is UNCERTAIN, never "didn't happen". The caller confirms by reading the pump.
+                onResult(BolusStart.UNCERTAIN, "bolus write not acked (status=$status) @${lockedCounter + 1} — confirming against the pump")
+                return@writeOnceAt
+            }
             persistWriteCounter()
             aapsLogger.info(LTag.PUMP, "YpsoPump >>> BOLUS ACCEPTED @${lockedCounter + 1}")
             readBolusStatus { st ->
                 pumpState.lastConnectionTime = System.currentTimeMillis()
-                onResult(true, "bolus accepted ${units}U; bolusStatus=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
+                onResult(BolusStart.SENT, "bolus accepted ${units}U; bolusStatus=${st?.bolusStatusCode} injected=${st?.deliveredUnits}U total=${st?.totalProgrammedUnits}U")
             }
         }
     }

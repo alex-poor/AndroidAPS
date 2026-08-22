@@ -144,6 +144,12 @@ open class Notification {
         const val EQUIL_ALARM = 93
         const val EQUIL_ALARM_INSULIN = 94
 
+        // The pump reservoir is running out / has run out. Stock AAPS has no such alert at all: a pump
+        // that runs dry just stops delivering, and the only clue was the reservoir figure quietly going
+        // to zero — while the loop carried on dosing into nothing.
+        const val PUMP_RESERVOIR_LOW = 95
+        const val PUMP_RESERVOIR_EMPTY = 96
+
         const val USER_MESSAGE = 1000
 
         const val IMPORTANCE_HIGH = 2
