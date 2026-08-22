@@ -47,6 +47,11 @@ data class HomeUiState(
     // Recent carb entries (last few hours) — shown in the COB-tap "undo carbs" sheet
     val recentCarbs: List<CarbEntry> = emptyList(),
 
+    // Recent insulin doses (last few hours) — shown in the IOB-tap sheet, with the IOB split below.
+    val recentInsulin: List<InsulinEntry> = emptyList(),
+    val iobBolus: String = "",
+    val iobBasal: String = "",
+
     // Graph range control (hours shown) — mirrors overviewData.rangeToDisplay
     val graphRangeHours: Int = 6,
 
@@ -83,6 +88,23 @@ data class HomeUiState(
         // When set (0f..1f) the pill draws a depleting countdown RING instead of a plain dot — used by
         // the sensor to show life remaining at a glance. null = plain dot (cannula/reservoir/battery).
         val fraction: Float? = null
+    )
+
+    /**
+     * One recent bolus — presentation strings plus the id/timestamp/amount the undo needs.
+     *
+     * The undo exists because a dose the pump never delivered still lands in the database (a dropped
+     * BLE ack is recorded as delivered on purpose, so IOB is over- rather than under-stated). When the
+     * pump turns out to have been stopped or empty, this is how that phantom insulin comes back out.
+     */
+    @Immutable
+    data class InsulinEntry(
+        val id: Long,
+        val time: String,      // "10:32"
+        val units: String,     // "1.20 U"
+        val kind: String,      // "" for a normal bolus, "SMB" otherwise
+        val timestamp: Long,   // for the removal confirmation + audit log
+        val amount: Double     // units, for the audit log
     )
 
     /** One recent carb record — presentation strings plus the id/timestamp/amount the undo needs. */

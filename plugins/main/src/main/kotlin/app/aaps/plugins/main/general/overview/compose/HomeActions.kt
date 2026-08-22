@@ -13,9 +13,9 @@ data class HomeActions(
     val onLoop: () -> Unit = {},
     val onTempTarget: () -> Unit = {},
     val onProfile: () -> Unit = {},
-    val onIob: () -> Unit = {},
     val onCob: () -> Unit = {},
     val onDeleteCarb: (entry: HomeUiState.CarbEntry) -> Unit = {}, // undo a recent carb entry (COB sheet)
+    val onDeleteInsulin: (entry: HomeUiState.InsulinEntry) -> Unit = {}, // undo a recent bolus (IOB sheet)
     val onBasal: () -> Unit = {},
     val onRange: (hours: Int) -> Unit = {},   // graph range segmented control
     val onCalibration: () -> Unit = {},       // "+" overflow → calibrate CGM

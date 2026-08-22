@@ -66,6 +66,7 @@ fun HomeScreen(
     val colors = AapsTheme.colors
     var showDetails by remember { mutableStateOf(false) }
     var showCarbs by remember { mutableStateOf(false) }
+    var showInsulin by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -82,7 +83,7 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
             ) {
                 if (state.notifications.isNotEmpty()) AlertsCard(state.notifications, actions.onDismissAlert)
-                HeroCard(state, actions, onCobClick = { showCarbs = true })
+                HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
                 DetailsHandle { showDetails = true }
@@ -92,6 +93,7 @@ fun HomeScreen(
         }
         if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
+        if (showInsulin) InsulinUndoSheet(state, actions.onDeleteInsulin, onClose = { showInsulin = false })
     }
 }
 
@@ -140,7 +142,7 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
 }
 
 @Composable
-private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit) {
+private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
     val colors = AapsTheme.colors
     val bgColor = state.bgColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.textPrimary
     AapsCard(shape = AapsShape.hero) {
@@ -195,7 +197,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
             // Shifted left by exactly the stat's own inset (see HeroStat) so the labels still line up
             // with the BG value above while their tap/ripple area keeps clear of the rounded corners.
             Row(Modifier.fillMaxWidth().padding(top = 4.dp).offset(x = -HeroStatInset)) {
-                HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = actions.onIob)
+                HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = onIobClick)
                 HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
                 HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
             }
@@ -403,6 +405,72 @@ private fun CarbsUndoSheet(
                                         Text(c.time, style = AapsType.caption, color = colors.textTertiary)
                                     }
                                     RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) })
+                                }
+                            }
+                        }
+                    }
+                }
+                Box(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+/**
+ * IOB detail + undo. Tapping IOB used to open a plain text dialog; it now also lists the boluses
+ * behind that number so a dose the pump never actually delivered can be taken back out. That is the
+ * only way to repair IOB from inside the app — the redesigned History is read-only — and it matters
+ * because an unconfirmed bolus is deliberately recorded as delivered (over-stating IOB is the safe
+ * side of that guess, but it still has to be correctable when the pump turns out to have been empty).
+ */
+@Composable
+private fun InsulinUndoSheet(
+    state: HomeUiState,
+    onDelete: (HomeUiState.InsulinEntry) -> Unit,
+    onClose: () -> Unit
+) {
+    val colors = AapsTheme.colors
+    Box(Modifier.fillMaxSize()) {
+        // scrim
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(androidx.compose.ui.graphics.Color(0x99060810))
+                .clickable(onClick = onClose)
+        )
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
+            SheetSurface(title = "Insulin on board", onClose = onClose) {
+                AapsCard(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DetailRow("Total", state.iob.ifBlank { "--" })
+                        DetailRow("From boluses", state.iobBolus.ifBlank { "--" })
+                        DetailRow("From basal", state.iobBasal.ifBlank { "--" })
+                    }
+                }
+                if (state.recentInsulin.isEmpty()) {
+                    Text("No boluses in the last few hours.", style = AapsType.body, color = colors.textSecondary)
+                } else {
+                    Text(
+                        "Remove a dose the pump did not actually deliver — this asks you to confirm.",
+                        style = AapsType.caption, color = colors.textTertiary
+                    )
+                    AapsCard(Modifier.fillMaxWidth()) {
+                        Column {
+                            state.recentInsulin.forEachIndexed { i, e ->
+                                if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(e.units, style = AapsType.listTitle, color = colors.textPrimary)
+                                        Text(
+                                            if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
+                                            style = AapsType.caption, color = colors.textTertiary
+                                        )
+                                    }
+                                    RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
                                 }
                             }
                         }

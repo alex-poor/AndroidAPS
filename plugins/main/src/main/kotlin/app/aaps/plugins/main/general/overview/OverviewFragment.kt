@@ -88,6 +88,7 @@ import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.BooleanNonKey
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.IntNonKey
+import app.aaps.core.keys.IntKey
 import app.aaps.core.keys.UnitDoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
@@ -192,6 +193,7 @@ class OverviewFragment : DaggerFragment() {
     // Recent carb records for the COB-tap undo sheet. Computed off the UI thread in updateIobCob()
     // (which already reads persistence there) and read synchronously by buildHomeState().
     private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
+    private var recentInsulin: List<HomeUiState.InsulinEntry> = emptyList()
 
     /**
      * The legacy overview layout is inflated but `android:visibility="gone"` and covered by the
@@ -384,9 +386,9 @@ class OverviewFragment : DaggerFragment() {
             onLoop = { bolusProtected { uiInteraction.runLoopDialog(childFragmentManager, 1) } },
             onTempTarget = { bolusProtected { uiInteraction.runTempTargetDialog(childFragmentManager) } },
             onProfile = { uiInteraction.runProfileViewerDialog(childFragmentManager, dateUtil.now(), UiInteraction.Mode.RUNNING_PROFILE) },
-            onIob = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.iob), iobDialogText()) } },
             onCob = { bolusProtected { uiInteraction.runCarbsDialog(childFragmentManager) } },
             onDeleteCarb = { entry -> bolusProtected { removeCarbEntry(entry) } },
+            onDeleteInsulin = { entry -> bolusProtected { removeInsulinEntry(entry) } },
             onBasal = { activity?.let { OKDialog.show(it, rh.gs(app.aaps.core.ui.R.string.basal), overviewData.temporaryBasalDialogText()) } },
             // graph range: reuse the existing EventScale path (persists RangeToDisplay + refreshes)
             onRange = { hours -> rxBus.send(EventScale(hours)) },
@@ -414,6 +416,34 @@ class OverviewFragment : DaggerFragment() {
                     listValues = listOf(
                         ValueWithUnit.Timestamp(entry.timestamp),
                         ValueWithUnit.Gram(entry.amount)
+                    )
+                ).subscribe()
+            }
+        )
+    }
+
+    /**
+     * Undo a recent bolus from the IOB-tap sheet. Confirms first, then reuses the SAME
+     * `persistenceLayer.invalidateBolus` path (with UEL audit log) the legacy Treatments screen used —
+     * no bypass. This is the repair path for insulin the pump never delivered: an unconfirmed dose is
+     * recorded on purpose so IOB is not under-counted, and when the pump turns out to have been
+     * stopped or empty that record has to be removable.
+     */
+    private fun removeInsulinEntry(entry: HomeUiState.InsulinEntry) {
+        val activity = activity ?: return
+        OKDialog.showConfirmation(
+            activity,
+            rh.gs(app.aaps.core.ui.R.string.removerecord),
+            rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + entry.units + "\n" +
+                rh.gs(app.aaps.core.ui.R.string.date) + ": " + dateUtil.dateAndTimeString(entry.timestamp),
+            Runnable {
+                disposable += persistenceLayer.invalidateBolus(
+                    entry.id,
+                    action = Action.BOLUS_REMOVED,
+                    source = Sources.Overview,
+                    listValues = listOf(
+                        ValueWithUnit.Timestamp(entry.timestamp),
+                        ValueWithUnit.Insulin(entry.amount)
                     )
                 ).subscribe()
             }
@@ -540,14 +570,24 @@ class OverviewFragment : DaggerFragment() {
                 }
                 add(HomeUiState.Supply("Sensor", label, color, fraction = fraction))
             }
-            val res = pump.reservoirLevel
-            if (res > 0) add(
-                HomeUiState.Supply(
-                    "Reservoir",
-                    rh.gs(app.aaps.core.ui.R.string.format_insulin_units, res),
-                    if (res < 20) AapsSemantic.high else AapsSemantic.inRange
+            // Reservoir. This used to be drawn ONLY when `> 0`, so the pill quietly VANISHED at exactly
+            // the moment it mattered — an empty cartridge looked identical to a screen that had never
+            // shown one. Draw it whenever the pump has been read, and say "Empty" out loud. Thresholds
+            // are the app's own reservoir preferences, the same ones the driver alerts on.
+            if (pump.isInitialized()) {
+                val res = pump.reservoirLevel
+                add(
+                    HomeUiState.Supply(
+                        "Reservoir",
+                        if (res <= 0.0) "Empty" else rh.gs(app.aaps.core.ui.R.string.format_insulin_units, res),
+                        when {
+                            res <= preferences.get(IntKey.OverviewResCritical).toDouble() -> AapsSemantic.low
+                            res <= preferences.get(IntKey.OverviewResWarning).toDouble()  -> AapsSemantic.high
+                            else                                                         -> AapsSemantic.inRange
+                        }
+                    )
                 )
-            )
+            }
             // Keep the battery pill stable: the pump reports 0 while disconnected/unread, so show "—"
             // (neutral) rather than letting the pill vanish and reappear.
             pump.batteryLevel?.let { bat ->
@@ -578,6 +618,9 @@ class OverviewFragment : DaggerFragment() {
             basalSub = basalSubText,
             supplies = supplies,
             recentCarbs = recentCarbs,
+            recentInsulin = recentInsulin,
+            iobBolus = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob),
+            iobBasal = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, basalIob().basaliob),
             graphRangeHours = overviewData.rangeToDisplay,
             algorithmName = (activePlugin.activeAPS as? PluginBase)?.name ?: "",
             sensitivity = autosensRatio?.let { "${(it * 100).toInt()}%" } ?: "",
@@ -700,12 +743,25 @@ class OverviewFragment : DaggerFragment() {
     private fun iobText(): String =
         rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob + basalIob().basaliob)
 
-    private fun iobDialogText(): String =
-        rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob + basalIob().basaliob) + "\n" +
-            rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, bolusIob().iob) + "\n" +
-            rh.gs(app.aaps.core.ui.R.string.basal) + ": " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, basalIob().basaliob)
-
     private fun updateIobCob() {
+        // Recent boluses for the IOB-tap undo sheet (newest first). The 6h window is the point: it is
+        // longer than any sane DIA, so every dose that still contributes to the IOB on screen is in this
+        // list and can be taken back out. Primes are excluded — they never enter IOB, so listing them
+        // would only invite removing the wrong record.
+        recentInsulin = persistenceLayer.getBolusesFromTime(dateUtil.now() - 6 * 60 * 60 * 1000L, false)
+            .blockingGet()
+            .filter { it.amount > 0 && it.type != BS.Type.PRIMING }
+            .take(10)
+            .map { b ->
+                HomeUiState.InsulinEntry(
+                    id = b.id,
+                    time = dateUtil.timeString(b.timestamp),
+                    units = rh.gs(app.aaps.core.ui.R.string.format_insulin_units, b.amount),
+                    kind = if (b.type == BS.Type.SMB) "SMB" else "",
+                    timestamp = b.timestamp,
+                    amount = b.amount
+                )
+            }
         // Recent carb entries for the COB-tap undo sheet (last 6h, newest first). Off the UI thread here.
         recentCarbs = persistenceLayer.getCarbsFromTimeNotExpanded(dateUtil.now() - 6 * 60 * 60 * 1000L, false)
             .blockingGet()
