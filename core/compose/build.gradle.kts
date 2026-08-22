@@ -1,3 +1,5 @@
+import kotlin.math.min
+
 plugins {
     alias(libs.plugins.android.library)
     id("kotlin-android")
@@ -7,6 +9,11 @@ plugins {
 
 android {
     namespace = "app.aaps.core.compose"
+    // Matches :core:ui, which now depends on this module for its dialogs. Keeping the floors equal
+    // avoids "minSdk of the library is greater than the consumer" on every module that uses core:ui.
+    defaultConfig {
+        minSdk = min(Versions.minSdk, Versions.wearMinSdk)
+    }
 
     buildFeatures {
         compose = true
@@ -14,7 +21,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":core:ui"))
     implementation(project(":core:interfaces"))
 
     implementation(platform(libs.androidx.compose.bom))
