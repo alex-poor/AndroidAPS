@@ -34,6 +34,7 @@ import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.ui.dialogs.compose.HoldConfirmDialog
+import app.aaps.ui.dialogs.compose.PumpReadyGate
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -66,6 +67,7 @@ class TreatmentDialog : DaggerDialogFragment() {
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var decimalFormatter: DecimalFormatter
+    @Inject lateinit var pumpReadyGate: PumpReadyGate
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
@@ -136,8 +138,11 @@ class TreatmentDialog : DaggerDialogFragment() {
                 // Delivering insulin uses the same press-and-hold as the Bolus Wizard; carbs-only and
                 // record-only stay a plain tap, since nothing reaches the pump.
                 val delivers = insulinAfterConstraints > 0 && !recordOnlyChecked
+                // A dose that reaches the pump is pre-flighted BEFORE the hold-to-confirm, so nobody is
+                // asked to commit to insulin the pump is going to refuse. Carbs-only and record-only
+                // entries never touch the pump, so they stay a plain confirmation.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
-                    if (delivers) { t2, m, r -> HoldConfirmDialog.show(activity, t2, m, r) }
+                    if (delivers) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
                 confirm(rh.gs(app.aaps.core.ui.R.string.overview_treatment_label), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     val action = when {

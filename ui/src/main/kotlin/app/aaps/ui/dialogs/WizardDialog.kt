@@ -30,6 +30,7 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.wizard.BolusWizard
 import app.aaps.ui.dialogs.compose.WizardInputs
+import app.aaps.ui.dialogs.compose.PumpReadyGate
 import app.aaps.ui.dialogs.compose.WizardResult
 import app.aaps.ui.dialogs.compose.WizardScreen
 import dagger.android.support.DaggerDialogFragment
@@ -58,6 +59,7 @@ class WizardDialog : DaggerDialogFragment() {
     @Inject lateinit var persistenceLayer: PersistenceLayer
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var bolusWizardProvider: Provider<BolusWizard>
+    @Inject lateinit var pumpReadyGate: PumpReadyGate
 
     @Suppress("unused")
     private val handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
@@ -178,7 +180,11 @@ class WizardDialog : DaggerDialogFragment() {
             // skipConfirmation: the Compose Confirm step + press-and-hold gesture IS the confirmation, so
             // suppress the legacy OKDialog (redundant second popup). Constraints, UEL audit and the actual
             // commandQueue.bolus still run — identical execute path, just without the extra tap.
-            w.confirmAndExecute(activity, skipConfirmation = true)
+            // Pre-flight the pump before the dose is queued. A stopped or empty pump used to accept
+            // the command and then leave the progress dialog at 0% for the driver's whole confirm
+            // window; now the user is told why, and "Check again" delivers the SAME dose once the pump
+            // is running rather than making them rebuild it.
+            pumpReadyGate.runWhenPumpCanDeliver(activity) { w.confirmAndExecute(activity, skipConfirmation = true) }
             dismiss()
         }
     }

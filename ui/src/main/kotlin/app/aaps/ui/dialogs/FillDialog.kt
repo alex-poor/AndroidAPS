@@ -40,6 +40,7 @@ import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.ui.dialogs.compose.HoldConfirmDialog
+import app.aaps.ui.dialogs.compose.PumpReadyGate
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -74,6 +75,7 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
     @Inject lateinit var decimalFormatter: DecimalFormatter
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var dateUtil: DateUtil
+    @Inject lateinit var pumpReadyGate: PumpReadyGate
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
@@ -156,8 +158,10 @@ class FillDialog(val fm: FragmentManager) : DaggerDialogFragment() {
 
         if (insulinAfterConstraints > 0 || siteChange || insulinChange) {
             activity?.let { activity ->
+                // A prime is insulin too, so pre-flight it whenever this dialog will push one. Logging a
+                // site/cartridge change on its own reaches nothing, so that path stays ungated.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
-                    if (insulinAfterConstraints > 0) { t2, m, r -> HoldConfirmDialog.show(activity, t2, m, r) }
+                    if (insulinAfterConstraints > 0) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
                 confirm(rh.gs(app.aaps.core.ui.R.string.prime_fill), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (insulinAfterConstraints > 0) {

@@ -45,6 +45,7 @@ import app.aaps.core.objects.constraints.ConstraintObject
 import app.aaps.core.objects.extensions.formatColor
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.ui.dialogs.compose.HoldConfirmDialog
+import app.aaps.ui.dialogs.compose.PumpReadyGate
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.R
@@ -83,6 +84,7 @@ class InsulinDialog : DaggerDialogFragment() {
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var loop: Loop
+    @Inject lateinit var pumpReadyGate: PumpReadyGate
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
@@ -162,8 +164,10 @@ class InsulinDialog : DaggerDialogFragment() {
         if (insulinAfterConstraints > 0 || eatingSoonChecked) {
             activity?.let { activity ->
                 val delivers = insulinAfterConstraints > 0 && !recordOnlyChecked
+                // A dose that reaches the pump is pre-flighted BEFORE the hold-to-confirm. A record-only
+                // entry (reconciling a dose already given by hand) never touches the pump.
                 val confirm: (String, android.text.Spanned, Runnable) -> Unit =
-                    if (delivers) { t2, m, r -> HoldConfirmDialog.show(activity, t2, m, r) }
+                    if (delivers) { t2, m, r -> pumpReadyGate.runWhenPumpCanDeliver(activity) { HoldConfirmDialog.show(activity, t2, m, r) } }
                     else { t2, m, r -> OKDialog.showConfirmation(activity, t2, m, r) }
                 confirm(rh.gs(app.aaps.core.ui.R.string.bolus), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
                     if (eatingSoonChecked) {
