@@ -18,7 +18,7 @@
 
 ## What this fork adds
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Five workstreams:
+Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Six workstreams:
 
 | # | Area | What it is | Status |
 |---|------|-----------|--------|
@@ -27,6 +27,7 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Five workstreams:
 | 3 | **[Infusion-site handling](#3-infusion-site-handling)** | Treats a fresh cannula as a distinct physiological state, across the algorithm, wizard and careportal | Running |
 | 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | Running |
 | 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | Running |
+| 6 | **[Delivery the pump cannot make](#6-delivery-the-pump-cannot-make)** | Stopped pump, empty cartridge: say so, refuse the dose, and never book insulin that did not go in | Running |
 
 Plus a number of [smaller changes](#smaller-changes) — Nightscout over a private network, wizard fields
 the redesign had dropped, and pump-driver reliability fixes.
@@ -63,6 +64,8 @@ AndroidAPS officially lists the Ypsomed mylife YpsoPump as *"Not Loopable — Yp
 - Recovery for the pump's real failure modes: `0x82` bad param, `0x86` TBR-already-active,
   `0x8A` malformed, `0x8B` counter-behind
 - Confirm-by-read bolus delivery, and a pump-side suspend reflected as a 0-rate TBR
+- Reservoir surveillance, and a refusal to book insulin the pump cannot have delivered —
+  see [delivery the pump cannot make](#delivery-the-pump-cannot-make)
 
 **This stands entirely on other people's reverse-engineering**, principally
 **[SandraK82 / ypsopump-research](https://github.com/SandraK82/ypsopump-research)** and
@@ -175,6 +178,13 @@ Rewritten: Home (hero card, graph, actions), Bolus/Carb wizard, Loop control, Te
 Actions & Careportal, Statistics, History timeline, Profile view and editor, Config Builder, preference
 screens, YpsoPump status, and around a dozen legacy dialogs.
 
+The shared confirmation dialog went with them. `OKDialog` no longer builds a MaterialAlertDialog — it
+renders the design system's alert surface — so roughly forty-six call sites across the app moved over
+without being touched. That needed the module dependency between `core:ui` and `core:compose` reversed:
+the design system never actually used `core:ui`, so that edge was dropped and `core:ui` now depends on
+`core:compose`. Password and PIN prompts are deliberately still the old dialog: they carry autofill hints
+and IME actions on the protection path, and a botched conversion there locks you out of your own app.
+
 **Not purely cosmetic, despite the above.** Some inputs that affect dosing changed:
 
 - **Pre-bolus (carb time)** — restored after the first pass of the redesign dropped it
@@ -182,6 +192,8 @@ screens, YpsoPump status, and around a dozen legacy dialogs.
   through the wizard calculation
 - **Record-only insulin entry** — logs a bolus delivered by pump or pen into IOB *without* re-delivering
   it, reachable from the Home "+" menu
+- **Recent-insulin undo** — the IOB tap removes a bolus the pump never delivered; see
+  [section 6](#6-delivery-the-pump-cannot-make)
 - **Fresh-site advisory** — see [section 3](#3-infusion-site-handling)
 - The second confirmation popup was removed; the hold-to-deliver control is the confirmation
 
@@ -268,6 +280,59 @@ Only two touch behaviour, and neither is on the dosing path:
 
 Plus: Nightscout upload/download failures back off and log one stack per distinct error rather than one per
 record, and `deviceStatus` — write-only rows that existed to be uploaded — is kept for 7 days instead of 186.
+
+---
+
+## 6. Delivery the pump cannot make
+
+**`pump/ypsopump/` (pre-flight, reservoir watch, recording rules) · `ui/.../dialogs/compose/PumpReadyGate.kt`
+(the workflow) · `plugins/main/.../overview/` (the alert, the pill, the undo)**
+
+Two failures that look nothing alike from the outside turn out to be the same bug: the app assumed the
+pump was delivering, and had no idea what to do when it was not.
+
+**A bolus into a stopped pump looked like it was working.** The wizard did its maths, the progress dialog
+opened, and it sat at 0% until the driver's five-minute confirm window expired. The pump had refused the
+very first write; nothing in the app knew, because the driver polled for the delivery regardless.
+
+**A cartridge that ran dry produced no feedback at all.** There is no reservoir alert anywhere in
+AndroidAPS — a pump that empties simply stops. Worse, the reservoir pill on the redesigned Home was drawn
+only when the level was above zero, so it *vanished* at exactly the moment it mattered: an empty cartridge
+rendered identically to a screen that had never shown one. The loop kept commanding basal and boluses into
+a pump that could not take them, and because an unconfirmed bolus is deliberately recorded as delivered
+(over-stating IOB is the safe side of that guess), it kept **booking insulin that did not exist**. The IOB
+the loop was reasoning against was wrong for hours.
+
+So:
+
+- **Pre-flight before anything is queued.** Every route that delivers — wizard, manual bolus, insulin,
+  prime/fill — checks the pump first. Stopped or empty, and you get a sheet that says which, with
+  **Check again**: it reconnects, re-reads the pump, and delivers *the same dose* if it comes back
+  healthy, so nothing has to be re-entered. There is no BLE command to restart a YpsoPump — starting a
+  pump is a physical act, deliberately — so the honest workflow asks rather than pretends. A merely
+  *suspended loop* is different: that is reversible from the sheet, and it is not a reason to refuse a
+  meal bolus, so "Resume loop and bolus" and "Bolus anyway" are both offered.
+- **The driver fails fast instead of polling a dead pump.** The BLE layer now distinguishes *never sent*
+  from *sent* from *ack lost*. Only the first is a certain no-op, and only it skips confirmation — a lost
+  ack can still mean the pump delivered, so that path confirms by read exactly as before. The stuck-at-0%
+  dialog was never a UI bug: the progress dialog closes when `deliverTreatment` returns.
+- **Reservoir surveillance.** Urgent alert below the critical threshold, alarm at empty — Home alert,
+  Android notification and sound. The pill is drawn whenever the pump has been read, turns amber below
+  the warning threshold and says **Empty** in red. Both thresholds are the app's *existing* reservoir
+  preferences (Overview → status lights), which the redesign had left unread when it dropped the
+  status-lights row — so this puts a setting that was already there, and already
+  translated, back to work rather than inventing numbers nobody can find.
+- **Empty is a suspended pump.** It reports as suspended, so the loop drops to `SUSPENDED_BY_PUMP`, and
+  it records the same 0-rate `PUMP_SUSPEND` temp basal a pump-side stop does — which is what stops
+  *basal* IOB accruing against insulin that never left the cartridge.
+- **Never book a dose the pump was known not to take.** An unconfirmed bolus is still recorded when the
+  pump is healthy, because under-counting IOB is the dangerous direction — but it now raises an urgent
+  notification telling you to verify it. When a fresh status read shows the pump stopped or empty, that
+  is not ambiguity, and nothing is recorded at all.
+- **A way to repair IOB.** Tapping IOB opens the bolus/basal split and the last six hours of boluses,
+  each removable behind a confirmation and the same audited `invalidateBolus` path the old Treatments
+  screen used. Six hours is the point: it is longer than any sane DIA, so every dose still contributing
+  to the IOB on screen is in that list.
 
 ---
 
