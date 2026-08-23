@@ -41,6 +41,7 @@ import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Provider
 import javax.inject.Singleton
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
@@ -231,7 +232,7 @@ class HovorkaMpcPlugin @Inject constructor(
         val tempTargetMgdl = persistenceLayer.getTemporaryTargetActiveAt(now)?.target()
         val controlTargetMmol = (tempTargetMgdl ?: profile.getTargetMgdl()) / MGDL_PER_MMOL
         val bodyWeightKg = preferences.get(DoubleKey.HovorkaBodyWeight)
-        val basalUhr = profile.getBasal()
+        val profileBasalUhr = profile.getBasal()
         // 2a: personalise the model from the user's titrated ISF (mg/dL/U) + IC (g/U), anchored to
         // their basal/profile-target — instead of population weight-only params. Cached (calibration heavy).
         val isfMgdl = profile.getProfileIsfMgdl()
@@ -255,7 +256,39 @@ class HovorkaMpcPlugin @Inject constructor(
             if (preferences.get(BooleanKey.HovorkaCarbAbsorptionByTod))
                 carbAbsorptionBase * carbAbsorptionTodFactor(dateUtil.now())
             else carbAbsorptionBase
-        val baseModel = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, basalUhr, profileTargetMmol, carbAbsorptionMin)
+        // maxBasal: getMaxBasalAllowed() is supplied by the OpenAPS-SMB plugin, which is DISABLED whenever
+        // HovorkaMPC is the active APS — so the constraint returns unbounded and the user's setting was
+        // silently dead here (the same defect already fixed for maxIOB below). Worse, because that plugin is
+        // disabled AAPS never RENDERS its preference screen, so neither value was reachable in the UI at all:
+        // on 2026-07-26 the user went looking for "maximum basal" and found only "minimal request change".
+        // Read the pref directly, and take whichever bound is tighter if a real constraint does exist.
+        val maxBasalUhr = min(
+            constraintsChecker.getMaxBasalAllowed(profile).value(),
+            preferences.get(DoubleKey.ApsMaxBasal)
+        )
+        val maxBasalMuMin = maxBasalUhr * 1000.0 / 60.0
+        // 2d: adapt the OPERATING basal (the MPC's nominal / floor centre) from recent daily outcomes.
+        val operatingBasalUhr = adaptedOperatingBasalUhr(profile, bodyWeightKg, profileTargetMmol, maxBasalUhr, now)
+        val nominalBasalMuMin = operatingBasalUhr * 1000.0 / 60.0    // U/hr -> mU/min
+
+        // ANCHOR THE MODEL TO THE RATE THE CONTROLLER ACTUALLY TREATS AS NEUTRAL (fixed 2026-08-23).
+        // `personalize` solves egp0 so that the basal it is GIVEN holds target. This used to be handed the
+        // PROFILE basal while `nominalBasalMuMin` below — the EKF's initial steady state, the MPC's effort
+        // origin, and the correction floor's centre — came from TddAdapter instead. When the adapter moved,
+        // the two disagreed, and inside the model the "neutral" rate no longer held target at all:
+        //     profile 0.45 anchored, TddAdapter nominal 0.28  ->  nominal holds 11.4 mmol/L  (+4.4)
+        //     profile 0.55 anchored, TddAdapter nominal 0.30  ->  nominal holds 13.8 mmol/L  (+6.8)
+        // So the controller believed its own baseline parked glucose at 11-14, rolled out a rise that was
+        // pure artefact, and demanded insulin to stop it — while its effort term simultaneously penalised
+        // going above that same nominal. Measured live 2026-08-23: the 3 h forecast ran high in proportion
+        // to insulin on board (+1.95 at 0.5-1.5 U, +3.81 at 1.5-3 U) and lost to `BG - IOB x ISF`; the
+        // 02:00 overnight tick printed `eventual 11.6` while glucose was falling 2.1 mmol/L/h, dosed
+        // 1.66 U/hr, and ended at 3.6. `eventual 11.6` was essentially the model's steady state at nominal.
+        // Anchoring to the operating basal makes nominal genuinely neutral and the effort term honest.
+        if (abs(operatingBasalUhr - profileBasalUhr) > 0.005)
+            aapsLogger.debug(LTag.APS, "HovorkaMPC anchor: profile basal %.3f, operating basal %.3f U/hr — model anchored to OPERATING"
+                .format(profileBasalUhr, operatingBasalUhr))
+        val baseModel = personalizedModel(bodyWeightKg, isfMgdl, icGPerU, operatingBasalUhr, profileTargetMmol, carbAbsorptionMin)
         // 4: re-identify structural params (insulin sensitivity / EGP / carb-absorption) from recent history —
         // a daily background re-tune, stateless from the personalise() prior so the model is never more than one
         // bounded step from the profile. OFF by default; surfaces its result to the UI (reason + settings + a
@@ -268,15 +301,6 @@ class HovorkaMpcPlugin @Inject constructor(
         // disabled AAPS never RENDERS its preference screen, so neither value was reachable in the UI at all:
         // on 2026-07-26 the user went looking for "maximum basal" and found only "minimal request change".
         // Read the pref directly, and take whichever bound is tighter if a real constraint does exist.
-        val maxBasalUhr = min(
-            constraintsChecker.getMaxBasalAllowed(profile).value(),
-            preferences.get(DoubleKey.ApsMaxBasal)
-        )
-        val maxBasalMuMin = maxBasalUhr * 1000.0 / 60.0
-        // 2d: adapt the OPERATING basal (the MPC's nominal / floor centre) from recent daily outcomes if
-        // enabled. The MODEL above stays anchored to the PROFILE basal — 2d moves only the operating point.
-        val operatingBasalUhr = adaptedOperatingBasalUhr(profile, bodyWeightKg, profileTargetMmol, maxBasalUhr, now)
-        val nominalBasalMuMin = operatingBasalUhr * 1000.0 / 60.0    // U/hr -> mU/min
 
         // --- replay the recent history through the EKF to estimate current state ---
         val ekf = try {
