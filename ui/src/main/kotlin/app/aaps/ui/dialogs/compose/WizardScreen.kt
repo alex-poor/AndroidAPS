@@ -1,5 +1,7 @@
 package app.aaps.ui.dialogs.compose
 
+import androidx.compose.material3.TextButton
+import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
@@ -121,17 +123,48 @@ private fun InputStep(
                 .padding(bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
         ) {
-            // BG context
+            // BG context. Tapping it opens a manual entry: the CGM is not always the truth (failed sensor,
+            // warm-up gap, a fingerstick that disagrees), and without this the only way to bolus off a
+            // fingerstick is to do the correction arithmetic by hand.
+            var editingBg by remember { mutableStateOf(false) }
             AapsCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(result.bgFromText.ifBlank { "From CGM" }, style = AapsType.caption, color = colors.textTertiary)
-                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(result.bgText, style = AapsType.cardValue, color = if (result.bgInRange) colors.inRange else colors.high)
-                            Text(result.bgTrendArrow, style = AapsType.listTitle, color = if (result.bgInRange) colors.inRange else colors.high, modifier = Modifier.padding(bottom = 2.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { editingBg = !editingBg }
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(result.bgFromText.ifBlank { "From CGM" }, style = AapsType.caption, color = colors.textTertiary)
+                            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(result.bgText, style = AapsType.cardValue, color = if (result.bgInRange) colors.inRange else colors.high)
+                                if (result.bgTrendArrow.isNotBlank())
+                                    Text(result.bgTrendArrow, style = AapsType.listTitle, color = if (result.bgInRange) colors.inRange else colors.high, modifier = Modifier.padding(bottom = 2.dp))
+                            }
+                        }
+                        StatusPill(
+                            if (result.bgIsManual) "manual" else if (result.bgInRange) "in range" else "high",
+                            dotColor = if (result.bgIsManual) colors.textSecondary else if (result.bgInRange) colors.inRange else colors.high
+                        )
+                    }
+                    if (editingBg) {
+                        NumberField(
+                            label = "Enter glucose (${result.bgUnitsLabel})",
+                            value = inputs.manualBg ?: result.bgText.replace(',', '.').toDoubleOrNull() ?: result.bgEntryMin,
+                            onValue = { onInputs(inputs.copy(manualBg = it)) },
+                            step = result.bgEntryStep,
+                            min = result.bgEntryMin,
+                            max = result.bgEntryMax,
+                            decimals = result.bgEntryDecimals
+                        )
+                        if (result.bgIsManual)
+                            Text(
+                                "Trend is not applied to a manually entered value.",
+                                style = AapsType.caption, color = colors.textTertiary
+                            )
+                        TextButton(onClick = { onInputs(inputs.copy(manualBg = null)); editingBg = false }) {
+                            Text(if (result.bgIsManual) "Use CGM reading" else "Cancel", style = AapsType.caption, color = colors.textSecondary)
                         }
                     }
-                    StatusPill(if (result.bgInRange) "in range" else "high", dotColor = if (result.bgInRange) colors.inRange else colors.high)
                 }
             }
 

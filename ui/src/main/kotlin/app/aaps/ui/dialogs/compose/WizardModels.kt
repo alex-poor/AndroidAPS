@@ -20,6 +20,18 @@ data class WizardInputs(
      * APS/COB path already reads.
      */
     val carbDurationHours: Int = 0,
+    /**
+     * Manually entered glucose, in the user's DISPLAY units, or null to use the CGM.
+     *
+     * Exists because the CGM is not always the truth: a failed sensor, a warm-up gap, or a fingerstick that
+     * disagrees all leave the wizard calculating a correction from a number the user can see is wrong. The
+     * legacy wizard had this field; the redesign dropped it "by design", which removed the only way to bolus
+     * off a fingerstick without doing the arithmetic by hand.
+     *
+     * Entering one also forces the TREND contribution off (see WizardDialog.compute): a CGM-derived trend
+     * describes the sensor trace, and if the sensor were trustworthy there would be no reason to override it.
+     */
+    val manualBg: Double? = null,
     val useBg: Boolean = true,
     val useIob: Boolean = true,
     val useTrend: Boolean = false,
@@ -32,6 +44,14 @@ data class WizardResult(
     val bgText: String = "--",
     val bgTrendArrow: String = "",
     val bgFromText: String = "",
+    /** True when [WizardInputs.manualBg] is in use — the screen shows it and offers a reset to CGM. */
+    val bgIsManual: Boolean = false,
+    /** Entry bounds for the manual-BG field, in display units (mmol/L vs mg/dL differ by 10x). */
+    val bgEntryMin: Double = 1.0,
+    val bgEntryMax: Double = 30.0,
+    val bgEntryStep: Double = 0.1,
+    val bgEntryDecimals: Int = 1,
+    val bgUnitsLabel: String = "",
     val bgInRange: Boolean = true,
     val carbsInsulin: String = "+0.00 U",
     val bgInsulin: String = "+0.00 U",

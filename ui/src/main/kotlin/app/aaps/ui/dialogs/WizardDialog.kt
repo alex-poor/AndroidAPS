@@ -1,5 +1,6 @@
 package app.aaps.ui.dialogs
 
+import app.aaps.core.data.model.GlucoseUnit
 import android.content.Context
 import android.os.Bundle
 import android.os.Handler
@@ -109,8 +110,12 @@ class WizardDialog : DaggerDialogFragment() {
     private fun compute(inputs: WizardInputs): WizardResult {
         val profile = profileFunction.getProfile() ?: return WizardResult()
         val units = profileFunction.getUnits()
-        val bgMgdl = (iobCobCalculator.ads.actualBg() ?: iobCobCalculator.ads.lastBg())?.recalculated ?: 0.0
-        val bgDisplay = if (bgMgdl > 0) profileUtil.fromMgdlToUnits(bgMgdl, units) else 0.0
+        // A manually entered glucose REPLACES the CGM everywhere in this calculation — the correction, the
+        // in-range label and the delivered dose all key off the same number, so there is no path where the
+        // display says one thing and the arithmetic uses another.
+        val cgmMgdl = (iobCobCalculator.ads.actualBg() ?: iobCobCalculator.ads.lastBg())?.recalculated ?: 0.0
+        val bgDisplay = inputs.manualBg ?: if (cgmMgdl > 0) profileUtil.fromMgdlToUnits(cgmMgdl, units) else 0.0
+        val bgMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, units) } ?: cgmMgdl
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
 
         val w = buildWizard(inputs, profile, bgDisplay, carbs)
@@ -121,10 +126,20 @@ class WizardDialog : DaggerDialogFragment() {
         val inRange = bgMgdl > 0 &&
             bgDisplay in preferences.get(UnitDoubleKey.OverviewLowMark)..preferences.get(UnitDoubleKey.OverviewHighMark)
         val delta = w.glucoseStatus?.delta ?: 0.0
+        val mmol = units == GlucoseUnit.MMOL
         return WizardResult(
             bgText = if (bgMgdl > 0) profileUtil.fromMgdlToStringInUnits(bgMgdl) else "--",
-            bgTrendArrow = when { delta > 3 -> "↗"; delta < -3 -> "↘"; else -> "→" },
-            bgFromText = "From CGM",
+            // A manual entry has no trend: the arrow would be the SENSOR's, and the reason to type a value in
+            // is that the sensor is not to be trusted. Showing it would invite reading a slope into a number
+            // that has none.
+            bgTrendArrow = if (inputs.manualBg != null) "" else when { delta > 3 -> "↗"; delta < -3 -> "↘"; else -> "→" },
+            bgFromText = if (inputs.manualBg != null) "Entered manually" else "From CGM",
+            bgIsManual = inputs.manualBg != null,
+            bgEntryMin = if (mmol) 1.0 else 20.0,
+            bgEntryMax = if (mmol) 30.0 else 540.0,
+            bgEntryStep = if (mmol) 0.1 else 1.0,
+            bgEntryDecimals = if (mmol) 1 else 0,
+            bgUnitsLabel = if (mmol) "mmol/L" else "mg/dL",
             bgInRange = inRange,
             carbsInsulin = signed(w.insulinFromCarbs),
             bgInsulin = signed(w.insulinFromBG),
@@ -171,8 +186,9 @@ class WizardDialog : DaggerDialogFragment() {
         val activity = activity ?: return
         val profile = profileFunction.getProfile() ?: return
         val units = profileFunction.getUnits()
-        val bgMgdl = (iobCobCalculator.ads.actualBg() ?: iobCobCalculator.ads.lastBg())?.recalculated ?: 0.0
-        val bgDisplay = if (bgMgdl > 0) profileUtil.fromMgdlToUnits(bgMgdl, units) else 0.0
+        val cgmMgdl = (iobCobCalculator.ads.actualBg() ?: iobCobCalculator.ads.lastBg())?.recalculated ?: 0.0
+        val bgDisplay = inputs.manualBg ?: if (cgmMgdl > 0) profileUtil.fromMgdlToUnits(cgmMgdl, units) else 0.0
+        val bgMgdl = inputs.manualBg?.let { profileUtil.convertToMgdl(it, units) } ?: cgmMgdl
         val carbs = constraintChecker.applyCarbsConstraints(ConstraintObject(inputs.carbs, aapsLogger)).value()
         if (carbs <= 0 && !(bgMgdl > 0)) return
         val w = buildWizard(inputs, profile, bgDisplay, carbs)
@@ -210,7 +226,9 @@ class WizardDialog : DaggerDialogFragment() {
             includeBasalIOB = inputs.useIob,
             useSuperBolus = inputs.useSuperBolus,
             useTT = true,
-            useTrend = inputs.useTrend,
+            // Trend is a CGM property. If the user overrode the CGM, its slope is not evidence about the
+            // number they typed — so the trend contribution is withheld rather than silently reused.
+            useTrend = inputs.useTrend && inputs.manualBg == null,
             useAlarm = false
         )
 
