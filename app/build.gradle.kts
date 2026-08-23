@@ -9,6 +9,7 @@ plugins {
     id("android-app-dependencies")
     id("test-app-dependencies")
     id("jacoco-app-dependencies")
+    alias(libs.plugins.compose.compiler)
 }
 
 repositories {
@@ -162,6 +163,9 @@ android {
     buildFeatures {
         dataBinding = true
         buildConfig = true
+        // Compose in :app so the preference screens can use the design system. The rest of the module
+        // stays View/dataBinding — this only adds the option, it does not migrate anything.
+        compose = true
     }
 }
 
@@ -175,6 +179,19 @@ dependencies {
     // https://github.com/nightscout/graphview.git
     // https://github.com/nightscout/iconify.git
     implementation(project(":shared:impl"))
+    // Compose — preference screens rendered with the design system (see activities/compose/)
+    implementation(project(":core:compose"))
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+
     implementation(project(":core:data"))
     implementation(project(":core:objects"))
     implementation(project(":core:graph"))

@@ -5,8 +5,15 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener
 import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.annotation.XmlRes
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
@@ -17,6 +24,10 @@ import androidx.preference.PreferenceManager
 import androidx.preference.PreferenceScreen
 import androidx.preference.size
 import app.aaps.R
+import app.aaps.activities.compose.PrefRow
+import app.aaps.activities.compose.PreferenceScreenCompose
+import app.aaps.activities.compose.flattenPreferences
+import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.overview.Overview
@@ -117,6 +128,41 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     override fun onResume() {
         super.onResume()
         requireActivity().findViewById<TextView>(R.id.version)?.let { overview.setVersionView(it) }
+    }
+
+    /**
+     * Rows for the Compose renderer, recomputed from the SAME tree this fragment builds. Held as a
+     * MutableState so the search filter — which works by flipping `isVisible` on the tree — reaches the
+     * Compose list the same way it reaches the legacy one.
+     */
+    private val composeRows = mutableStateOf<List<PrefRow>>(emptyList())
+
+    private fun refreshComposeRows() {
+        composeRows.value = preferenceManager?.preferenceScreen?.let { flattenPreferences(it) } ?: emptyList()
+    }
+
+    /**
+     * Replace the AndroidX preference list with the app's design system, without giving up the tree that
+     * produced it. `super.onCreateView` still builds the real RecyclerView — every `Adaptive*Preference` is
+     * constructed, so the simple-mode / APS-mode / dependency visibility rules all run — and it stays in the
+     * hierarchy, hidden, so any preference that opens its own dialog still has a live host to attach to.
+     * Only the drawing is taken over. See PreferenceScreenCompose.kt for why the tree stays authoritative.
+     */
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        val legacy = super.onCreateView(inflater, container, savedInstanceState)
+        legacy.visibility = View.GONE
+        refreshComposeRows()
+        val frame = FrameLayout(requireContext())
+        frame.addView(legacy)
+        frame.addView(ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                AapsTheme {
+                    PreferenceScreenCompose(rows = composeRows.value, preferences = preferences)
+                }
+            }
+        })
+        return frame
     }
 
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
@@ -323,6 +369,7 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     fun setFilter(filter: String) {
         this.filter = filter
         preferenceManager?.preferenceScreen?.let { updateFilterVisibility(filter, it) }
+        refreshComposeRows()
     }
 
     private fun addGeneralScreen(rootKey: String?) {
