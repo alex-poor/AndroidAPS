@@ -236,7 +236,49 @@ class ProfileFragment : DaggerFragment() {
         profilePlugin.storeSettings(requireActivity(), dateUtil.now())
         build()                 // refresh legacy views + read-only Compose view
         editMode.value = false  // back to read-only
+        offerToActivate()
     }
+
+    /**
+     * A saved local profile does NOT become the running profile — AAPS keeps delivering the profile the
+     * active ProfileSwitch captured until a NEW switch is made. Editing basal and walking away therefore
+     * changes nothing, silently, which is exactly the trap the 2026-08-23 overnight hit: a basal edit at
+     * 00:52 only took effect because the user happened to know to go and activate it.
+     *
+     * So offer it at the point of the edit. Same call the Autotune auto-switch and the Profile Switch
+     * dialog use — full ProfileSwitch record, UserEntry logged, nothing bypassed. Declining is a no-op:
+     * the profile stays saved-but-not-running, which is the pre-existing behaviour.
+     */
+    private fun offerToActivate() {
+        val ctx = context ?: return
+        val store = profilePlugin.profile ?: return
+        val name = profilePlugin.currentProfile()?.name ?: return
+        // Nothing to offer if this profile is already the running one AND nothing changed under it — but a
+        // re-activation is how edited blocks reach the pump, so ask whenever the store has just been written.
+        OKDialog.showConfirmation(
+            ctx,
+            rh.gs(app.aaps.core.ui.R.string.activate_profile) + ": " + name + "?",
+            {
+                val now = dateUtil.now()
+                profileFunction.createProfileSwitch(
+                    profileStore = store,
+                    profileName = name,
+                    durationInMinutes = 0,
+                    percentage = 100,
+                    timeShiftInHours = 0,
+                    timestamp = now,
+                    action = Action.PROFILE_SWITCH,
+                    source = Sources.LocalProfile,
+                    note = "activated from profile editor",
+                    listValues = listOf(ValueWithUnit.SimpleString(name))
+                )
+                rxBus.send(EventLocalProfileChanged())
+                build()
+            },
+            null
+        )
+    }
+
 
     /** Category constraints copied EXACTLY from the legacy TimeListEdit call sites in [build]. */
     private fun buildProfileEditState() {
@@ -625,6 +667,7 @@ class ProfileFragment : DaggerFragment() {
             )
             profilePlugin.storeSettings(activity, dateUtil.now())
             build()
+            offerToActivate()
         }
         updateGUI()
         buildProfileView()
