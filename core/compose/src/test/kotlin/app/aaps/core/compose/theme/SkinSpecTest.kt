@@ -169,6 +169,76 @@ class SkinSpecTest {
     }
 
     @Test
+    fun `a single palette serves both grounds and inherits from the one it resembles`() {
+        // A pale skin that names only its own colours must not pick up dark surfaces for everything
+        // it left out — the reason `palette` exists rather than making light skins declare
+        // themselves under `dark`.
+        val spec = SkinSpec.parse("""{ "id": "pale", "label": "Pale", "palette": { "background": "#FFF1F7" } }""")
+        val skin = spec.toSkin()
+        assertThat(skin.light).isEqualTo(skin.dark)
+        assertWithMessage("inherits the LIGHT default, not the dark one")
+            .that(skin.dark.textPrimary).isEqualTo(AapsSkins.Default.light.textPrimary)
+    }
+
+    @Test
+    fun `a dark single palette still inherits from the dark default`() {
+        val skin = SkinSpec.parse("""{ "id": "d", "label": "D", "palette": { "background": "#101418" } }""").toSkin()
+        assertThat(skin.dark.textPrimary).isEqualTo(AapsSkins.Default.dark.textPrimary)
+    }
+
+    @Test
+    fun `the kawaii skin satisfies every rule`() {
+        // A saturated palette is where text contrast gets hard, the opposite failure mode from the
+        // Game Boy skin — worth pinning both so the rules are exercised from both ends. Neon only
+        // clears contrast against a DARK ground, which is the constraint that shapes this palette.
+        val spec = SkinSpec.parse(
+            """
+            {
+              "formatVersion": 1,
+              "id": "kawaii",
+              "label": "Kawaii Neon",
+              "author": "alex",
+              "description": "Neon rainbow on deep purple, bubble font, very round. Font: Bubblegum Sans (OFL).",
+              "cornerRadius": 28,
+              "font": { "file": "cute.ttf", "singleWeight": true, "scale": 1.05 },
+              "palette": {
+                "background": "#140021",
+                "surface": "#22093A",
+                "surface2": "#2E0F4D",
+                "surface3": "#180527",
+                "bar": "#0D0016",
+                "scrim": "#CC0D0016",
+                "hairline": "#3300E5FF",
+                "divider": "#26FF2D95",
+                "controlFill": "#26FF2D95",
+                "switchTrackOff": "#40B57FD6",
+                "switchKnobOff": "#F0A6FF",
+                "textPrimary": "#FFF0FB",
+                "textSecondary": "#F0A6FF",
+                "textTertiary": "#B57FD6",
+                "textOnSurfaceStrong": "#FFE0F7",
+                "inRange": "#3DFFC8",
+                "high": "#FFE03D",
+                "low": "#FF2D95",
+                "veryHigh": "#FF9E1F",
+                "veryLow": "#FF5C5C",
+                "iob": "#FF7AD9",
+                "accent": "#00E5FF",
+                "accentOnLight": "#00E5FF",
+                "accentTint": "#2600E5FF",
+                "accentTintStrong": "#4000E5FF",
+                "onAccent": "#140021"
+              }
+            }
+            """.trimIndent()
+        )
+        val skin = spec.toSkin()
+        assertWithMessage("kawaii palette").that(SkinValidation.problems(skin)).isEmpty()
+        assertThat(skin.light).isEqualTo(skin.dark)
+        assertThat(skin.cornerRadius).isEqualTo(28.dp)
+    }
+
+    @Test
     fun `a well-formed skin round-trips through serialisation`() {
         val original = SkinSpec(
             id = "roundtrip", label = "Round Trip", author = "alex", cornerRadius = 0f,

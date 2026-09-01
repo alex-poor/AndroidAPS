@@ -37,6 +37,18 @@ data class SkinSpec(
 
     val font: FontSpec? = null,
 
+    /**
+     * One palette used on both grounds — for a skin that has a single look, which most do.
+     *
+     * Exists because the alternative was telling the author of a *light* single-look skin to declare
+     * it under `dark`, which is the kind of instruction that makes people distrust the rest of the
+     * format. Whether its unspecified tokens inherit from the default light or dark palette is
+     * decided by the background it declares, so a pale skin does not inherit dark surfaces.
+     *
+     * [dark] and [light] still apply on top, for a skin that is mostly one look with an exception.
+     */
+    val palette: PaletteSpec? = null,
+
     val dark: PaletteSpec = PaletteSpec(),
     /** Omit for a single-look skin. */
     val light: PaletteSpec? = null
@@ -129,14 +141,17 @@ data class SkinSpec(
         if (label.isBlank()) throw SkinFormatException("Skin label is empty.")
         if (id in RESERVED_IDS) throw SkinFormatException("'$id' is a built-in skin id; choose another.")
 
-        val darkColors = dark.toColors(AapsSkins.Default.dark)
+        // A single palette inherits from whichever default ground it resembles, so a pale skin that
+        // names only its pinks does not pick up dark surfaces for everything it left out.
+        val single = palette?.let { it.toColors(if (it.background?.parseSkinColor()?.isDark() == false) AapsSkins.Default.light else AapsSkins.Default.dark) }
+        val darkColors = if (single != null) dark.toColors(single) else dark.toColors(AapsSkins.Default.dark)
         return AapsSkin(
             id = id,
             label = label,
             dark = darkColors,
             // A single-look skin renders its one palette on both grounds rather than falling back to
             // the default light one, which would silently discard its identity in light mode.
-            light = light?.toColors(AapsSkins.Default.light) ?: darkColors,
+            light = light?.toColors(single ?: AapsSkins.Default.light) ?: darkColors,
             fontFamily = fontFamily ?: HankenGrotesk,
             singleWeightFont = font?.singleWeight ?: false,
             typeScale = font?.scale ?: 1f,

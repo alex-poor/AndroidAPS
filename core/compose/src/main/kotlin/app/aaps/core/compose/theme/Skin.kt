@@ -198,7 +198,7 @@ object AapsAppearances {
 }
 
 /** Whether a ground reads as dark, by relative luminance — the midpoint is enough to pick a mode. */
-private fun Color.isDark(): Boolean {
+internal fun Color.isDark(): Boolean {
     fun ch(v: Float): Double {
         val s = v.toDouble()
         return if (s <= 0.03928) s / 12.92 else ((s + 0.055) / 1.055).pow(2.4)
