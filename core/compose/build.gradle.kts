@@ -5,6 +5,7 @@ plugins {
     id("kotlin-android")
     id("android-module-dependencies")
     id("test-module-dependencies")
+    id("kotlinx-serialization")
     alias(libs.plugins.compose.compiler)
 }
 
@@ -33,4 +34,9 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.core)
+
+    // The skin file format. Data only — no Android surface, so it stays in the design system
+    // module next to the tokens it describes.
+    implementation(platform(libs.kotlinx.serialization.bom))
+    implementation(libs.kotlinx.serialization.json)
 }
