@@ -25,7 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -45,7 +44,7 @@ fun PumpStatusScreen(state: PumpStatusState) {
             Text(state.title, style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
                 label = if (state.connected) "Connected" else state.connection.ifBlank { "Disconnected" },
-                dotColor = if (state.connected) AapsSemantic.inRange else AapsSemantic.low
+                dotColor = if (state.connected) colors.inRange else colors.low
             )
         }
 
@@ -53,11 +52,11 @@ fun PumpStatusScreen(state: PumpStatusState) {
             GaugeTile(
                 "RESERVOIR", String.format(java.util.Locale.getDefault(), "%.0f U", state.reservoir),
                 (state.reservoir / state.reservoirMax).toFloat(),
-                if (state.reservoir < 20) AapsSemantic.high else AapsSemantic.inRange, Modifier.weight(1f)
+                if (state.reservoir < 20) colors.high else colors.inRange, Modifier.weight(1f)
             )
             GaugeTile(
                 "BATTERY", "${state.battery}%", state.battery / 100f,
-                if (state.battery < 25) AapsSemantic.low else AapsSemantic.inRange, Modifier.weight(1f)
+                if (state.battery < 25) colors.low else colors.inRange, Modifier.weight(1f)
             )
         }
 
@@ -83,9 +82,9 @@ fun PumpStatusScreen(state: PumpStatusState) {
                 } else state.queue.forEachIndexed { i, q ->
                     if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) AapsSemantic.inRange else colors.textTertiary))
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
                         Text(q.text, style = AapsType.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                        if (q.running) Text("running", style = AapsType.caption, color = AapsSemantic.inRange)
+                        if (q.running) Text("running", style = AapsType.caption, color = colors.inRange)
                     }
                 }
             }

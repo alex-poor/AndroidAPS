@@ -27,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -52,10 +51,10 @@ fun ObjectivesJourney(state: ObjectivesUiState, onManage: () -> Unit) {
         if (state.completed > 0) {
             AapsCard(
                 Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap),
-                color = AapsSemantic.inRange.copy(alpha = 0.10f)
+                color = colors.inRange.copy(alpha = 0.10f)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Icon(Icons.Rounded.Check, contentDescription = null, tint = AapsSemantic.inRange, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.inRange, modifier = Modifier.size(20.dp))
                     Text("Objectives 1–${state.completed} complete", style = AapsType.listTitle, color = colors.textPrimary)
                 }
             }

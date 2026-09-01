@@ -19,7 +19,6 @@ import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import app.aaps.core.compose.components.AlertAction
 import app.aaps.core.compose.components.AlertContent
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.pump.defs.PumpDescription
@@ -211,7 +210,7 @@ private fun PumpReadyContent(
                 append(if (b.reservoirEmpty) b.wording.emptyMessage else b.wording.stoppedMessage)
                 if (b.detail.isNotBlank()) append("\n\n").append(b.detail)
             },
-            tint = AapsSemantic.low,
+            tint = AapsTheme.colors.low,
             actions = listOf(
                 AlertAction(
                     if (checking) "Checking the pump…" else "Check again",
@@ -235,7 +234,7 @@ private fun PumpReadyContent(
         is DeliveryBlocker.LoopSuspended -> AlertContent(
             title = "Loop is suspended",
             message = "AAPS is ${suspensionLabel(b.mode)}, so it is not adjusting basal. The pump can still take this bolus.",
-            tint = AapsSemantic.high,
+            tint = AapsTheme.colors.high,
             actions = listOf(
                 AlertAction("Resume loop and bolus", primary = true, onClick = onResumeLoop),
                 AlertAction("Bolus anyway", onClick = onProceed),

@@ -8,8 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.compose.theme.AapsTone
 
 /**
  * Design-review preview of the redesigned Home with representative placeholder data (matches the
@@ -24,10 +24,10 @@ private fun HomeScreenPreview() {
             state = HomeUiState(
                 loopStateLabel = "Closed loop",
                 loopSubLabel = "· looping",
-                loopColor = AapsSemantic.inRange,
+                loopTone = AapsTone.InRange,
                 looping = true,
                 bg = "6.4",
-                bgColor = AapsSemantic.inRange,
+                bgTone = AapsTone.InRange,
                 units = "mmol/L",
                 trendArrow = "↗",
                 delta = "+0.2",
@@ -41,10 +41,10 @@ private fun HomeScreenPreview() {
                 basal = "0.42 U/h",
                 basalSub = "50% · 0.85 sched",
                 supplies = listOf(
-                    HomeUiState.Supply("Cannula", "2d", AapsSemantic.inRange),
-                    HomeUiState.Supply("Sensor", "6d", AapsSemantic.high),
-                    HomeUiState.Supply("Reservoir", "88 U", AapsSemantic.inRange),
-                    HomeUiState.Supply("Battery", "74%", AapsSemantic.inRange)
+                    HomeUiState.Supply("Cannula", "2d", AapsTone.InRange),
+                    HomeUiState.Supply("Sensor", "6d", AapsTone.High),
+                    HomeUiState.Supply("Reservoir", "88 U", AapsTone.InRange),
+                    HomeUiState.Supply("Battery", "74%", AapsTone.InRange)
                 ),
                 ready = true
             ),

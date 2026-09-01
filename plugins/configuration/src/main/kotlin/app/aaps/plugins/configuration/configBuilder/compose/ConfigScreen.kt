@@ -24,7 +24,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Dot
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -48,7 +47,7 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
                     state.summary.forEachIndexed { i, s ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Dot(if (s.ok) AapsSemantic.inRange else AapsSemantic.high, size = 9.dp)
+                            Dot(if (s.ok) colors.inRange else colors.high, size = 9.dp)
                             Text(s.label, style = AapsType.listTitle, color = colors.textSecondary, modifier = Modifier.padding(start = 10.dp).weight(1f))
                             Text(s.value, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }

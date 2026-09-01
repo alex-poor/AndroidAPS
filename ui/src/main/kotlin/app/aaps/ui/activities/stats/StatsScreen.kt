@@ -29,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.SegmentedControl
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -63,23 +62,23 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("TIME IN RANGE", style = AapsType.label, color = colors.textSecondary)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(if (state.loading) "--" else "${state.inRange.roundToInt()}%", style = AapsType.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = AapsSemantic.inRange)
+                    Text(if (state.loading) "--" else "${state.inRange.roundToInt()}%", style = AapsType.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
                     Text("in range", style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 8.dp, bottom = 12.dp))
                 }
                 // stacked bar
                 Row(
                     Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(7.dp)).background(colors.controlFill)
                 ) {
-                    Seg(state.veryLow, AapsSemantic.veryLow)
-                    Seg(state.low, AapsSemantic.low)
-                    Seg(state.inRange, AapsSemantic.inRange)
-                    Seg(state.high, AapsSemantic.high)
-                    Seg(state.veryHigh, AapsSemantic.veryHigh)
+                    Seg(state.veryLow, colors.veryLow)
+                    Seg(state.low, colors.low)
+                    Seg(state.inRange, colors.inRange)
+                    Seg(state.high, colors.high)
+                    Seg(state.veryHigh, colors.veryHigh)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    BarLabel("Low", state.veryLow + state.low, AapsSemantic.low, colors.textTertiary)
-                    BarLabel("In range", state.inRange, AapsSemantic.inRange, colors.textTertiary)
-                    BarLabel("High", state.high + state.veryHigh, AapsSemantic.high, colors.textTertiary)
+                    BarLabel("Low", state.veryLow + state.low, colors.low, colors.textTertiary)
+                    BarLabel("In range", state.inRange, colors.inRange, colors.textTertiary)
+                    BarLabel("High", state.high + state.veryHigh, colors.high, colors.textTertiary)
                 }
             }
         }
@@ -90,7 +89,7 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
             StatTile("AVG GLUCOSE", if (state.avgGlucose == "--") "--" else "${state.avgGlucose} ${state.avgGlucoseUnit}", Modifier.weight(1f))
         }
         Row(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
-            StatTile("CV", state.cv, Modifier.weight(1f), valueColor = if (state.cvGood) AapsSemantic.inRange else colors.textPrimary)
+            StatTile("CV", state.cv, Modifier.weight(1f), valueColor = if (state.cvGood) colors.inRange else colors.textPrimary)
             StatTile("AVG TDD", state.avgTdd, Modifier.weight(1f))
         }
 

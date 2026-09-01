@@ -1,25 +1,30 @@
 package app.aaps.plugins.main.general.overview.compose
 
 import androidx.compose.runtime.Immutable
-import androidx.compose.ui.graphics.Color
+import app.aaps.core.compose.theme.AapsTone
 
 /**
  * Presentation state for the redesigned Home (Overview) screen. Pure display data — no View
  * references, no domain objects — mapped from the existing Overview providers in
- * `OverviewFragment.buildHomeState()`. Colors are pre-resolved to [Color] on the fragment side
- * (theme attrs can't be read from Compose).
+ * `OverviewFragment.buildHomeState()`.
+ *
+ * Status is carried as an [AapsTone] — the *meaning* — not a resolved [androidx.compose.ui.graphics.Color]:
+ * the fragment runs outside composition and cannot read the theme, and baking a literal here would
+ * pin the screen to one palette. The composable resolves the tone against the live theme. `null`
+ * means "nothing to report yet" (no refresh has run), which each call site renders in its own
+ * neutral.
  */
 @Immutable
 data class HomeUiState(
     // Loop
     val loopStateLabel: String = "",
     val loopSubLabel: String = "",         // e.g. "· looping" / countdown
-    val loopColor: Color = Color.Unspecified,
+    val loopTone: AapsTone? = null,
     val looping: Boolean = false,
 
     // Hero glucose
     val bg: String = "--",
-    val bgColor: Color = Color.Unspecified,
+    val bgTone: AapsTone? = null,
     val bgStale: Boolean = false,
     val units: String = "mmol/L",
     val trendArrow: String = "",           // unicode arrow
@@ -84,7 +89,7 @@ data class HomeUiState(
     data class Supply(
         val label: String,
         val value: String,
-        val dotColor: Color,
+        val dotTone: AapsTone,
         // When set (0f..1f) the pill draws a depleting countdown RING instead of a plain dot — used by
         // the sensor to show life remaining at a glance. null = plain dot (cannula/reservoir/battery).
         val fraction: Float? = null

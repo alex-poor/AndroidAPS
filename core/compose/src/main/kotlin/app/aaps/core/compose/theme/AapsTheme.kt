@@ -20,9 +20,12 @@ data class AapsColors(
     val surface2: Color = AapsPalette.surface2,
     val surface3: Color = AapsPalette.surface3,
     val bar: Color = AapsPalette.bar,
+    val scrim: Color = AapsPalette.scrim,
     val hairline: Color = AapsPalette.hairline,
     val divider: Color = AapsPalette.divider,
     val controlFill: Color = AapsPalette.controlFill,
+    val switchTrackOff: Color = AapsPalette.switchTrackOff,
+    val switchKnobOff: Color = AapsPalette.switchKnobOff,
     // text
     val textPrimary: Color = AapsPalette.textPrimary,
     val textSecondary: Color = AapsPalette.textSecondary,
@@ -85,6 +88,27 @@ object AapsTheme {
 
     val colors: AapsColors
         @Composable @ReadOnlyComposable get() = LocalAapsColors.current
+}
+
+/**
+ * Resolve an [AapsTone] — a tone named outside composition — against the live theme.
+ *
+ * This is the seam that keeps the palette swappable: state builders that cannot read
+ * [LocalAapsColors] name the *meaning*, and the colour is chosen here, once, from whatever scheme
+ * [AapsTheme] is currently providing.
+ */
+@Composable
+@ReadOnlyComposable
+fun AapsTone.color(): Color = with(AapsTheme.colors) {
+    when (this@color) {
+        AapsTone.InRange  -> inRange
+        AapsTone.High     -> high
+        AapsTone.Low      -> low
+        AapsTone.VeryLow  -> veryLow
+        AapsTone.VeryHigh -> veryHigh
+        AapsTone.Accent   -> accent
+        AapsTone.Neutral  -> textTertiary
+    }
 }
 
 /**

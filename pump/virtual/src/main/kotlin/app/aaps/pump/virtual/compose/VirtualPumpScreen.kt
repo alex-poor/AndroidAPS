@@ -19,8 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsAccent
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -47,7 +45,7 @@ fun VirtualPumpScreen(state: VirtualPumpState, onSuspendedChange: (Boolean) -> U
             Text("Virtual pump", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
                 label = if (state.suspended) "Suspended" else "Running",
-                dotColor = if (state.suspended) AapsSemantic.high else AapsSemantic.inRange
+                dotColor = if (state.suspended) colors.high else colors.inRange
             )
         }
 
@@ -57,7 +55,7 @@ fun VirtualPumpScreen(state: VirtualPumpState, onSuspendedChange: (Boolean) -> U
                 Switch(
                     checked = state.suspended,
                     onCheckedChange = onSuspendedChange,
-                    colors = SwitchDefaults.colors(checkedTrackColor = AapsAccent.accent)
+                    colors = SwitchDefaults.colors(checkedTrackColor = colors.accent)
                 )
             }
         }

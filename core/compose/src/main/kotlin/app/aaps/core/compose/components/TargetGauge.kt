@@ -16,7 +16,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
 
@@ -44,10 +43,10 @@ fun TargetGauge(
             val r = CornerRadius(h / 2f, h / 2f)
             drawRoundRect(
                 brush = Brush.horizontalGradient(
-                    0.0f to AapsSemantic.low,
-                    0.28f to AapsSemantic.inRange,
-                    0.72f to AapsSemantic.inRange,
-                    1.0f to AapsSemantic.high
+                    0.0f to colors.low,
+                    0.28f to colors.inRange,
+                    0.72f to colors.inRange,
+                    1.0f to colors.high
                 ),
                 size = Size(size.width, h),
                 cornerRadius = r

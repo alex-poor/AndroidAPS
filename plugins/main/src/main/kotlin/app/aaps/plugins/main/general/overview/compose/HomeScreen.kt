@@ -46,12 +46,11 @@ import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsShape
-import app.aaps.core.compose.theme.AapsSemantic
-import app.aaps.core.compose.theme.AapsAccent
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
+import app.aaps.core.compose.theme.color
 
 /**
  * The redesigned Home (Overview) screen. Stateless — driven by [state] + [actions]. The glucose
@@ -108,10 +107,10 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
     Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
         alerts.forEach { alert ->
             val tint = when (alert.level) {
-                Notification.URGENT -> AapsSemantic.low
-                Notification.NORMAL -> AapsSemantic.high
-                Notification.LOW    -> AapsSemantic.inRange
-                else                -> AapsAccent.accent
+                Notification.URGENT -> colors.low
+                Notification.NORMAL -> colors.high
+                Notification.LOW    -> colors.inRange
+                else                -> colors.accent
             }
             AapsCard(shape = AapsShape.cardSmall) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -144,7 +143,7 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
 @Composable
 private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
     val colors = AapsTheme.colors
-    val bgColor = state.bgColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.textPrimary
+    val bgColor = state.bgTone?.color() ?: colors.textPrimary
     AapsCard(shape = AapsShape.hero) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // row 1 — loop pill (tap → Loop mode chooser) + time
@@ -154,7 +153,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                         append(state.loopStateLabel.ifBlank { "Loop" })
                         if (state.loopSubLabel.isNotBlank()) append("  ${state.loopSubLabel}")
                     },
-                    dotColor = state.loopColor.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: colors.inRange,
+                    dotColor = state.loopTone?.color() ?: colors.inRange,
                     glow = state.looping,
                     labelColor = colors.textPrimary,
                     onClick = actions.onLoop
@@ -260,7 +259,8 @@ private fun SupplyCell(s: HomeUiState.Supply, modifier: Modifier) {
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            if (s.fraction != null) CountdownRing(s.fraction, s.dotColor, size = 12.dp) else Dot(s.dotColor, size = 8.dp)
+            val dot = s.dotTone.color()
+            if (s.fraction != null) CountdownRing(s.fraction, dot, size = 12.dp) else Dot(dot, size = 8.dp)
             Text(s.label, style = AapsType.caption, color = colors.textSecondary, maxLines = 1)
         }
         Text(s.value, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1)
@@ -333,7 +333,7 @@ private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Color(0x99060810))
+                .background(colors.scrim)
                 .clickable(onClick = onClose)
         )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
@@ -346,7 +346,7 @@ private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
                             state.supplies.forEachIndexed { i, s ->
                                 if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                                 Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Dot(s.dotColor, size = 9.dp)
+                                    Dot(s.dotTone.color(), size = 9.dp)
                                     Text(s.label, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
                                     Text(s.value, style = AapsType.listTitle, color = colors.textPrimary)
                                 }
@@ -382,7 +382,7 @@ private fun CarbsUndoSheet(
         Box(
             Modifier
                 .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Color(0x99060810))
+                .background(colors.scrim)
                 .clickable(onClick = onClose)
         )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
@@ -435,7 +435,7 @@ private fun InsulinUndoSheet(
         Box(
             Modifier
                 .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Color(0x99060810))
+                .background(colors.scrim)
                 .clickable(onClick = onClose)
         )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {

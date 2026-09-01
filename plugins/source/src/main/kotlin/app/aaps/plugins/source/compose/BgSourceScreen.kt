@@ -32,8 +32,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsAccent
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -80,7 +78,7 @@ fun BgSourceScreen(
                     modifier = Modifier.clip(AapsShape.button).combinedClickable(onClick = onCancelSelecting).padding(horizontal = 10.dp, vertical = 6.dp)
                 )
                 Text(
-                    "Delete", style = AapsType.body, color = if (state.selected.isEmpty()) colors.textTertiary else AapsSemantic.low,
+                    "Delete", style = AapsType.body, color = if (state.selected.isEmpty()) colors.textTertiary else colors.low,
                     modifier = Modifier
                         .clip(AapsShape.button)
                         .then(if (state.selected.isEmpty()) Modifier else Modifier.combinedClickable(onClick = onDeleteSelected))
@@ -88,7 +86,7 @@ fun BgSourceScreen(
                 )
             } else {
                 Text("Glucose readings", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
-                StatusPill(label = "${state.rows.size}", dotColor = AapsSemantic.inRange)
+                StatusPill(label = "${state.rows.size}", dotColor = colors.inRange)
             }
         }
 
@@ -126,7 +124,7 @@ private fun BgReadingRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .background(if (row.tooClose) AapsSemantic.high.copy(alpha = 0.10f) else colors.background)
+            .background(if (row.tooClose) colors.high.copy(alpha = 0.10f) else colors.background)
             .combinedClickable(onClick = { if (selecting) onToggle() }, onLongClick = onLongPress)
             .padding(horizontal = AapsSpacing.screenH, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -135,7 +133,7 @@ private fun BgReadingRow(
         if (selecting)
             Checkbox(
                 checked = selected, onCheckedChange = { onToggle() },
-                colors = CheckboxDefaults.colors(checkedColor = AapsAccent.accent, uncheckedColor = colors.textTertiary)
+                colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary)
             )
 
         Text(row.time, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.width(78.dp))
@@ -148,7 +146,7 @@ private fun BgReadingRow(
         )
         Text(row.trend, style = AapsType.listTitle, color = colors.textSecondary)
         if (row.fromNightscout)
-            Box(Modifier.size(6.dp).clip(CircleShape).background(AapsAccent.accent))
+            Box(Modifier.size(6.dp).clip(CircleShape).background(colors.accent))
         else
             Box(Modifier.size(6.dp))
     }

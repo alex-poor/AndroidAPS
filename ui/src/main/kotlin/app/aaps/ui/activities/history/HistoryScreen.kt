@@ -19,6 +19,7 @@ import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,8 +31,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.Chip
-import app.aaps.core.compose.theme.AapsAccent
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -116,9 +115,11 @@ private fun iconFor(kind: HistoryKind): ImageVector = when (kind) {
     HistoryKind.EVENT                  -> AapsIcons.EventNote
 }
 
+@Composable
+@ReadOnlyComposable
 private fun tintFor(kind: HistoryKind): Color = when (kind) {
-    HistoryKind.BOLUS -> AapsSemantic.inRange
-    HistoryKind.SMB   -> AapsSemantic.inRange
-    HistoryKind.CARBS -> AapsSemantic.high
-    HistoryKind.EVENT -> AapsAccent.accent
+    HistoryKind.BOLUS -> AapsTheme.colors.inRange
+    HistoryKind.SMB   -> AapsTheme.colors.inRange
+    HistoryKind.CARBS -> AapsTheme.colors.high
+    HistoryKind.EVENT -> AapsTheme.colors.accent
 }

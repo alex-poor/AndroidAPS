@@ -22,7 +22,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Dot
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -44,9 +43,9 @@ fun ConnectivityScreen(state: ConnectivityUiState, onCard: (id: String) -> Unit)
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FlowNode(state.cgmName.ifBlank { "CGM" }, Modifier.weight(1f))
-                Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = AapsSemantic.inRange, modifier = Modifier.padding(horizontal = 4.dp))
+                Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = colors.inRange, modifier = Modifier.padding(horizontal = 4.dp))
                 FlowNode("AAPS", Modifier.weight(1f))
-                Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = AapsSemantic.inRange, modifier = Modifier.padding(horizontal = 4.dp))
+                Icon(Icons.Rounded.ArrowForward, contentDescription = null, tint = colors.inRange, modifier = Modifier.padding(horizontal = 4.dp))
                 FlowNode(state.cloudName, Modifier.weight(1f))
             }
         }
@@ -74,14 +73,14 @@ fun ConnectivityScreen(state: ConnectivityUiState, onCard: (id: String) -> Unit)
 private fun FlowNode(label: String, modifier: Modifier) {
     val colors = AapsTheme.colors
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Dot(AapsSemantic.inRange, size = 8.dp)
+        Dot(colors.inRange, size = 8.dp)
         Text(label, style = AapsType.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
 private fun levelColor(level: Int) = when (level) {
-    0    -> AapsSemantic.inRange
-    1    -> AapsSemantic.high
+    0    -> AapsTheme.colors.inRange
+    1    -> AapsTheme.colors.high
     else -> AapsTheme.colors.textTertiary
 }

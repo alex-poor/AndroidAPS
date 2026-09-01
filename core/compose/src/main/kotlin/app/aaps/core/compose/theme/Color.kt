@@ -21,6 +21,7 @@ object AapsPalette {
     val surface2 = Color(0xFF171C24)     // nested cards
     val surface3 = Color(0xFF12161D)     // bottom sheet
     val bar = Color(0xFF10141B)          // bottom action / confirm bars
+    val scrim = Color(0x99060810)        // dims the content behind a bottom sheet
 
     val hairline = Color(0x0FFFFFFF)     // rgba(255,255,255,0.06) card borders
     val divider = Color(0x0DFFFFFF)      // rgba(255,255,255,0.05) list separators
@@ -56,4 +57,28 @@ object AapsAccent {
     val tint = Color(0x1F6E8BFF)               // rgba(110,139,255,0.12) fills
     val tintStrong = Color(0x296E8BFF)         // rgba(110,139,255,0.16) fills
     val onAccent = Color(0xFF0B0E14)           // text / icon on accent buttons
+}
+
+/**
+ * A semantic tone named where the *meaning* is known but the theme is not.
+ *
+ * Fragments, dialogs and other state builders run outside composition, so they cannot read
+ * [LocalAapsColors] — historically they reached for [AapsSemantic] directly and baked one palette's
+ * literal [Color] into their UI state, which is what made the design tokens unswappable. Those
+ * builders now name a tone; the composable resolves it against the live theme with
+ * [app.aaps.core.compose.theme.color].
+ */
+enum class AapsTone {
+
+    InRange,
+    High,
+    Low,
+    VeryLow,
+    VeryHigh,
+
+    /** The interactive / brand accent — for state that is a control, not a glucose reading. */
+    Accent,
+
+    /** No status to report (unread, disconnected, not applicable) — renders as tertiary text ink. */
+    Neutral
 }

@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.theme.AapsAccent
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -51,7 +50,7 @@ fun LogSettingsScreen(
             )
             Text("Log settings", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 6.dp))
             Text(
-                "Reset", style = AapsType.label, color = AapsAccent.accent,
+                "Reset", style = AapsType.label, color = colors.accent,
                 modifier = Modifier.clip(AapsShape.button).clickable(onClick = onReset).padding(horizontal = 10.dp, vertical = 8.dp)
             )
         }
@@ -65,7 +64,7 @@ fun LogSettingsScreen(
                         Switch(
                             checked = element.enabled,
                             onCheckedChange = { onToggle(element.name, it) },
-                            colors = SwitchDefaults.colors(checkedTrackColor = AapsAccent.accent)
+                            colors = SwitchDefaults.colors(checkedTrackColor = colors.accent)
                         )
                     }
                 }

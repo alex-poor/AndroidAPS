@@ -109,8 +109,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.viewinterop.AndroidView
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.TE
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.plugins.main.general.overview.compose.HomeActions
@@ -479,22 +479,22 @@ class OverviewFragment : DaggerFragment() {
         // position vs the target band (informational).
         val lowMarkMgdl = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewLowMark), units)
         val highMarkMgdl = profileUtil.convertToMgdl(preferences.get(UnitDoubleKey.OverviewHighMark), units)
-        val bgColor = when {
-            bgMgdl == null        -> AapsSemantic.inRange
-            bgMgdl > highMarkMgdl -> AapsSemantic.high   // amber (hyper)
-            bgMgdl < lowMarkMgdl  -> AapsSemantic.low    // red (hypo)
-            else                  -> AapsSemantic.inRange // green
+        val bgTone = when {
+            bgMgdl == null        -> AapsTone.InRange
+            bgMgdl > highMarkMgdl -> AapsTone.High   // amber (hyper)
+            bgMgdl < lowMarkMgdl  -> AapsTone.Low    // red (hypo)
+            else                  -> AapsTone.InRange // green
         }
 
         // Loop mode → pill label / color / looping
         val mode = loop.runningMode
         val loopActive = mode == RM.Mode.CLOSED_LOOP || mode == RM.Mode.CLOSED_LOOP_LGS || mode == RM.Mode.SUPER_BOLUS
-        val loopColor = when {
-            loopActive                          -> AapsSemantic.inRange
-            mode == RM.Mode.OPEN_LOOP           -> AapsSemantic.high
+        val loopTone = when {
+            loopActive                          -> AapsTone.InRange
+            mode == RM.Mode.OPEN_LOOP           -> AapsTone.High
             mode == RM.Mode.DISABLED_LOOP ||
-                mode == RM.Mode.DISCONNECTED_PUMP -> AapsSemantic.low
-            else                                -> AapsSemantic.high // suspended variants
+                mode == RM.Mode.DISCONNECTED_PUMP -> AapsTone.Low
+            else                                -> AapsTone.High // suspended variants
         }
         val loopLabel = when (mode) {
             RM.Mode.CLOSED_LOOP       -> rh.gs(app.aaps.core.ui.R.string.closedloop)
@@ -547,7 +547,7 @@ class OverviewFragment : DaggerFragment() {
         }
         val supplies = buildList {
             ageDays(TE.Type.CANNULA_CHANGE)?.let {
-                add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsSemantic.inRange))
+                add(HomeUiState.Supply(if (pump.pumpDescription.isPatchPump) "Patch" else "Cannula", it, AapsTone.InRange))
             }
             // Sensor: show a depleting countdown to EXPIRY (not just elapsed age). Life assumed 10 d
             // (Dexcom G6); expiry = last SENSOR_CHANGE + life. Ring fraction = life remaining.
@@ -562,13 +562,13 @@ class OverviewFragment : DaggerFragment() {
                     remH >= 1      -> "${remH}h"
                     else           -> "${TimeUnit.MILLISECONDS.toMinutes(remaining)}m"
                 }
-                val color = when {
-                    remaining <= 0 -> AapsSemantic.low
-                    remH < 12      -> AapsSemantic.low
-                    remH < 48      -> AapsSemantic.high
-                    else           -> AapsSemantic.inRange
+                val tone = when {
+                    remaining <= 0 -> AapsTone.Low
+                    remH < 12      -> AapsTone.Low
+                    remH < 48      -> AapsTone.High
+                    else           -> AapsTone.InRange
                 }
-                add(HomeUiState.Supply("Sensor", label, color, fraction = fraction))
+                add(HomeUiState.Supply("Sensor", label, tone, fraction = fraction))
             }
             // Reservoir. This used to be drawn ONLY when `> 0`, so the pill quietly VANISHED at exactly
             // the moment it mattered — an empty cartridge looked identical to a screen that had never
@@ -581,9 +581,9 @@ class OverviewFragment : DaggerFragment() {
                         "Reservoir",
                         if (res <= 0.0) "Empty" else rh.gs(app.aaps.core.ui.R.string.format_insulin_units, res),
                         when {
-                            res <= preferences.get(IntKey.OverviewResCritical).toDouble() -> AapsSemantic.low
-                            res <= preferences.get(IntKey.OverviewResWarning).toDouble()  -> AapsSemantic.high
-                            else                                                         -> AapsSemantic.inRange
+                            res <= preferences.get(IntKey.OverviewResCritical).toDouble() -> AapsTone.Low
+                            res <= preferences.get(IntKey.OverviewResWarning).toDouble()  -> AapsTone.High
+                            else                                                         -> AapsTone.InRange
                         }
                     )
                 )
@@ -591,17 +591,17 @@ class OverviewFragment : DaggerFragment() {
             // Keep the battery pill stable: the pump reports 0 while disconnected/unread, so show "—"
             // (neutral) rather than letting the pill vanish and reappear.
             pump.batteryLevel?.let { bat ->
-                add(HomeUiState.Supply("Battery", if (bat > 0) "$bat%" else "—", if (bat in 1..24) AapsSemantic.low else AapsSemantic.inRange))
+                add(HomeUiState.Supply("Battery", if (bat > 0) "$bat%" else "—", if (bat in 1..24) AapsTone.Low else AapsTone.InRange))
             }
         }
 
         homeState.value = HomeUiState(
             loopStateLabel = loopLabel,
             loopSubLabel = loopSub,
-            loopColor = loopColor,
+            loopTone = loopTone,
             looping = loopActive,
             bg = profileUtil.fromMgdlToStringInUnits(lastBg?.recalculated),
-            bgColor = bgColor,
+            bgTone = bgTone,
             bgStale = !isActual,
             units = unitsStr,
             trendArrow = trendSymbol(trendCalculator.getTrendArrow(iobCobCalculator.ads)),

@@ -20,7 +20,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
@@ -30,6 +29,7 @@ import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
+import app.aaps.core.compose.theme.color
 
 /**
  * Redesigned Loop control sheet (handoff Section 3). Presents the current status, a mode radio list
@@ -51,7 +51,7 @@ fun LoopSheet(
             // status
             AapsCard(Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Dot(state.statusColor.takeIf { it != Color.Unspecified } ?: colors.inRange, glow = state.looping, size = 10.dp)
+                    Dot(state.statusTone?.color() ?: colors.inRange, glow = state.looping, size = 10.dp)
                     Column(Modifier.padding(start = 10.dp).weight(1f)) {
                         Text(state.statusLabel, style = AapsType.listTitle, color = colors.textPrimary)
                         if (state.algoLine.isNotBlank()) Text(state.algoLine, style = AapsType.caption, color = colors.textTertiary)

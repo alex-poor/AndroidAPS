@@ -24,7 +24,6 @@ import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.Stepper
-import app.aaps.core.compose.theme.AapsAccent
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -165,7 +164,7 @@ private fun DefaultProfileInputs(
             Text(
                 "Copy to local profile",
                 style = AapsType.label,
-                color = AapsAccent.accent,
+                color = colors.accent,
                 modifier = Modifier.clip(AapsShape.button).clickable(onClick = onCopyToLocal).padding(vertical = 10.dp)
             )
         }

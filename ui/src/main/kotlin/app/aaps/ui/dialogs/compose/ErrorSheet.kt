@@ -18,7 +18,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -44,8 +43,8 @@ fun ErrorSheet(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)
         ) {
-            Box(Modifier.size(44.dp).clip(CircleShape).background(AapsSemantic.low.copy(alpha = 0.18f))) {
-                Box(Modifier.align(Alignment.Center).size(14.dp).clip(CircleShape).background(AapsSemantic.low))
+            Box(Modifier.size(44.dp).clip(CircleShape).background(colors.low.copy(alpha = 0.18f))) {
+                Box(Modifier.align(Alignment.Center).size(14.dp).clip(CircleShape).background(colors.low))
             }
             if (status.isNotBlank())
                 Text(

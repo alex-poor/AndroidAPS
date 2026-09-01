@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.AapsType
@@ -39,7 +38,7 @@ fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit) {
             Text("Loop", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
                 label = if (state.running) "Running" else "Idle",
-                dotColor = if (state.running) AapsSemantic.inRange else colors.textTertiary
+                dotColor = if (state.running) colors.inRange else colors.textTertiary
             )
         }
 

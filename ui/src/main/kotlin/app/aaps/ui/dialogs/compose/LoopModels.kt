@@ -1,7 +1,7 @@
 package app.aaps.ui.dialogs.compose
 
 import androidx.compose.runtime.Immutable
-import androidx.compose.ui.graphics.Color
+import app.aaps.core.compose.theme.AapsTone
 
 /** Every discrete loop-control action. Maps 1:1 to the legacy LoopDialog button ids. */
 enum class LoopActionId {
@@ -24,7 +24,7 @@ data class LoopModeOption(
 @Immutable
 data class LoopSheetState(
     val statusLabel: String = "",
-    val statusColor: Color = Color.Unspecified,
+    val statusTone: AapsTone? = null,
     val looping: Boolean = false,
     val algoLine: String = "",
     val enactedLine: String = "",

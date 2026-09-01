@@ -16,7 +16,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsAccent
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -44,7 +43,7 @@ fun NtpProgressSheet(title: String, status: String, percent: Int, closeLabel: St
                         .fillMaxWidth(percent.coerceIn(0, 100) / 100f)
                         .height(6.dp)
                         .clip(AapsShape.pill)
-                        .background(AapsAccent.accent)
+                        .background(colors.accent)
                 )
             }
 

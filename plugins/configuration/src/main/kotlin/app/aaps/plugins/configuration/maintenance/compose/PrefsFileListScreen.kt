@@ -89,9 +89,9 @@ fun PrefsFileListScreen(
                             Text(file.exportedAgo, style = AapsType.caption, color = colors.textSecondary)
                         Row(horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
                             if (file.flavour.isNotBlank())
-                                Meta(file.flavour, if (file.flavourOk) colors.textSecondary else warn)
+                                Meta(file.flavour, if (file.flavourOk) colors.textSecondary else colors.high)
                             if (file.version.isNotBlank())
-                                Meta(file.version, if (file.versionOk) colors.textSecondary else warn)
+                                Meta(file.version, if (file.versionOk) colors.textSecondary else colors.high)
                             if (file.deviceName.isNotBlank())
                                 Meta(file.deviceName, colors.textTertiary)
                         }
@@ -118,7 +118,6 @@ fun PrefsFileListScreen(
     }
 }
 
-private val warn = Color(0xFFE0A106)
 
 @Composable
 private fun Meta(text: String, color: Color) {

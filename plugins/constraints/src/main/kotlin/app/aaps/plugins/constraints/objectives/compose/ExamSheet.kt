@@ -23,8 +23,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsAccent
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
@@ -89,7 +87,7 @@ fun ExamSheet(
                                 checked = option.selected,
                                 onCheckedChange = if (state.answered) null else ({ onToggleOption(i) }),
                                 enabled = !state.answered,
-                                colors = CheckboxDefaults.colors(checkedColor = AapsAccent.accent, uncheckedColor = colors.textTertiary)
+                                colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary)
                             )
                             Text(
                                 option.text,
@@ -103,7 +101,7 @@ fun ExamSheet(
             }
 
             state.disabledUntil?.let {
-                Text(it, style = AapsType.caption, color = AapsSemantic.high)
+                Text(it, style = AapsType.caption, color = colors.high)
             }
 
             if (hintViews.isNotEmpty())

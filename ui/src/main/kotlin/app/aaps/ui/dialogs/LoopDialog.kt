@@ -8,12 +8,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.fragment.app.FragmentManager
-import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
+import app.aaps.core.compose.theme.AapsTone
 import app.aaps.core.data.model.RM
 import app.aaps.core.data.time.T
 import app.aaps.core.data.ue.Action
@@ -110,7 +109,7 @@ class LoopDialog : DaggerDialogFragment() {
 
         return LoopSheetState(
             statusLabel = translator.translate(mode),
-            statusColor = colorFor(mode),
+            statusTone = toneFor(mode),
             looping = mode == RM.Mode.CLOSED_LOOP || mode == RM.Mode.CLOSED_LOOP_LGS,
             algoLine = (activePlugin.activeAPS as? app.aaps.core.interfaces.plugin.PluginBase)?.name ?: "",
             enactedLine = "",
@@ -125,10 +124,10 @@ class LoopDialog : DaggerDialogFragment() {
         )
     }
 
-    private fun colorFor(mode: RM.Mode): Color = when (mode) {
-        RM.Mode.CLOSED_LOOP, RM.Mode.CLOSED_LOOP_LGS -> AapsSemantic.inRange
-        RM.Mode.OPEN_LOOP, RM.Mode.SUSPENDED_BY_USER, RM.Mode.SUSPENDED_BY_PUMP, RM.Mode.SUSPENDED_BY_DST, RM.Mode.SUPER_BOLUS -> AapsSemantic.high
-        else -> AapsSemantic.low
+    private fun toneFor(mode: RM.Mode): AapsTone = when (mode) {
+        RM.Mode.CLOSED_LOOP, RM.Mode.CLOSED_LOOP_LGS -> AapsTone.InRange
+        RM.Mode.OPEN_LOOP, RM.Mode.SUSPENDED_BY_USER, RM.Mode.SUSPENDED_BY_PUMP, RM.Mode.SUSPENDED_BY_DST, RM.Mode.SUPER_BOLUS -> AapsTone.High
+        else -> AapsTone.Low
     }
 
     // ---- actions (same path as before) ----

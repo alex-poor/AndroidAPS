@@ -19,8 +19,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.aaps.core.compose.theme.AapsAccent
-import app.aaps.core.compose.theme.AapsSemantic
+import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.HankenGrotesk
 import java.util.Calendar
@@ -55,7 +54,7 @@ fun HomeGlucoseChart(data: HomeChartData, modifier: Modifier = Modifier) {
     Box(modifier) {
         Canvas(Modifier.fillMaxSize()) {
             if (!data.hasData) return@Canvas
-            drawChart(data, colors.divider, colors.textTertiary, colors.textOnSurfaceStrong, colors.surface, measurer, axisStyle, valueStyle)
+            drawChart(data, colors, measurer, axisStyle, valueStyle)
         }
     }
 }
@@ -66,10 +65,7 @@ private const val INSULIN_WEIGHT = 0.30f   // delivered insulin
 
 private fun DrawScope.drawChart(
     d: HomeChartData,
-    divider: Color,
-    tertiary: Color,
-    traceInk: Color,
-    surface: Color,
+    colors: AapsColors,
     measurer: TextMeasurer,
     axisStyle: TextStyle,
     valueStyle: TextStyle
@@ -98,14 +94,14 @@ private fun DrawScope.drawChart(
 
     // ---- target band (behind everything) ----
     drawRect(
-        color = AapsSemantic.inRange.copy(alpha = 0.08f),
+        color = colors.inRange.copy(alpha = 0.08f),
         topLeft = Offset(leftPad, y(d.highMark)),
         size = Size(plotW, y(d.lowMark) - y(d.highMark))
     )
 
     // ---- the only two gridlines that mean anything clinically ----
     listOf(d.lowMark, d.highMark).forEach { v ->
-        drawLine(AapsSemantic.inRange.copy(alpha = 0.22f), Offset(leftPad, y(v)), Offset(size.width - rightPad, y(v)), 1f)
+        drawLine(colors.inRange.copy(alpha = 0.22f), Offset(leftPad, y(v)), Offset(size.width - rightPad, y(v)), 1f)
         measurer.label(this, fmt(v, d.decimals), leftPad - 4.dp.toPx(), y(v), axisStyle, alignEnd = true)
     }
     measurer.label(this, fmt(gHi, 0), leftPad - 4.dp.toPx(), y(gHi) + 4.dp.toPx(), axisStyle, alignEnd = true)
@@ -122,7 +118,7 @@ private fun DrawScope.drawChart(
         drawPath(
             area,
             Brush.verticalGradient(
-                0f to traceInk.copy(alpha = 0.16f),
+                0f to colors.textOnSurfaceStrong.copy(alpha = 0.16f),
                 1f to Color.Transparent,
                 startY = gTop, endY = gTop + gH
             )
@@ -137,7 +133,7 @@ private fun DrawScope.drawChart(
         if (b.time - a.time > 20 * 60_000L) continue
         val mid = (a.value + b.value) / 2
         drawLine(
-            color = stateColor(mid, d.lowMark, d.highMark, traceInk),
+            color = stateColor(mid, d.lowMark, d.highMark, colors),
             start = Offset(x(a.time), y(a.value)),
             end = Offset(x(b.time), y(b.value)),
             strokeWidth = strokeW,
@@ -146,11 +142,11 @@ private fun DrawScope.drawChart(
     }
 
     // ---- treatment rail ----
-    drawLine(divider, Offset(leftPad, railY), Offset(size.width - rightPad, railY), 1f)
+    drawLine(colors.divider, Offset(leftPad, railY), Offset(size.width - rightPad, railY), 1f)
     d.treatments.forEach { t ->
         when (t.kind) {
             TreatmentKind.CARBS      -> drawCircle(
-                AapsSemantic.high.copy(alpha = 0.9f),
+                colors.high.copy(alpha = 0.9f),
                 radius = (sqrt(t.amount).toFloat() * 0.6f).coerceIn(2.5f, 6f).dp.toPx(),
                 center = Offset(x(t.time), railY)
             )
@@ -160,7 +156,7 @@ private fun DrawScope.drawChart(
                 val smb = t.kind == TreatmentKind.SMB
                 val h = (t.amount.toFloat() * 1.1f).coerceIn(4f, 13f).dp.toPx()
                 drawLine(
-                    AapsAccent.accent.copy(alpha = if (smb) 0.65f else 1f),
+                    colors.accent.copy(alpha = if (smb) 0.65f else 1f),
                     Offset(x(t.time), railY - h / 2), Offset(x(t.time), railY + h / 2),
                     strokeWidth = (if (smb) 1.5f else 2.6f).dp.toPx(),
                     cap = androidx.compose.ui.graphics.StrokeCap.Round
@@ -189,19 +185,19 @@ private fun DrawScope.drawChart(
         drawPath(
             step,
             Brush.verticalGradient(
-                0f to AapsAccent.accent.copy(alpha = 0.38f),
-                1f to AapsAccent.accent.copy(alpha = 0.06f),
+                0f to colors.accent.copy(alpha = 0.38f),
+                1f to colors.accent.copy(alpha = 0.06f),
                 startY = iTop, endY = iTop + iH
             )
         )
-        drawPath(step, AapsAccent.accent, style = Stroke(width = 1.4.dp.toPx()))
+        drawPath(step, colors.accent, style = Stroke(width = 1.4.dp.toPx()))
     }
     // Panel label sits INSIDE the panel on its own ground: in the rail band above, it collided with
     // whichever treatment happened to fall near the left edge.
     run {
         val laid = measurer.measure("INSULIN U/HR", axisStyle)
         drawRoundRect(
-            surface.copy(alpha = 0.85f),
+            colors.surface.copy(alpha = 0.85f),
             topLeft = Offset(leftPad, iTop + 2.dp.toPx()),
             size = Size(laid.size.width + 6.dp.toPx(), laid.size.height + 2.dp.toPx()),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
@@ -211,7 +207,7 @@ private fun DrawScope.drawChart(
 
     if (d.scheduledBasal > 0) {
         drawLine(
-            tertiary.copy(alpha = 0.8f), Offset(leftPad, iy(d.scheduledBasal)), Offset(size.width - rightPad, iy(d.scheduledBasal)),
+            colors.textTertiary.copy(alpha = 0.8f), Offset(leftPad, iy(d.scheduledBasal)), Offset(size.width - rightPad, iy(d.scheduledBasal)),
             strokeWidth = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 4f))
         )
         measurer.label(this, "sched " + fmt(d.scheduledBasal, 2), leftPad + 3.dp.toPx(), iy(d.scheduledBasal) - 3.dp.toPx(), axisStyle)
@@ -232,13 +228,13 @@ private fun DrawScope.drawChart(
     val last = pts.last()
     val nowX = x(last.time)
     drawLine(
-        AapsAccent.accent.copy(alpha = 0.45f), Offset(nowX, gTop), Offset(nowX, iTop + iH),
+        colors.accent.copy(alpha = 0.45f), Offset(nowX, gTop), Offset(nowX, iTop + iH),
         strokeWidth = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(3f, 4f))
     )
-    val stateC = stateColor(last.value, d.lowMark, d.highMark, traceInk)
+    val stateC = stateColor(last.value, d.lowMark, d.highMark, colors)
     drawCircle(stateC.copy(alpha = 0.16f), radius = 7.dp.toPx(), center = Offset(nowX, y(last.value)))
     drawCircle(stateC, radius = 3.4.dp.toPx(), center = Offset(nowX, y(last.value)))
-    drawCircle(surface, radius = 3.4.dp.toPx(), center = Offset(nowX, y(last.value)), style = Stroke(1.4.dp.toPx()))
+    drawCircle(colors.surface, radius = 3.4.dp.toPx(), center = Offset(nowX, y(last.value)), style = Stroke(1.4.dp.toPx()))
 
     // The trace runs into the endpoint, so the current value gets its own ground rather than being
     // printed over the line.
@@ -249,16 +245,16 @@ private fun DrawScope.drawChart(
     val chipX = (nowX - 10.dp.toPx() - chipW).coerceAtLeast(leftPad)
     val chipY = (y(last.value) - 10.dp.toPx() - chipH).coerceAtLeast(gTop)
     drawRoundRect(
-        surface.copy(alpha = 0.92f), topLeft = Offset(chipX, chipY), size = Size(chipW, chipH),
+        colors.surface.copy(alpha = 0.92f), topLeft = Offset(chipX, chipY), size = Size(chipW, chipH),
         cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())
     )
     drawText(laid, topLeft = Offset(chipX + 4.dp.toPx(), chipY + 1.5.dp.toPx()))
 }
 
-private fun stateColor(v: Double, low: Double, high: Double, inRangeInk: Color): Color = when {
-    v < low  -> AapsSemantic.low
-    v > high -> AapsSemantic.high
-    else     -> inRangeInk
+private fun stateColor(v: Double, low: Double, high: Double, colors: AapsColors): Color = when {
+    v < low  -> colors.low
+    v > high -> colors.high
+    else     -> colors.textOnSurfaceStrong
 }
 
 private fun fmt(v: Double, decimals: Int): String =
