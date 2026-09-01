@@ -27,7 +27,7 @@ import app.aaps.R
 import app.aaps.activities.compose.PrefRow
 import app.aaps.activities.compose.PreferenceScreenCompose
 import app.aaps.activities.compose.flattenPreferences
-import app.aaps.core.compose.theme.AapsSkins
+import app.aaps.core.compose.theme.AapsAppearances
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.configuration.Config
@@ -412,21 +412,11 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         val languageValues = arrayOf<CharSequence>("default", "en", "af", "bg", "cs", "de", "dk", "fr", "nl", "es", "el", "ga", "it", "ko", "lt", "nb", "pl", "pt", "pt_BR", "ro", "ru", "sk", "sv", "tr", "zh_TW", "zh_CN")
         assert(languageEntries.size == languageValues.size)
 
-        val darkModeEntries = arrayOf<CharSequence>(
-            rh.gs(app.aaps.plugins.main.R.string.dark_theme),
-            rh.gs(app.aaps.plugins.main.R.string.light_theme),
-            rh.gs(app.aaps.plugins.main.R.string.follow_system_theme),
-        )
-        val darkModeValues = arrayOf<CharSequence>(
-            rh.gs(app.aaps.plugins.main.R.string.value_dark_theme),
-            rh.gs(app.aaps.plugins.main.R.string.value_light_theme),
-            rh.gs(app.aaps.plugins.main.R.string.value_system_theme),
-        )
-
-        // Built-in Compose skins. Entries come from the registry rather than a resource array, so
-        // adding a skin stays a one-line data change in AapsSkins.
-        val skinEntries = AapsSkins.all.map { it.label as CharSequence }.toTypedArray()
-        val skinValues = AapsSkins.all.map { it.id as CharSequence }.toTypedArray()
+        // One flat appearance list rather than a palette AND a light/dark setting. Two knobs let the
+        // user pick combinations that do nothing (a dark-only palette plus "light"), and most skins
+        // have a single look anyway. Entries come from the registry, so adding one stays a data change.
+        val themeEntries = AapsAppearances.all.map { it.label as CharSequence }.toTypedArray()
+        val themeValues = AapsAppearances.all.map { it.id as CharSequence }.toTypedArray()
 
         val category = PreferenceCategory(context)
         rootScreen.addPreference(category)
@@ -446,21 +436,11 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
             addPreference(
                 AdaptiveListPreference(
                     ctx = context,
-                    stringKey = StringKey.GeneralDarkMode,
-                    entries = darkModeEntries,
-                    entryValues = darkModeValues,
-                    title = app.aaps.plugins.main.R.string.app_color_scheme,
-                    summary = app.aaps.plugins.main.R.string.theme_switcher_summary
-                )
-            )
-            addPreference(
-                AdaptiveListPreference(
-                    ctx = context,
                     stringKey = StringKey.GeneralSkin,
-                    entries = skinEntries,
-                    entryValues = skinValues,
-                    title = app.aaps.plugins.main.R.string.app_skin,
-                    summary = app.aaps.plugins.main.R.string.app_skin_summary
+                    entries = themeEntries,
+                    entryValues = themeValues,
+                    title = app.aaps.plugins.main.R.string.app_theme,
+                    summary = app.aaps.plugins.main.R.string.app_theme_summary
                 )
             )
         }

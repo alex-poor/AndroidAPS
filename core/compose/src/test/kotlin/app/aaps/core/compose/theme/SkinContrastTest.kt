@@ -159,6 +159,37 @@ class SkinContrastTest {
     }
 
     @Test
+    fun `every appearance is unique, resolvable, and backed by a registered skin`() {
+        assertThat(AapsAppearances.all.map { it.id }).containsNoDuplicates()
+        assertThat(AapsAppearances.all.map { it.label }).containsNoDuplicates()
+        AapsAppearances.all.forEach {
+            assertWithMessage("appearance ${it.id} resolves").that(AapsAppearances.byId(it.id)).isEqualTo(it)
+            assertWithMessage("appearance ${it.id} uses a registered skin").that(AapsSkins.all).contains(it.skin)
+        }
+        // Unknown / pre-flattening values land on the look the app shipped with rather than nothing.
+        assertThat(AapsAppearances.byId(null)).isEqualTo(AapsAppearances.Dark)
+        assertThat(AapsAppearances.byId("")).isEqualTo(AapsAppearances.Dark)
+        assertThat(AapsAppearances.byId("default")).isEqualTo(AapsAppearances.Dark)
+    }
+
+    @Test
+    fun `no appearance is a duplicate of another, so none of them can look like a no-op`() {
+        // The whole reason the picker was flattened: two settings allowed combinations that silently
+        // rendered something already on the list. Every entry must resolve to a distinct palette.
+        val rendered = AapsAppearances.all.associate { appearance ->
+            appearance.id to when (appearance.mode) {
+                AapsUiMode.LIGHT  -> appearance.skin.light
+                AapsUiMode.DARK   -> appearance.skin.dark
+                // "Follow system" is the only entry allowed to resolve two ways; it is the default
+                // pairing, and both of its grounds are covered by the other entries.
+                AapsUiMode.SYSTEM -> null
+            }
+        }.filterValues { it != null }
+        assertWithMessage("each fixed appearance renders a distinct palette")
+            .that(rendered.values.toSet()).hasSize(rendered.size)
+    }
+
+    @Test
     fun `ui mode round-trips through its stored string`() {
         AapsUiMode.entries.forEach { assertThat(AapsUiMode.fromString(it.stringValue)).isEqualTo(it) }
         assertThat(AapsUiMode.fromString("nonsense")).isEqualTo(AapsUiMode.SYSTEM)

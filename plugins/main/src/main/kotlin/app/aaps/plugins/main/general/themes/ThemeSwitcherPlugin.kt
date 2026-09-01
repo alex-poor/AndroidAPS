@@ -4,8 +4,8 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+import app.aaps.core.compose.theme.AapsAppearances
 import app.aaps.core.compose.theme.AapsSkinState
-import app.aaps.core.compose.theme.AapsSkins
 import app.aaps.core.compose.theme.AapsUiMode
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.logging.AAPSLogger
@@ -45,45 +45,77 @@ class ThemeSwitcherPlugin @Inject constructor(
         disposable += rxBus
             .toObservable(EventPreferenceChange::class.java)
             .subscribe {
-                if (it.isChanged(StringKey.GeneralDarkMode.key)) {
-                    setThemeMode()
-                    rxBus.send(EventThemeSwitch())
+                if (it.isChanged(StringKey.GeneralSkin.key)) {
+                    val recreateNeeded = applyAppearance()
+                    // Only the XML screens need tearing down, and only when their night mode actually
+                    // moved. The Compose half repaints from snapshot state, so a palette-only change
+                    // (Dark -> Midnight) must NOT blink the app.
+                    if (recreateNeeded) rxBus.send(EventThemeSwitch())
                 }
-                // A skin only reaches the Compose surfaces, which repaint from snapshot state — no
-                // EventThemeSwitch, because nothing needs to be recreated for it.
-                if (it.isChanged(StringKey.GeneralSkin.key)) setSkin()
             }
     }
 
     /**
-     * Applies the light/dark choice to BOTH halves of the app: [AppCompatDelegate] for the XML
-     * screens, and [AapsSkinState] for the redesigned Compose ones, which have their own theme and
-     * would otherwise stay dark whatever the user picked.
+     * Applies the chosen appearance to BOTH halves of the app: [AapsSkinState] for the redesigned
+     * Compose screens, and [AppCompatDelegate] for the XML ones, which have no concept of a skin and
+     * can only be told light or dark.
+     *
+     * `GeneralDarkMode` is kept in sync rather than read: it is no longer a setting the user sees,
+     * but it is an upstream key that survives preference export/import, so leaving it contradicting
+     * the visible theme would be a trap for anyone reading it later.
+     *
+     * @return true if the XML night mode changed, i.e. the activities have to be recreated.
      */
-    fun setThemeMode() {
-        val stored = try {
-            preferences.get(StringKey.GeneralDarkMode)
-        } catch (ignored: Exception) {
-            rh.gs(R.string.value_system_theme)
+    fun applyAppearance(): Boolean {
+        val appearance = AapsAppearances.byId(migratedAppearanceId())
+        AapsSkinState.appearanceId = appearance.id
+
+        val nightMode = when (appearance.mode) {
+            AapsUiMode.LIGHT  -> MODE_NIGHT_NO
+            AapsUiMode.DARK   -> MODE_NIGHT_YES
+            AapsUiMode.SYSTEM -> MODE_NIGHT_FOLLOW_SYSTEM
         }
-        AppCompatDelegate.setDefaultNightMode(
-            when (stored) {
-                rh.gs(R.string.value_dark_theme)  -> MODE_NIGHT_YES
-                rh.gs(R.string.value_light_theme) -> MODE_NIGHT_NO
-                else                              -> MODE_NIGHT_FOLLOW_SYSTEM
-            }
-        )
-        AapsSkinState.mode = AapsUiMode.fromString(stored)
-        setSkin()
+        val changed = AppCompatDelegate.getDefaultNightMode() != nightMode
+        AppCompatDelegate.setDefaultNightMode(nightMode)
+        preferences.put(StringKey.GeneralDarkMode, appearance.mode.stringValue)
+        return changed
     }
 
-    /** Compose-only. An unknown id (including a leftover from the retired layout skins) falls back to the default. */
-    fun setSkin() {
-        AapsSkinState.skinId = try {
+    /**
+     * The stored value, upgraded in place if it predates the flattened picker.
+     *
+     * `skin` has meant three different things on a real device: a layout-skin class name (retired), a
+     * palette id paired with a separate dark-mode setting (briefly), and now an appearance id. The
+     * middle case is the one worth translating rather than resetting — a user on Midnight should stay
+     * on Midnight — so a palette id is combined with the old `use_dark_mode` value to pick the
+     * equivalent appearance.
+     */
+    private fun migratedAppearanceId(): String {
+        val stored = try {
             preferences.get(StringKey.GeneralSkin)
         } catch (ignored: Exception) {
-            AapsSkins.Default.id
+            ""
         }
+        if (AapsAppearances.all.any { it.id == stored }) return stored
+
+        val oldMode = try {
+            AapsUiMode.fromString(preferences.get(StringKey.GeneralDarkMode))
+        } catch (ignored: Exception) {
+            AapsUiMode.DARK
+        }
+        // If the stored value names a skin, keep that skin and pick the entry matching the old mode —
+        // a single-look skin has only one entry, so it lands there regardless. Otherwise (an empty
+        // value, or a retired layout-skin class name) fall back on the old mode alone.
+        val forStoredSkin = AapsAppearances.all.filter { it.skin.id == stored }
+        val migrated = forStoredSkin.firstOrNull { it.mode == oldMode }
+            ?: forStoredSkin.firstOrNull()
+            ?: when (oldMode) {
+                AapsUiMode.LIGHT  -> AapsAppearances.Light
+                AapsUiMode.SYSTEM -> AapsAppearances.FollowSystem
+                AapsUiMode.DARK   -> AapsAppearances.Dark
+            }
+        preferences.put(StringKey.GeneralSkin, migrated.id)
+        return migrated.id
     }
 
     override fun onStop() {

@@ -6,8 +6,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * Light / dark / follow-the-system. Mirrors the three values [app.aaps.core.keys.StringKey]
- * `GeneralDarkMode` has always stored, so the existing preference drives Compose without a new key.
+ * Which ground of a skin to render. Not chosen directly any more — it is a property of the selected
+ * [AapsAppearance] — but it still maps onto the three values `GeneralDarkMode` stores, which is what
+ * the XML half of the app reads through `AppCompatDelegate`.
  */
 enum class AapsUiMode(val stringValue: String) {
 
@@ -22,12 +23,13 @@ enum class AapsUiMode(val stringValue: String) {
 }
 
 /**
- * A named palette pair. A skin supplies BOTH grounds; whether the light or dark one is used is the
- * orthogonal [AapsUiMode] choice, so a skin never has to care which the user prefers. A skin with
- * only one sensible ground just passes the same [AapsColors] twice.
+ * A named palette pair. A skin may supply two grounds; which one renders is a property of the
+ * [AapsAppearance] the user picked, so a skin never has to care. A skin with only one sensible
+ * ground passes the same [AapsColors] twice and contributes a single appearance.
  *
- * Adding a skin is a data change — construct one, add it to [AapsSkins.all]. Nothing else moves,
- * because every colour in the redesigned UI already resolves through [LocalAapsColors].
+ * Adding a skin is a data change — construct one, add it to [AapsSkins.all], and give it at least
+ * one entry in [AapsAppearances.all]. Nothing else moves, because every colour in the redesigned UI
+ * already resolves through [LocalAapsColors].
  */
 @Immutable
 data class AapsSkin(
@@ -112,18 +114,54 @@ object AapsSkins {
 }
 
 /**
- * The app-wide skin selection.
+ * One entry in the appearance picker — what the user actually chooses.
+ *
+ * Skins and light/dark are orthogonal in the DATA model (a skin may supply two grounds), but they
+ * are NOT orthogonal to a user: most skins are a single look, and offering "palette" and "light or
+ * dark" as two independent settings produces combinations that quietly do nothing. So the picker is
+ * flat, and each appearance names a (skin, mode) pair that is known to be worth choosing.
+ *
+ * [AapsSkins.Default] genuinely has two grounds, so it contributes the familiar three. Anything with
+ * one look contributes one entry. Adding a skin to the picker is a line here.
+ */
+@Immutable
+data class AapsAppearance(
+    /** Stable key persisted in preferences. */
+    val id: String,
+    val label: String,
+    val skin: AapsSkin,
+    val mode: AapsUiMode
+)
+
+object AapsAppearances {
+
+    val FollowSystem = AapsAppearance("system", "Follow system", AapsSkins.Default, AapsUiMode.SYSTEM)
+    val Light = AapsAppearance("light", "Light", AapsSkins.Default, AapsUiMode.LIGHT)
+    val Dark = AapsAppearance("dark", "Dark", AapsSkins.Default, AapsUiMode.DARK)
+
+    /** Midnight is dark by definition — a true-black light theme is a contradiction, so it offers one entry. */
+    val Midnight = AapsAppearance("midnight", "Midnight", AapsSkins.Midnight, AapsUiMode.DARK)
+
+    val all: List<AapsAppearance> = listOf(FollowSystem, Light, Dark, Midnight)
+
+    /** Resolve a persisted id; anything unrecognised falls back to [Dark], the look the app shipped with. */
+    fun byId(id: String?): AapsAppearance = all.firstOrNull { it.id == id } ?: Dark
+}
+
+/**
+ * The app-wide appearance selection.
  *
  * Deliberately a plain object holding Compose snapshot state rather than something injected: it lets
  * every one of the ~43 existing `AapsTheme { }` call sites keep working untouched, and because the
- * fields are snapshot state, writing one recomposes the whole UI on the spot — a skin change needs
- * no activity recreate. Written from `ThemeSwitcherPlugin` (main thread, from the preference), read
- * only by [AapsTheme].
+ * field is snapshot state, writing it recomposes the whole UI on the spot — an appearance change
+ * needs no activity recreate. Written from `ThemeSwitcherPlugin` (main thread, from the preference),
+ * read only by [AapsTheme].
  */
 object AapsSkinState {
 
-    var skinId: String by mutableStateOf(AapsSkins.Default.id)
-    var mode: AapsUiMode by mutableStateOf(AapsUiMode.DARK)
+    var appearanceId: String by mutableStateOf(AapsAppearances.Dark.id)
 
-    val skin: AapsSkin get() = AapsSkins.byId(skinId)
+    val appearance: AapsAppearance get() = AapsAppearances.byId(appearanceId)
+    val skin: AapsSkin get() = appearance.skin
+    val mode: AapsUiMode get() = appearance.mode
 }

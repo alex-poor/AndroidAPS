@@ -138,7 +138,7 @@ class MainApp : DaggerApplication() {
         }
         disposable += compatDBHelper.dbChangeDisposable()
         registerActivityLifecycleCallbacks(activityMonitor)
-        runOnUiThread { themeSwitcherPlugin.setThemeMode() }
+        runOnUiThread { themeSwitcherPlugin.applyAppearance() }
         aapsLogger.debug("Version: " + config.VERSION_NAME)
         aapsLogger.debug("BuildVersion: " + config.BUILD_VERSION)
         aapsLogger.debug("Remote: " + config.REMOTE)
