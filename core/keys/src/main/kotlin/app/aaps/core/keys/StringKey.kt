@@ -22,7 +22,7 @@ enum class StringKey(
     HovorkaParamIdStatus("hovorka_param_id_status", ""),
     GeneralLanguage("language", "default", defaultedBySM = true),
     GeneralPatientName("patient_name", ""),
-    GeneralSkin("skin", ""),
+    GeneralSkin("skin", "default"),
     GeneralDarkMode("use_dark_mode", "dark", defaultedBySM = true),
 
     AapsDirectoryUri("aaps_directory", ""),

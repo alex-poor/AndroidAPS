@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.library)
     id("kotlin-android")
     id("android-module-dependencies")
+    id("test-module-dependencies")
     alias(libs.plugins.compose.compiler)
 }
 
@@ -31,4 +32,5 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.core)
 }

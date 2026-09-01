@@ -44,7 +44,7 @@ object AapsSemantic {
     val inRange = Color(0xFF3ED598)    // green — in-range / good
     val high = Color(0xFFFFB84D)       // amber — high
     val low = Color(0xFFFF5C6C)        // red — low / urgent
-    val veryLow = Color(0xFFB0341F)    // deep red
+    val veryLow = Color(0xFFD8452A)    // deep red — 4.0:1 on `surface`; #B0341F was 2.8:1
     val veryHigh = Color(0xFFD98200)   // deep amber
     val iob = Color(0xFFFF9AA2)        // soft red — IOB / insulin-reducing
 }
@@ -57,6 +57,60 @@ object AapsAccent {
     val tint = Color(0x1F6E8BFF)               // rgba(110,139,255,0.12) fills
     val tintStrong = Color(0x296E8BFF)         // rgba(110,139,255,0.16) fills
     val onAccent = Color(0xFF0B0E14)           // text / icon on accent buttons
+}
+
+// ---------------------------------------------------------------------------------------------
+// LIGHT
+//
+// The same three families again, re-picked for a light ground. This is not a tint of the dark set:
+// amber and green are the hardest colours to keep legible on white, so the semantic family is
+// noticeably deeper here, and the accent inks invert (ink ON accent goes white, ink on an accent
+// TINT goes dark). Contrast targets: >=4.5:1 for body text and for anything that carries clinical
+// meaning at small sizes, >=3:1 for the hero readouts.
+// ---------------------------------------------------------------------------------------------
+
+/** Light counterpart of [AapsPalette]. */
+object AapsLightPalette {
+
+    val background = Color(0xFFF5F7FA)
+    val surface = Color(0xFFFFFFFF)
+    val surface2 = Color(0xFFF0F3F7)
+    val surface3 = Color(0xFFFFFFFF)
+    val bar = Color(0xFFFFFFFF)
+    val scrim = Color(0x99101418)        // scrims stay dark — they dim, whatever the skin
+
+    val hairline = Color(0x14000000)     // rgba(0,0,0,0.08)
+    val divider = Color(0x0F000000)      // rgba(0,0,0,0.06)
+    val controlFill = Color(0x0D000000)  // rgba(0,0,0,0.05)
+
+    val textPrimary = Color(0xFF12161D)
+    val textSecondary = Color(0xFF5A6472)
+    val textTertiary = Color(0xFF737C8A)
+    val textOnSurfaceStrong = Color(0xFF232A34)
+
+    val switchTrackOff = Color(0x1F000000)
+    val switchKnobOff = Color(0xFFFFFFFF)
+}
+
+/** Light counterpart of [AapsSemantic] — deeper, because these sit on white. */
+object AapsLightSemantic {
+
+    val inRange = Color(0xFF0F7A55)
+    val high = Color(0xFFA96400)
+    val low = Color(0xFFC62633)
+    val veryLow = Color(0xFF6B0F07)
+    val veryHigh = Color(0xFF5C3200)
+    val iob = Color(0xFFB5485A)
+}
+
+/** Light counterpart of [AapsAccent]. Note both inks flip role relative to the dark set. */
+object AapsLightAccent {
+
+    val accent = Color(0xFF3F5FD6)
+    val onLightSurface = Color(0xFF2B44A8)     // accent ink ON an accent tint
+    val tint = Color(0x1A3F5FD6)               // rgba(63,95,214,0.10)
+    val tintStrong = Color(0x293F5FD6)         // rgba(63,95,214,0.16)
+    val onAccent = Color(0xFFFFFFFF)           // ink on a SOLID accent fill
 }
 
 /**

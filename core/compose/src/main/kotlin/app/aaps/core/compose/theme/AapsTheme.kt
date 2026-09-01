@@ -1,12 +1,19 @@
 package app.aaps.core.compose.theme
 
+import android.app.Activity
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowInsetsControllerCompat
 
 /**
  * Extended palette that M3's [androidx.compose.material3.ColorScheme] can't express — the semantic
@@ -49,35 +56,85 @@ data class AapsColors(
 val LocalAapsColors = staticCompositionLocalOf { AapsColors() }
 
 /**
- * Root theme for all redesigned AAPS surfaces. Dark only for now (handoff ships dark first; a light
- * scheme can be derived later). Wraps [MaterialTheme] so Material components pick up the type/shape,
- * and provides [LocalAapsColors] for the extended palette.
+ * Root theme for all redesigned AAPS surfaces.
+ *
+ * Which palette it provides comes from [AapsSkinState] — the skin the user picked, and whether the
+ * light or dark ground of that skin applies. Both are Compose snapshot state, so changing either
+ * recomposes every screen immediately: no activity recreate, unlike the XML `AppTheme` half of the
+ * app. [skin] and [mode] can be passed explicitly to pin a `@Preview` to one appearance.
+ *
+ * Wraps [MaterialTheme] so Material components pick up the type/shape, and provides
+ * [LocalAapsColors] for the extended palette.
  */
 @Composable
-fun AapsTheme(content: @Composable () -> Unit) {
-    val m3 = darkColorScheme(
-        primary = AapsAccent.accent,
-        onPrimary = AapsAccent.onAccent,
-        primaryContainer = AapsAccent.tintStrong,
-        onPrimaryContainer = AapsAccent.onLightSurface,
-        background = AapsPalette.background,
-        onBackground = AapsPalette.textPrimary,
-        surface = AapsPalette.surface,
-        onSurface = AapsPalette.textPrimary,
-        surfaceVariant = AapsPalette.surface2,
-        onSurfaceVariant = AapsPalette.textSecondary,
-        outline = AapsPalette.hairline,
-        outlineVariant = AapsPalette.divider,
-        error = AapsSemantic.low,
-        onError = AapsAccent.onAccent
-    )
+fun AapsTheme(
+    skin: AapsSkin = AapsSkinState.skin,
+    mode: AapsUiMode = AapsSkinState.mode,
+    content: @Composable () -> Unit
+) {
+    val dark = when (mode) {
+        AapsUiMode.LIGHT  -> false
+        AapsUiMode.DARK   -> true
+        AapsUiMode.SYSTEM -> isSystemInDarkTheme()
+    }
+    val colors = skin.colors(dark)
+
+    // Status/nav bar icons have to flip with the ground or they vanish into it. Reactive, so it
+    // tracks a skin change without waiting for the activity to be recreated.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            (view.context as? Activity)?.window?.let { window ->
+                WindowInsetsControllerCompat(window, view).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+        }
+    }
+
+    val m3 = if (dark)
+        darkColorScheme(
+            primary = colors.accent,
+            onPrimary = colors.onAccent,
+            primaryContainer = colors.accentTintStrong,
+            onPrimaryContainer = colors.accentOnLight,
+            background = colors.background,
+            onBackground = colors.textPrimary,
+            surface = colors.surface,
+            onSurface = colors.textPrimary,
+            surfaceVariant = colors.surface2,
+            onSurfaceVariant = colors.textSecondary,
+            outline = colors.hairline,
+            outlineVariant = colors.divider,
+            error = colors.low,
+            onError = colors.onAccent
+        )
+    else
+        lightColorScheme(
+            primary = colors.accent,
+            onPrimary = colors.onAccent,
+            primaryContainer = colors.accentTintStrong,
+            onPrimaryContainer = colors.accentOnLight,
+            background = colors.background,
+            onBackground = colors.textPrimary,
+            surface = colors.surface,
+            onSurface = colors.textPrimary,
+            surfaceVariant = colors.surface2,
+            onSurfaceVariant = colors.textSecondary,
+            outline = colors.hairline,
+            outlineVariant = colors.divider,
+            error = colors.low,
+            onError = colors.onAccent
+        )
+
     MaterialTheme(
         colorScheme = m3,
         typography = AapsTypography,
         shapes = AapsShapes
     ) {
-        androidx.compose.runtime.CompositionLocalProvider(
-            LocalAapsColors provides AapsColors(),
+        CompositionLocalProvider(
+            LocalAapsColors provides colors,
             content = content
         )
     }
@@ -114,6 +171,10 @@ fun AapsTone.color(): Color = with(AapsTheme.colors) {
 /**
  * Map a glucose value (in **mmol/L**, matching how the design specifies bands) to its semantic color.
  * Callers should pass the user's real thresholds; defaults follow the handoff gauge labels.
+ *
+ * [colors] is required rather than defaulted: defaulting it to `AapsColors()` handed back the dark
+ * palette whatever skin was active, which is exactly the kind of back door the token system exists
+ * to remove. Pass `AapsTheme.colors`.
  */
 fun glucoseColorMmol(
     mmol: Double,
@@ -121,7 +182,7 @@ fun glucoseColorMmol(
     targetLow: Double = 5.5,
     targetHigh: Double = 7.0,
     highLimit: Double = 10.0,
-    colors: AapsColors = AapsColors()
+    colors: AapsColors
 ): Color = when {
     mmol < lowLimit * 0.72 -> colors.veryLow      // deep red (~< 2.8)
     mmol < targetLow       -> colors.low          // red (below target)

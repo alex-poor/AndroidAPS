@@ -27,6 +27,7 @@ import app.aaps.R
 import app.aaps.activities.compose.PrefRow
 import app.aaps.activities.compose.PreferenceScreenCompose
 import app.aaps.activities.compose.flattenPreferences
+import app.aaps.core.compose.theme.AapsSkins
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.configuration.Config
@@ -422,6 +423,11 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
             rh.gs(app.aaps.plugins.main.R.string.value_system_theme),
         )
 
+        // Built-in Compose skins. Entries come from the registry rather than a resource array, so
+        // adding a skin stays a one-line data change in AapsSkins.
+        val skinEntries = AapsSkins.all.map { it.label as CharSequence }.toTypedArray()
+        val skinValues = AapsSkins.all.map { it.id as CharSequence }.toTypedArray()
+
         val category = PreferenceCategory(context)
         rootScreen.addPreference(category)
         category.apply {
@@ -445,6 +451,16 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
                     entryValues = darkModeValues,
                     title = app.aaps.plugins.main.R.string.app_color_scheme,
                     summary = app.aaps.plugins.main.R.string.theme_switcher_summary
+                )
+            )
+            addPreference(
+                AdaptiveListPreference(
+                    ctx = context,
+                    stringKey = StringKey.GeneralSkin,
+                    entries = skinEntries,
+                    entryValues = skinValues,
+                    title = app.aaps.plugins.main.R.string.app_skin,
+                    summary = app.aaps.plugins.main.R.string.app_skin_summary
                 )
             )
         }

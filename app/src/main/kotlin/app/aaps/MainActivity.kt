@@ -346,7 +346,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
 
     private fun processPreferenceChange(ev: EventPreferenceChange) {
         if (ev.isChanged(BooleanKey.OverviewKeepScreenOn.key)) setWakeLock()
-        if (ev.isChanged(StringKey.GeneralSkin.key)) recreate()
     }
 
     private fun setupViews() {
