@@ -177,7 +177,7 @@ class SkinFormatException(message: String, cause: Throwable? = null) : Exception
  * @throws SkinFormatException with the offending text, because "invalid colour" alone in a
  *   26-field file is not a diagnosis.
  */
-internal fun String.parseSkinColor(): Color {
+fun String.parseSkinColor(): Color {
     val hex = trim().removePrefix("#")
     if (!hex.matches(Regex("[0-9a-fA-F]{6}|[0-9a-fA-F]{8}")))
         throw SkinFormatException("'$this' is not a colour — expected #RRGGBB or #AARRGGBB.")
@@ -186,3 +186,14 @@ internal fun String.parseSkinColor(): Color {
 }
 
 private fun String?.orDefault(fallback: Color): Color = this?.parseSkinColor() ?: fallback
+
+/**
+ * Render a colour the way [parseSkinColor] reads it, dropping a fully opaque alpha so an exported
+ * template shows `#0E1116` rather than `#FF0E1116` — the form a human would have written.
+ */
+fun Color.toSkinHex(): String {
+    fun byte(v: Float) = (v * 255f).toInt().coerceIn(0, 255)
+    val a = byte(alpha)
+    val rgb = "%02X%02X%02X".format(byte(red), byte(green), byte(blue))
+    return if (a == 255) "#$rgb" else "#%02X%s".format(a, rgb)
+}

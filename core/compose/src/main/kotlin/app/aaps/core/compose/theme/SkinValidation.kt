@@ -24,9 +24,15 @@ object SkinValidation {
     const val MIN_GRAPHIC_CONTRAST = 3.0
 
     /**
-     * Perceptual-distance floor between two colours that must not be confused. One just-noticeable
-     * difference is ~2.3, so this is a wide margin — chosen so the glucose bands stay separable at
-     * dot size and through a screen protector.
+     * Perceptual-distance floor between two glucose bands that must not be confused. One
+     * just-noticeable difference is ~2.3, so this is a wide margin — chosen so the bands stay
+     * separable at dot size and through a screen protector.
+     *
+     * It applies to the severe variants too. A single-hue palette looks at first like it cannot
+     * satisfy five bands at this distance while keeping them all readable on a dark ground — the
+     * Game Boy skin was nearly the reason to lower it — but that turns out to be an artefact of
+     * picking the grounds and inks first and fitting the bands into what is left. Solved jointly,
+     * a monochrome palette clears it with room to spare.
      */
     const val MIN_DELTA_E = 20.0
 

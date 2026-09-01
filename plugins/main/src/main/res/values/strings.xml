@@ -135,6 +135,8 @@
     <string name="light_theme">Light theme</string>
     <string name="follow_system_theme">Use device theme</string>
     <string name="app_theme">Theme</string>
+    <string name="manage_skins">Skins</string>
+    <string name="manage_skins_summary">Import, share and remove skin files</string>
     <string name="app_theme_summary">How the app looks</string>
     <string name="value_dark_theme" translatable="false">dark</string>
     <string name="value_light_theme" translatable="false">light</string>

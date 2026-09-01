@@ -7,6 +7,12 @@
 
         <service android:name=".general.persistentNotification.DummyService" />
 
+        <!-- Not exported: it manages files in app-private storage and is only ever reached from Settings. -->
+        <activity
+            android:name=".general.themes.SkinManagerActivity"
+            android:exported="false"
+            android:label="Skins" />
+
     </application>
 
 </manifest>

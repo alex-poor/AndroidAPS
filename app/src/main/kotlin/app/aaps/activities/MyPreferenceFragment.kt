@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener
+import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -28,6 +29,7 @@ import app.aaps.activities.compose.PrefRow
 import app.aaps.activities.compose.PreferenceScreenCompose
 import app.aaps.activities.compose.flattenPreferences
 import app.aaps.core.compose.theme.AapsAppearances
+import app.aaps.plugins.main.general.themes.SkinManagerActivity
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.configuration.Config
@@ -442,6 +444,19 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
                     title = app.aaps.plugins.main.R.string.app_theme,
                     summary = app.aaps.plugins.main.R.string.app_theme_summary
                 )
+            )
+            // A plain Preference rather than an Adaptive* one: this row stores no value, it just
+            // opens a screen, and the Adaptive wrappers all key their visibility rules off a
+            // preference key that would then have to exist for no reason.
+            addPreference(
+                Preference(context).apply {
+                    title = rh.gs(app.aaps.plugins.main.R.string.manage_skins)
+                    setSummary(app.aaps.plugins.main.R.string.manage_skins_summary)
+                    setOnPreferenceClickListener {
+                        startActivity(Intent(context, SkinManagerActivity::class.java))
+                        true
+                    }
+                }
             )
         }
     }

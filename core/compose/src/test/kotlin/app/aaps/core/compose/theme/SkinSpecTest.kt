@@ -117,6 +117,58 @@ class SkinSpecTest {
     }
 
     @Test
+    fun `a single-hue skin can satisfy every rule`() {
+        // The Game Boy case, kept as a regression test because it nearly cost the rules their teeth.
+        // Fitting bands into grounds chosen first makes a monochrome palette look impossible, and the
+        // tempting conclusion is that the band-separation floor is too strict. It is not: solved
+        // jointly, one hue clears the same 20 that a full-colour palette does. If a future change to
+        // the floors breaks this, the palette is the thing to re-solve -- not the floor to lower.
+        val spec = SkinSpec.parse(
+            """
+            {
+              "formatVersion": 1,
+              "id": "gameboy",
+              "label": "Game Boy",
+              "author": "alex",
+              "description": "DMG monochrome. One hue, hard corners, bands separated by lightness.",
+              "cornerRadius": 0,
+              "dark": {
+                "background": "#1B2300",
+                "surface": "#222E00",
+                "surface2": "#293800",
+                "surface3": "#161B00",
+                "bar": "#161B00",
+                "hairline": "#22C5DB7A",
+                "divider": "#1AC5DB7A",
+                "controlFill": "#1AC5DB7A",
+                "textPrimary": "#C5DB7A",
+                "textSecondary": "#B5CA6B",
+                "textTertiary": "#7B8E3C",
+                "textOnSurfaceStrong": "#B7CD6D",
+                "inRange": "#698023",
+                "high": "#A4BA5B",
+                "low": "#E8FD9A",
+                "veryHigh": "#7DA300",
+                "veryLow": "#FAFFE2",
+                "iob": "#A4BA5B",
+                "accent": "#C5DB7A",
+                "accentOnLight": "#C5DB7A",
+                "accentTint": "#26C5DB7A",
+                "accentTintStrong": "#3DC5DB7A",
+                "onAccent": "#1B2300"
+              }
+            }
+            """.trimIndent()
+        )
+        val skin = spec.toSkin()
+        assertWithMessage("a monochrome skin must remain possible")
+            .that(SkinValidation.problems(skin)).isEmpty()
+        // Single-look: no light palette, so the one ground serves both.
+        assertThat(skin.light).isEqualTo(skin.dark)
+        assertThat(skin.cornerRadius).isEqualTo(0.dp)
+    }
+
+    @Test
     fun `a well-formed skin round-trips through serialisation`() {
         val original = SkinSpec(
             id = "roundtrip", label = "Round Trip", author = "alex", cornerRadius = 0f,
