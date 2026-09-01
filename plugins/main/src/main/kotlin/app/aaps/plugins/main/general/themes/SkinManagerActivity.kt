@@ -1,5 +1,6 @@
 package app.aaps.plugins.main.general.themes
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
@@ -40,21 +41,9 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
     /** Set just before the export picker opens, so its callback knows which skin was meant. */
     private var pendingExportId: String? = null
 
+    // No confirmation here: the user just picked this file themselves, which is the agreement.
     private val importFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@registerForActivityResult
-        try {
-            val skin = contentResolver.openInputStream(uri)?.use { skinStore.install(it) }
-                ?: throw SkinFormatException("Could not open that file.")
-            themeSwitcherPlugin.reloadInstalledSkins()
-            refresh()
-            ToastUtils.okToast(this, "Installed ${skin.label}")
-        } catch (e: SkinFormatException) {
-            // Expected: the file was wrong. Show the validator's own words rather than a crash.
-            state = state.copy(error = e.message)
-        } catch (e: Exception) {
-            aapsLogger.error(LTag.UI, "Skin import failed", e)
-            state = state.copy(error = e.message ?: "Could not read that file.")
-        }
+        uri?.let { installFrom(it) }
     }
 
     private val exportFile = registerForActivityResult(ActivityResultContracts.CreateDocument(SkinStore.MIME_TYPE)) { uri ->
@@ -77,6 +66,7 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
         title = "Skins"
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         refresh()
+        handleIncomingFile(intent)
         setContentView(
             ComposeView(this).apply {
                 setContent {
@@ -101,6 +91,65 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
                 }
             }
         )
+    }
+
+    /** A skin tapped in another app — a mail attachment, a file manager — arrives here. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingFile(intent)
+    }
+
+    /**
+     * Install a bundle handed over by another app, but only after saying whose it is and asking.
+     *
+     * This activity is exported so a `.aapsskin` can be opened straight from wherever it arrived,
+     * which means any app on the phone can point it at a URI. Installing silently on that basis would
+     * let something else change how this app looks without the user ever agreeing to it — so the
+     * manifest is read first, purely to name the skin in a confirmation, and nothing touches storage
+     * until the user says yes.
+     */
+    private fun handleIncomingFile(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        val uri = intent.data ?: return
+        intent.data = null   // so a configuration change does not re-ask
+
+        val spec = try {
+            contentResolver.openInputStream(uri)?.use { skinStore.peek(it) }
+                ?: throw SkinFormatException("Could not open that file.")
+        } catch (e: SkinFormatException) {
+            state = state.copy(error = e.message)
+            return
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.UI, "Could not read incoming skin", e)
+            state = state.copy(error = e.message ?: "Could not read that file.")
+            return
+        }
+
+        val replacing = AapsSkins.installed.any { it.id == spec.id }
+        val by = spec.author?.let { "by $it" }
+        val note = listOfNotNull(by, spec.description).joinToString("\n").ifBlank { null }
+        OKDialog.showConfirmation(
+            this,
+            if (replacing) "Replace ${spec.label}?" else "Install ${spec.label}?",
+            note ?: "Add this skin to the theme list.",
+            { installFrom(uri) }
+        )
+    }
+
+    private fun installFrom(uri: android.net.Uri) {
+        try {
+            val skin = contentResolver.openInputStream(uri)?.use { skinStore.install(it) }
+                ?: throw SkinFormatException("Could not open that file.")
+            themeSwitcherPlugin.reloadInstalledSkins()
+            refresh()
+            ToastUtils.okToast(this, "Installed ${skin.label}")
+        } catch (e: SkinFormatException) {
+            state = state.copy(error = e.message)
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.UI, "Skin install failed", e)
+            state = state.copy(error = e.message ?: "Could not read that file.")
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean = also { finish() }.let { true }

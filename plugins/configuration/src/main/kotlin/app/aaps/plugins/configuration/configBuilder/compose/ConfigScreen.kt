@@ -13,7 +13,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -32,7 +36,12 @@ import app.aaps.core.compose.theme.AapsTheme
  * toggleable general plugins. Toggling reuses `ConfigBuilder.performPluginSwitch` in the fragment.
  */
 @Composable
-fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) -> Unit, onOpenPrefs: (index: Int) -> Unit) {
+fun ConfigScreen(
+    state: ConfigUiState,
+    onToggle: (index: Int, enabled: Boolean) -> Unit,
+    onOpenPrefs: (index: Int) -> Unit,
+    onSelect: (index: Int, enabled: Boolean) -> Unit
+) {
     val colors = AapsTheme.colors
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
@@ -49,6 +58,47 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
                             Dot(if (s.ok) colors.inRange else colors.high, size = 9.dp)
                             Text(s.label, style = AapsTheme.type.listTitle, color = colors.textSecondary, modifier = Modifier.padding(start = 10.dp).weight(1f))
                             Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+
+        state.categories.forEach { category ->
+            Text(category.title.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary)
+            if (category.description.isNotBlank())
+                Text(category.description, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp))
+            else Box(Modifier.height(8.dp))
+            AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
+                Column {
+                    category.options.forEachIndexed { i, option ->
+                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !option.fixed) { onSelect(option.index, !option.selected) }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (category.multiple)
+                                Checkbox(
+                                    checked = option.selected,
+                                    enabled = !option.fixed,
+                                    onCheckedChange = { onSelect(option.index, it) },
+                                    colors = CheckboxDefaults.colors(checkedColor = colors.accent, checkmarkColor = colors.onAccent, uncheckedColor = colors.hairline)
+                                )
+                            else
+                                RadioButton(
+                                    selected = option.selected,
+                                    enabled = !option.fixed,
+                                    onClick = { onSelect(option.index, true) },
+                                    colors = RadioButtonDefaults.colors(selectedColor = colors.accent, unselectedColor = colors.hairline)
+                                )
+                            Column(Modifier.weight(1f).padding(start = 4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(option.name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (option.description.isNotBlank())
+                                    Text(option.description, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }

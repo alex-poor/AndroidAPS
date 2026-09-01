@@ -119,6 +119,30 @@ class SkinStore @Inject constructor(
         }
     }
 
+    /**
+     * Read a bundle's manifest without installing anything.
+     *
+     * So a skin arriving from outside — tapped in a mail app, handed over by another app — can be
+     * named in a confirmation before it replaces anything. Consumes [input]; open the source again
+     * to install.
+     */
+    fun peek(input: InputStream): SkinSpec {
+        ZipInputStream(input.buffered()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (File(entry.name).name == SkinSpec.MANIFEST_NAME && !entry.isDirectory) {
+                    // Bounded because this reads an archive from elsewhere: a manifest is a small
+                    // JSON file, and anything claiming otherwise is not one.
+                    val bytes = zip.readNBytes(MAX_MANIFEST_BYTES + 1)
+                    if (bytes.size > MAX_MANIFEST_BYTES) throw SkinFormatException("${SkinSpec.MANIFEST_NAME} is implausibly large.")
+                    return SkinSpec.parse(bytes.decodeToString())
+                }
+                zip.closeEntry()
+            }
+        }
+        throw SkinFormatException("That file is not a skin bundle — it has no ${SkinSpec.MANIFEST_NAME}.")
+    }
+
     /** Remove an installed skin. Built-ins are not on disk, so they are unaffected. */
     fun uninstall(id: String): Boolean = dirFor(id).deleteRecursively()
 
@@ -204,6 +228,8 @@ class SkinStore @Inject constructor(
         /** A generous font is ~2 MB; this leaves room without letting an archive run away. */
         const val MAX_ENTRY_BYTES = 8L * 1024 * 1024
         const val MAX_TOTAL_BYTES = 12L * 1024 * 1024
+
+        const val MAX_MANIFEST_BYTES = 256 * 1024
 
         const val FILE_EXTENSION = "aapsskin"
         const val MIME_TYPE = "application/zip"

@@ -31,6 +31,20 @@ interface ConfigBuilder {
     fun processOnEnabledCategoryChanged(changedPlugin: PluginBase, type: PluginType)
 
     /**
+     * Enable a plugin the way the Config Builder does: switching to a hardware pump asks the user to
+     * confirm first, and the switch is followed by a reconnect. UI should call this rather than
+     * [performPluginSwitch] directly, so that confirmation is never skipped.
+     */
+    fun switchAllowed(changedPlugin: PluginBase, newState: Boolean, activity: FragmentActivity, type: PluginType)
+
+    /**
+     * True for the categories AAPS lets you run several plugins in at once. Every other category is
+     * exclusive: choosing one plugin disables the rest. The rule lives here so a list UI and the switch
+     * logic cannot disagree about whether a category is a radio group or a set of checkboxes.
+     */
+    fun areMultipleSelectionsAllowed(type: PluginType): Boolean
+
+    /**
      * Fill LinearLayout with list of available plugins and checkboxes for enabling/disabling
      *
      * @param title Paragraph title or null if provided elsewhere

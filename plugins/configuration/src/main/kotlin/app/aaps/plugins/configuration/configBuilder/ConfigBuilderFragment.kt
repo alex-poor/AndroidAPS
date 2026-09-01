@@ -1,6 +1,7 @@
 package app.aaps.plugins.configuration.configBuilder
 
 import android.os.Bundle
+import androidx.annotation.StringRes
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -15,7 +16,10 @@ import app.aaps.core.interfaces.configuration.ConfigBuilder
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
+import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.Translator
+import app.aaps.plugins.configuration.configBuilder.compose.ConfigCategory
+import app.aaps.plugins.configuration.configBuilder.compose.ConfigOption
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigScreen
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigSummary
 import app.aaps.plugins.configuration.configBuilder.compose.ConfigToggle
@@ -48,6 +52,7 @@ class ConfigBuilderFragment : DaggerFragment() {
     @Inject lateinit var uiInteraction: UiInteraction
     @Inject lateinit var loop: Loop
     @Inject lateinit var translator: Translator
+    @Inject lateinit var rh: ResourceHelper
 
     private var disposable: CompositeDisposable = CompositeDisposable()
     private val pluginViewHolders = ArrayList<ConfigBuilder.PluginViewHolderInterface>()
@@ -55,6 +60,7 @@ class ConfigBuilderFragment : DaggerFragment() {
     private val configState = mutableStateOf(ConfigUiState())
     private var generalPlugins: List<PluginBase> = emptyList()
     private var prefPlugins: List<PluginBase> = emptyList()
+    private var selectablePlugins: List<Pair<PluginBase, PluginType>> = emptyList()
     private var inMenu = false
     private var queryingProtection = false
     private var _binding: ConfigbuilderFragmentBinding? = null
@@ -76,7 +82,7 @@ class ConfigBuilderFragment : DaggerFragment() {
 
         binding.composeConfig.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         binding.composeConfig.setContent {
-            AapsTheme { ConfigScreen(state = configState.value, onToggle = ::onPluginToggle, onOpenPrefs = ::onOpenPrefs) }
+            AapsTheme { ConfigScreen(state = configState.value, onToggle = ::onPluginToggle, onOpenPrefs = ::onOpenPrefs, onSelect = ::onPluginSelect) }
         }
         buildConfigState()
     }
@@ -95,6 +101,42 @@ class ConfigBuilderFragment : DaggerFragment() {
             if (config.APS) (activePlugin.activeAPS as? PluginBase)?.let { add(ConfigSummary("Algorithm", it.name, it.isEnabled())) }
             add(ConfigSummary("Loop", translator.translate(loop.runningMode), loop.runningMode.isClosedLoopOrLgs()))
         }
+        // The categories you CHOOSE a plugin in -- pump, algorithm, BG source. The legacy views for these
+        // are still built into `binding.categories` below, but the Compose overlay covers them completely,
+        // so without this there is no way to change the active pump at all. Mirrors updateGUI()'s list and
+        // its config conditions exactly; drift here means a category silently disappears from the UI.
+        val selectable = mutableListOf<Pair<PluginBase, PluginType>>()
+        val categories = mutableListOf<ConfigCategory>()
+
+        fun category(@StringRes title: Int, @StringRes description: Int, type: PluginType) {
+            val plugins = activePlugin.getSpecificPluginsVisibleInList(type)
+            if (plugins.isEmpty()) return
+            val options = plugins.map { p ->
+                val index = selectable.size
+                selectable += p to type
+                ConfigOption(index, p.name, p.description ?: "", p.isEnabled(type), p.pluginDescription.alwaysEnabled)
+            }
+            categories += ConfigCategory(rh.gs(title), rh.gs(description), configBuilder.areMultipleSelectionsAllowed(type), options)
+        }
+
+        category(R.string.configbuilder_profile, R.string.configbuilder_profile_description, PluginType.PROFILE)
+        if (config.APS || config.PUMPCONTROL || config.isEngineeringMode())
+            category(app.aaps.core.ui.R.string.configbuilder_insulin, R.string.configbuilder_insulin_description, PluginType.INSULIN)
+        if (!config.AAPSCLIENT) {
+            category(R.string.configbuilder_bgsource, R.string.configbuilder_bgsource_description, PluginType.BGSOURCE)
+            category(R.string.configbuilder_smoothing, R.string.configbuilder_smoothing_description, PluginType.SMOOTHING)
+            category(R.string.configbuilder_pump, R.string.configbuilder_pump_description, PluginType.PUMP)
+        }
+        if (config.APS || config.PUMPCONTROL || config.isEngineeringMode())
+            category(R.string.configbuilder_sensitivity, R.string.configbuilder_sensitivity_description, PluginType.SENSITIVITY)
+        if (config.APS) {
+            category(R.string.configbuilder_aps, R.string.configbuilder_aps_description, PluginType.APS)
+            category(R.string.configbuilder_loop, R.string.configbuilder_loop_description, PluginType.LOOP)
+            category(app.aaps.core.ui.R.string.constraints, R.string.configbuilder_constraints_description, PluginType.CONSTRAINTS)
+        }
+        category(R.string.configbuilder_sync, R.string.configbuilder_sync_description, PluginType.SYNC)
+        selectablePlugins = selectable
+
         generalPlugins = activePlugin.getSpecificPluginsVisibleInList(PluginType.GENERAL)
         val plugins = generalPlugins.mapIndexed { i, p -> ConfigToggle(i, p.name, "", p.isEnabled(PluginType.GENERAL)) }
 
@@ -104,7 +146,7 @@ class ConfigBuilderFragment : DaggerFragment() {
         }
         val prefs = prefPlugins.mapIndexed { i, p -> PrefEntry(i, p.name, groupLabel(p.getType())) }
 
-        configState.value = ConfigUiState(summary, plugins, prefs)
+        configState.value = ConfigUiState(summary, categories, plugins, prefs)
     }
 
     private fun groupLabel(type: PluginType): String = when (type) {
@@ -115,6 +157,19 @@ class ConfigBuilderFragment : DaggerFragment() {
         PluginType.INSULIN     -> "Insulin"
         PluginType.PROFILE     -> "Profile"
         PluginType.SYNC        -> "Connections & sync"
+    }
+
+    private fun onPluginSelect(index: Int, enabled: Boolean) {
+        val (plugin, type) = selectablePlugins.getOrNull(index) ?: return
+        if (plugin.pluginDescription.alwaysEnabled) return
+        // In an exclusive category the current choice cannot simply be switched off -- that would leave
+        // the loop with no pump or no algorithm at all. Only a different option can replace it.
+        if (!configBuilder.areMultipleSelectionsAllowed(type) && !enabled) return
+        // switchAllowed, not performPluginSwitch: it is what asks before handing the loop a hardware pump,
+        // and it reconnects afterwards. The confirmation is async, so the redraw comes from the
+        // EventConfigBuilderUpdateGui that performPluginSwitch sends.
+        configBuilder.switchAllowed(plugin, enabled, requireActivity(), type)
+        buildConfigState()
     }
 
     private fun onPluginToggle(index: Int, enabled: Boolean) {
@@ -263,6 +318,9 @@ class ConfigBuilderFragment : DaggerFragment() {
     private fun updateProtectedUi() {
         val isLocked = protectionCheck.isLocked(PREFERENCES)
         binding.mainLayout.visibility = isLocked.not().toVisibility()
+        // The Compose overlay is a sibling of mainLayout, not a child, so it has to be hidden too --
+        // otherwise it keeps drawing over the unlock button and now offers pump selection while locked.
+        binding.composeConfig.visibility = isLocked.not().toVisibility()
         binding.unlock.visibility = isLocked.toVisibility()
     }
 

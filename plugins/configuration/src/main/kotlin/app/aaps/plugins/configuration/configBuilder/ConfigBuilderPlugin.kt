@@ -171,7 +171,7 @@ class ConfigBuilderPlugin @Inject constructor(
     }
 
     // Ask when switching to physical pump plugin
-    fun switchAllowed(changedPlugin: PluginBase, newState: Boolean, activity: FragmentActivity, type: PluginType) {
+    override fun switchAllowed(changedPlugin: PluginBase, newState: Boolean, activity: FragmentActivity, type: PluginType) {
         if (changedPlugin.getType() == PluginType.PUMP && changedPlugin.name != rh.gs(app.aaps.core.ui.R.string.virtual_pump))
             confirmPumpPluginActivation(changedPlugin, newState, activity, type)
         else if (changedPlugin.getType() == PluginType.PUMP) {
@@ -395,10 +395,10 @@ class ConfigBuilderPlugin @Inject constructor(
             }
         }
 
-        private fun areMultipleSelectionsAllowed(type: PluginType): Boolean {
-            return type == PluginType.GENERAL || type == PluginType.CONSTRAINTS || type == PluginType.LOOP || type == PluginType.SYNC
-        }
     }
+
+    override fun areMultipleSelectionsAllowed(type: PluginType): Boolean =
+        type == PluginType.GENERAL || type == PluginType.CONSTRAINTS || type == PluginType.LOOP || type == PluginType.SYNC
 
     override fun exitApp(from: String, source: Sources, launchAgain: Boolean) {
         rxBus.send(EventAppExit())
