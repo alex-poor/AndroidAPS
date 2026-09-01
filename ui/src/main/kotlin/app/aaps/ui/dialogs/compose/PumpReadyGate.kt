@@ -22,6 +22,8 @@ import app.aaps.core.compose.components.AlertContent
 import app.aaps.core.compose.theme.AapsSemantic
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.data.model.RM
+import app.aaps.core.data.pump.defs.PumpDescription
+import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.interfaces.aps.Loop
@@ -35,10 +37,55 @@ import javax.inject.Inject
 internal sealed interface DeliveryBlocker {
 
     /** The pump reports it is not delivering. Only the user, at the pump, can clear this. */
-    data class PumpStopped(val reservoirEmpty: Boolean, val detail: String) : DeliveryBlocker
+    data class PumpStopped(val reservoirEmpty: Boolean, val detail: String, val wording: PumpWording) : DeliveryBlocker
 
     /** AAPS is suspended or disconnected. Reversible right here. */
     data class LoopSuspended(val mode: RM.Mode) : DeliveryBlocker
+}
+
+/**
+ * What a stopped pump is called, and what the user has to do about it, for the pump actually attached.
+ *
+ * A cartridge is changed and primed at the pump; a patch is resumed or replaced from its own tab. Telling
+ * a patch user to prime a cartridge is not a cosmetic slip — it describes a device they do not have, in
+ * the one dialog standing between them and a dose. [PumpDescription.isPatchPump] is the discriminator
+ * every driver already fills in, so no driver has to know this screen exists.
+ */
+internal data class PumpWording(
+    val emptyTitle: String,
+    val emptyMessage: String,
+    val stoppedTitle: String,
+    val stoppedMessage: String
+) {
+
+    companion object {
+
+        fun of(description: PumpDescription): PumpWording =
+            if (description.isPatchPump)
+                PumpWording(
+                    emptyTitle = "Patch is empty",
+                    emptyMessage = "The patch has no insulin left, so it will not accept this dose. Change the patch, then check again.",
+                    stoppedTitle = "Patch is not delivering",
+                    stoppedMessage = "The patch is not delivering, so it will refuse this dose. Resume or replace it from the pump tab, then check again."
+                )
+            else
+                PumpWording(
+                    emptyTitle = "Reservoir is empty",
+                    emptyMessage = "The pump has no insulin left, so it will not accept this dose. Change the cartridge and prime, then check again.",
+                    stoppedTitle = "Pump is stopped",
+                    stoppedMessage = "The pump is not delivering, so it will refuse this dose. " +
+                        "Start delivery on the pump itself${restartHint(description.pumpType)}, then check again."
+                )
+
+        /**
+         * The menu path to restart delivery, for the pumps whose menus this fork has actually been run
+         * against. Everything else gets the sentence without a path: a wrong menu path is worse than none.
+         */
+        private fun restartHint(pumpType: PumpType): String = when (pumpType) {
+            PumpType.YPSOPUMP -> " (Menu ▸ Run)"
+            else              -> ""
+        }
+    }
 }
 
 /**
@@ -49,9 +96,11 @@ internal sealed interface DeliveryBlocker {
  * had refused the very first write. This gate turns that dead end into a decision the user can act
  * on, *before* anything is queued:
  *
- *  - **Pump stopped / reservoir empty** — the pump itself refuses to deliver, and there is no BLE
- *    command to restart it (the protocol has none, deliberately: starting a pump is a physical act).
- *    So the honest options are "fix it on the pump, then Check again" or "Cancel". Check again
+ *  - **Pump stopped / reservoir empty** — the pump itself refuses to deliver. A cartridge pump cannot be
+ *    restarted over BLE at all (the protocol has no such command, deliberately: starting a pump is a
+ *    physical act); a patch is resumed or replaced from its own tab. Either way the fix is somewhere this
+ *    dialog cannot reach, so the honest options are "fix it there, then Check again" or "Cancel" — see
+ *    [PumpWording] for how each pump is addressed. Check again
  *    reconnects and re-reads status, which is also what clears a merely stale reading — and when the
  *    pump comes back healthy the dose goes ahead without the user re-entering it.
  *  - **Loop suspended / pump disconnected in the app** — that IS reversible from here, so offer to
@@ -78,7 +127,8 @@ class PumpReadyGate @Inject constructor(
         if (pump.isSuspended())
             return DeliveryBlocker.PumpStopped(
                 reservoirEmpty = pump.reservoirLevel <= 0.0,
-                detail = pump.pumpSpecificShortStatus(true)
+                detail = pump.pumpSpecificShortStatus(true),
+                wording = PumpWording.of(pump.pumpDescription)
             )
         val mode = loop.runningMode
         if (mode.isSuspended()) return DeliveryBlocker.LoopSuspended(mode)
@@ -156,14 +206,9 @@ private fun PumpReadyContent(
 
     when (val b = blocker) {
         is DeliveryBlocker.PumpStopped   -> AlertContent(
-            title = if (b.reservoirEmpty) "Reservoir is empty" else "Pump is stopped",
+            title = if (b.reservoirEmpty) b.wording.emptyTitle else b.wording.stoppedTitle,
             message = buildString {
-                append(
-                    if (b.reservoirEmpty)
-                        "The pump has no insulin left, so it will not accept this dose. Change the cartridge and prime, then check again."
-                    else
-                        "The pump is not delivering, so it will refuse this dose. Start delivery on the pump itself (Menu ▸ Run), then check again."
-                )
+                append(if (b.reservoirEmpty) b.wording.emptyMessage else b.wording.stoppedMessage)
                 if (b.detail.isNotBlank()) append("\n\n").append(b.detail)
             },
             tint = AapsSemantic.low,
