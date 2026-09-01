@@ -4,8 +4,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.pow
 
 /**
  * Which ground of a skin to render. Not chosen directly any more — it is a property of the selected
@@ -123,7 +125,17 @@ object AapsSkins {
         light = Default.light
     )
 
-    val all: List<AapsSkin> = listOf(Default, Midnight)
+    val builtIn: List<AapsSkin> = listOf(Default, Midnight)
+
+    /**
+     * Skins unpacked from files, published by `SkinStore` once storage has been read.
+     *
+     * Snapshot state so installing or deleting one repaints the picker — and the app, if the deleted
+     * skin was the active one — without anything having to be restarted.
+     */
+    var installed: List<AapsSkin> by mutableStateOf(emptyList())
+
+    val all: List<AapsSkin> get() = builtIn + installed
 
     /** Resolve a persisted id. Unknown (or a leftover from the retired layout-skin preference) → [Default]. */
     fun byId(id: String?): AapsSkin = all.firstOrNull { it.id == id } ?: Default
@@ -158,10 +170,40 @@ object AapsAppearances {
     /** Midnight is dark by definition — a true-black light theme is a contradiction, so it offers one entry. */
     val Midnight = AapsAppearance("midnight", "Midnight", AapsSkins.Midnight, AapsUiMode.DARK)
 
-    val all: List<AapsAppearance> = listOf(FollowSystem, Light, Dark, Midnight)
+    val builtIn: List<AapsAppearance> = listOf(FollowSystem, Light, Dark, Midnight)
+
+    /**
+     * One entry per installed skin — never three, so a handful of installed skins cannot turn the
+     * picker into a list nobody can scan.
+     *
+     * A skin supplying two grounds follows the device; a single-look skin takes the mode its own
+     * ground implies, so a light-toned one does not leave the app's remaining XML screens in dark
+     * mode around it.
+     */
+    private fun forInstalled(skin: AapsSkin) = AapsAppearance(
+        id = skin.id,
+        label = skin.label,
+        skin = skin,
+        mode = when {
+            skin.light != skin.dark      -> AapsUiMode.SYSTEM
+            skin.dark.background.isDark() -> AapsUiMode.DARK
+            else                         -> AapsUiMode.LIGHT
+        }
+    )
+
+    val all: List<AapsAppearance> get() = builtIn + AapsSkins.installed.map(::forInstalled)
 
     /** Resolve a persisted id; anything unrecognised falls back to [Dark], the look the app shipped with. */
     fun byId(id: String?): AapsAppearance = all.firstOrNull { it.id == id } ?: Dark
+}
+
+/** Whether a ground reads as dark, by relative luminance — the midpoint is enough to pick a mode. */
+private fun Color.isDark(): Boolean {
+    fun ch(v: Float): Double {
+        val s = v.toDouble()
+        return if (s <= 0.03928) s / 12.92 else ((s + 0.055) / 1.055).pow(2.4)
+    }
+    return 0.2126 * ch(red) + 0.7152 * ch(green) + 0.0722 * ch(blue) < 0.5
 }
 
 /**

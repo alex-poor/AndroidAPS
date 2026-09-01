@@ -138,6 +138,9 @@ class MainApp : DaggerApplication() {
         }
         disposable += compatDBHelper.dbChangeDisposable()
         registerActivityLifecycleCallbacks(activityMonitor)
+        // Reads storage, so it runs here on doInit's background thread; the appearance is then
+        // applied on the main thread with the installed skins already in the registry.
+        themeSwitcherPlugin.reloadInstalledSkins()
         runOnUiThread { themeSwitcherPlugin.applyAppearance() }
         aapsLogger.debug("Version: " + config.VERSION_NAME)
         aapsLogger.debug("BuildVersion: " + config.BUILD_VERSION)

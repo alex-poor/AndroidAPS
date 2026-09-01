@@ -36,7 +36,10 @@ dependencies {
     implementation(libs.androidx.core)
 
     // The skin file format. Data only — no Android surface, so it stays in the design system
-    // module next to the tokens it describes.
-    implementation(platform(libs.kotlinx.serialization.bom))
-    implementation(libs.kotlinx.serialization.json)
+    // module next to the tokens it describes. `api` rather than `implementation` because SkinSpec is
+    // @Serializable: its generated serializer() is public API referencing kotlinx types, so a module
+    // that merely reads the class — Dagger in :app, resolving SkinStore — needs them on its
+    // classpath too. Matches how :core:interfaces exposes the same library.
+    api(platform(libs.kotlinx.serialization.bom))
+    api(libs.kotlinx.serialization.json)
 }

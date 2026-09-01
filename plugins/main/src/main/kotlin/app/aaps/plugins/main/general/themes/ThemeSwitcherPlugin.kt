@@ -5,10 +5,12 @@ import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO
 import androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
 import app.aaps.core.compose.theme.AapsAppearances
+import app.aaps.core.compose.theme.AapsSkins
 import app.aaps.core.compose.theme.AapsSkinState
 import app.aaps.core.compose.theme.AapsUiMode
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -29,6 +31,7 @@ class ThemeSwitcherPlugin @Inject constructor(
     rh: ResourceHelper,
     private val preferences: Preferences,
     private val rxBus: RxBus,
+    private val skinStore: SkinStore,
 ) : PluginBase(
     PluginDescription()
         .mainType(PluginType.GENERAL)
@@ -53,6 +56,22 @@ class ThemeSwitcherPlugin @Inject constructor(
                     if (recreateNeeded) rxBus.send(EventThemeSwitch())
                 }
             }
+    }
+
+    /**
+     * Read installed skin files into the registry.
+     *
+     * Touches storage, so it belongs off the main thread — call it before [applyAppearance] at
+     * startup, and again after installing or deleting one. Never throws: a corrupt file on disk must
+     * not stop the app from drawing, and the built-in skins are always there to fall back on.
+     */
+    fun reloadInstalledSkins() {
+        AapsSkins.installed = try {
+            skinStore.installed()
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.UI, "Could not read installed skins: ${e.message}")
+            emptyList()
+        }
     }
 
     /**
