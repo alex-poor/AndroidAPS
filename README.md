@@ -25,7 +25,7 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Six workstreams:
 | 1 | **[YpsoPump driver](#1-ypsopump-pump-driver)** | Loops a pump AAPS lists as "Not Loopable" | Alpha, dosing-capable |
 | 2 | **[HovorkaMPC](#2-hovorkampc--a-model-predictive-controller)** | A nonlinear-MPC APS algorithm alongside oref1 | Experimental, runs live |
 | 3 | **[Infusion-site handling](#3-infusion-site-handling)** | Treats a fresh cannula as a distinct physiological state, across the algorithm, wizard and careportal | Running |
-| 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface | Running |
+| 4 | **[Compose UI redesign](#4-compose-ui-redesign)** | Full-app Material 3 rewrite of the interface, plus [skins](#skins) loadable from a file | Running |
 | 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | Running |
 | 6 | **[Delivery the pump cannot make](#6-delivery-the-pump-cannot-make)** | Stopped pump, empty cartridge: say so, refuse the dose, and never book insulin that did not go in | Running |
 
@@ -212,8 +212,81 @@ Captured on the phone that runs the loop, so every number is live data rather th
 | <img src="docs/screenshots/profile.png" width="240" alt="Profile screen"> | <img src="docs/screenshots/config-builder.png" width="240" alt="Config Builder screen"> | |
 | **Profile** — DIA, basal curve, ISF/IC/target | **Config Builder** — active loop, plugins, settings | |
 
-The dark theme is the only theme; the design is mmol/L-first, and the accent colour is reserved for
-"this is tappable" while greens, ambers and reds mean glucose or loop state and nothing else.
+The design is mmol/L-first, and the accent colour is reserved for "this is tappable" while greens,
+ambers and reds mean glucose or loop state and nothing else.
+
+### Skins
+
+Every colour, the font and the corner radii resolve through one seam at runtime, so the look is data
+rather than something compiled in. Changing it needs no rebuild.
+
+| | |
+|:---:|:---:|
+| <img src="docs/screenshots/skin-light.png" width="240" alt="Light theme"> | <img src="docs/screenshots/skin-gameboy.png" width="240" alt="Game Boy skin"> |
+| **Light** — the built-in light ground | **Game Boy** — a skin file: one hue, square corners |
+
+**Choosing one.** Settings → General → **Theme**. The list is flat — *Follow system*, *Light*, *Dark*,
+*Midnight*, then one entry per installed skin file. It is deliberately not two settings. A palette
+picker plus a separate light/dark switch produces combinations that quietly do nothing (a dark-only
+palette set to "light"), and most skins are a single look anyway. Changing skin repaints immediately;
+changing light/dark still recreates the activities, because the app's remaining XML screens have no
+other way to follow.
+
+**Managing them.** Settings → **Skins**. Import a `.aapsskin` bundle, export one to send to someone,
+remove one, or export a starter template seeded from the palette currently on screen.
+
+**Writing one.** A `.aapsskin` file is a zip holding `skin.json` and, optionally, a `.ttf`. Every
+colour is optional and inherits from the default skin, so a skin says only what it cares about — this
+is the entire Game Boy skin above:
+
+```json
+{
+  "formatVersion": 1,
+  "id": "gameboy",
+  "label": "Game Boy",
+  "author": "alex",
+  "cornerRadius": 0,
+  "dark": {
+    "background": "#1B2300", "surface": "#222E00", "surface2": "#293800", "bar": "#161B00",
+    "textPrimary": "#C5DB7A", "textSecondary": "#B5CA6B", "textTertiary": "#7B8E3C",
+    "inRange": "#698023", "high": "#A4BA5B", "low": "#E8FD9A",
+    "veryHigh": "#7DA300", "veryLow": "#FAFFE2",
+    "accent": "#C5DB7A", "onAccent": "#1B2300"
+  }
+}
+```
+
+`cornerRadius` is one number for the whole shape language — `0` squares every corner including the
+pills. Omitting `light` marks a single-look skin: it keeps its one palette whichever mode is set,
+rather than reverting to the default light ground and losing its identity. Colour names match the
+tokens in `core/compose/theme/Color.kt` one for one. A font is added with
+`"font": { "file": "dmg.ttf", "singleWeight": true }` — `singleWeight` stops the type scale asking a
+one-weight font for bolds it cannot draw, which would otherwise be synthesised and smear the edges a
+pixel font exists to keep sharp.
+
+**A skin has to be legible before it is allowed on screen.** This app decides insulin and the number
+on the hero is the number you act on, so a palette is checked on import *and* on every load — the
+rules can tighten in a later build, and a skin accepted under looser ones must not keep rendering.
+Text clears WCAG 4.5:1 on every surface it appears on, status colours clear 3:1, and the glucose
+bands must be at least ΔE 20 apart from each other. A rejected file says which token failed, what it
+measured and what it needed. Built-in skins go through the identical code path, so they cannot hold
+themselves to a lower bar than a file someone sends you.
+
+That ΔE floor is perceptual distance, not a contrast ratio, because contrast answers the wrong
+question here: amber and green sit at a ratio of 1.09 while being nothing alike. It looks at first as
+though a single-hue palette cannot satisfy five bands at that distance and still be readable — the
+Game Boy skin above was nearly the reason to lower it — but that turns out to be an artefact of
+choosing grounds and inks first and fitting the bands into what is left. Solved together, one hue
+clears the same floor with room to spare.
+
+**Sharing** is file-based: export a bundle and send it however you like. There is no skin repository
+yet.
+
+**Not yet skinnable:** the app's remaining XML screens (the tab bar, the preference tree, the system
+bars) follow the old `AppTheme`, so they stay dark-blue under any skin; and about thirty hard-coded
+circular shapes — status dots, the "+" button — stay round whatever `cornerRadius` says. Spacing is
+deliberately excluded: padding decides whether a dose stepper or a hold-to-confirm button can be hit,
+which is not a knob to hand to a theme file.
 
 ---
 
