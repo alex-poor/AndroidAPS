@@ -223,7 +223,7 @@ rather than something compiled in. Changing it needs no rebuild.
 | | |
 |:---:|:---:|
 | <img src="docs/screenshots/skin-light.png" width="240" alt="Light theme"> | <img src="docs/screenshots/skin-gameboy.png" width="240" alt="Game Boy skin"> |
-| **Light** — the built-in light ground | **Game Boy** — a skin file: one hue, square corners |
+| **Light** — the built-in light ground | **Game Boy** — a skin file: one hue, square corners, 8-bit font |
 
 **Choosing one.** Settings → General → **Theme**. The list is flat — *Follow system*, *Light*, *Dark*,
 *Midnight*, then one entry per installed skin file. It is deliberately not two settings. A palette
@@ -246,6 +246,7 @@ is the entire Game Boy skin above:
   "label": "Game Boy",
   "author": "alex",
   "cornerRadius": 0,
+  "font": { "file": "dmg.ttf", "singleWeight": true, "scale": 0.6 },
   "dark": {
     "background": "#1B2300", "surface": "#222E00", "surface2": "#293800", "bar": "#161B00",
     "textPrimary": "#C5DB7A", "textSecondary": "#B5CA6B", "textTertiary": "#7B8E3C",
@@ -257,12 +258,12 @@ is the entire Game Boy skin above:
 ```
 
 `cornerRadius` is one number for the whole shape language — `0` squares every corner including the
-pills. Omitting `light` marks a single-look skin: it keeps its one palette whichever mode is set,
+pills. The font above is Press Start 2P (SIL Open Font License); a bundle may carry its `LICENSE` or
+`OFL.txt` alongside, which the importer keeps so the skin stays redistributable. Omitting `light` marks a single-look skin: it keeps its one palette whichever mode is set,
 rather than reverting to the default light ground and losing its identity. Colour names match the
-tokens in `core/compose/theme/Color.kt` one for one. A font is added with
-`"font": { "file": "dmg.ttf", "singleWeight": true }` — `singleWeight` stops the type scale asking a
-one-weight font for bolds it cannot draw, which would otherwise be synthesised and smear the edges a
-pixel font exists to keep sharp.
+tokens in `core/compose/theme/Color.kt` one for one. `singleWeight` stops the type scale asking a one-weight font for bolds it cannot
+draw, which would otherwise be synthesised and smear the edges a pixel font exists to keep sharp, and
+`scale` compensates for a face far wider per character than the one the layouts were drawn against.
 
 Numeric readouts set their unit much smaller than the number, and shrink to fit rather than
 truncating. That is worth knowing when writing a skin: a pixel face is roughly twice the width per
