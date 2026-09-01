@@ -2,10 +2,8 @@ package app.aaps.activities.compose
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -96,10 +94,15 @@ fun PreferenceScreenCompose(
     modifier: Modifier = Modifier
 ) {
     val colors = AapsTheme.colors
+    // Height is deliberately NOT filled and NOT scrolled here. This composable is hosted in a
+    // ComposeView inside `activity_preferences.xml`, whose frame sits in a `ScrollView` — so it is
+    // measured with an unbounded height, and a scroll container measured that way throws
+    // ("Vertically scrollable component was measured with an infinity maximum height"). The
+    // ScrollView already scrolls (fillViewport=true); this reports its natural height into it, the
+    // same contract the AndroidX RecyclerView had before the rows were redrawn in Compose.
     Column(
         modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .fillMaxWidth()
             .padding(horizontal = AapsSpacing.screenH, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
     ) {
