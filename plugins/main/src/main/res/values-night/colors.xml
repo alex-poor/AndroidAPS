@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- dark: AapsSemantic. See values/colors.xml for why these are resolved manually. -->
+<resources>
+    <color name="notification_bg_in_range">#FF3ED598</color>
+    <color name="notification_bg_high">#FFFFB84D</color>
+    <color name="notification_bg_low">#FFFF5C6C</color>
+    <color name="notification_bg_very_low">#FFE03A4B</color>
+    <color name="notification_chart_axis">#61FFFFFF</color>
+</resources>

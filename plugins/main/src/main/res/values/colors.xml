@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Semantic colours for the ongoing-notification BG readout.
+
+  The notification is drawn by SystemUI in the SYSTEM's theme, not in AAPS's (which
+  ThemeSwitcherPlugin pins via AppCompatDelegate). These therefore have to be resolved against the
+  real device configuration - see BgNotificationChart.paletteContext - rather than through rh.gc(),
+  which would hand back the app's forced theme.
+
+  Values mirror AapsLightSemantic / AapsSemantic in core:compose so the notification cannot drift
+  from the in-app palette.
+-->
+<resources>
+    <!-- light: AapsLightSemantic -->
+    <color name="notification_bg_in_range">#FF0F7A55</color>
+    <color name="notification_bg_high">#FFA96400</color>
+    <color name="notification_bg_low">#FFC62633</color>
+    <color name="notification_bg_very_low">#FF8E1420</color>
+    <color name="notification_chart_axis">#61000000</color>
+</resources>

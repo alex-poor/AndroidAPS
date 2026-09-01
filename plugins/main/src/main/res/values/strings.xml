@@ -226,6 +226,7 @@
     <string name="a11y_bg_quality">blood glucose quality</string>
     <string name="a11y_blood_glucose">blood glucose</string>
     <string name="a11y_bg_outdated">outdated</string>
+    <string name="a11y_bg_chart">blood glucose chart, last 3 hours</string>
     <string name="set_basal_question">Accept new temp basal:</string>
     <string name="overview_cgm">CGM</string>
     <string name="overview">Overview</string>
