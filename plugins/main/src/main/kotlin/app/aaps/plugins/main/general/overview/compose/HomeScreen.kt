@@ -42,6 +42,8 @@ import app.aaps.core.compose.components.ActionBarButton
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Dot
 import app.aaps.core.compose.components.RoundIconButton
+import app.aaps.core.compose.components.FittedText
+import app.aaps.core.compose.components.MeasurementText
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.StatusPill
@@ -228,7 +230,7 @@ private fun HeroStat(
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Text(label, style = AapsTheme.type.label, color = colors.textSecondary)
-        Text(value, style = AapsTheme.type.cardValue.copy(fontSize = 18.sp, lineHeight = 20.sp), color = valueColor, maxLines = 1)
+        MeasurementText(value, AapsTheme.type.cardValue.copy(fontSize = 18.sp, lineHeight = 20.sp), valueColor)
         // sub kept readable (secondary color, real caption size) — was too small/dark to see before
         if (sub.isNotBlank()) Text(sub, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1)
     }
@@ -259,9 +261,9 @@ private fun SupplyCell(s: HomeUiState.Supply, modifier: Modifier) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             val dot = s.dotTone.color()
             if (s.fraction != null) CountdownRing(s.fraction, dot, size = 12.dp) else Dot(dot, size = 8.dp)
-            Text(s.label, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1)
+            FittedText(s.label, AapsTheme.type.caption, colors.textSecondary)
         }
-        Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1)
+        MeasurementText(s.value, AapsTheme.type.listTitle, colors.textPrimary)
     }
 }
 

@@ -156,7 +156,8 @@ class SkinStore @Inject constructor(
      *  - entry names are reduced to a bare file name, so `../../databases/aaps.db` cannot escape
      *    the directory (the zip-slip traversal);
      *  - directories and nested paths are ignored — a skin is flat;
-     *  - only the manifest and font files are accepted, so a bundle cannot smuggle in anything else;
+     *  - only the manifest, fonts, and licence/readme text are accepted, so a bundle cannot smuggle
+     *    in anything else;
      *  - both per-entry and total size are capped, so a zip bomb cannot fill the phone.
      */
     private fun unzip(input: InputStream, target: File) {
@@ -170,7 +171,11 @@ class SkinStore @Inject constructor(
                     continue
                 }
                 val allowed = name == SkinSpec.MANIFEST_NAME ||
-                    name.endsWith(".ttf", true) || name.endsWith(".otf", true)
+                    name.endsWith(".ttf", true) || name.endsWith(".otf", true) ||
+                    // Carried, never read. A skin bundling an OFL font has to ship the licence with
+                    // it to be redistributable, and dropping the file on import would quietly make
+                    // every re-share of that skin non-compliant.
+                    name.equals("LICENSE", true) || name.endsWith(".txt", true) || name.endsWith(".md", true)
                 if (!allowed) {
                     zip.closeEntry()
                     continue

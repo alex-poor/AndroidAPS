@@ -264,6 +264,11 @@ tokens in `core/compose/theme/Color.kt` one for one. A font is added with
 one-weight font for bolds it cannot draw, which would otherwise be synthesised and smear the edges a
 pixel font exists to keep sharp.
 
+Numeric readouts set their unit much smaller than the number, and shrink to fit rather than
+truncating. That is worth knowing when writing a skin: a pixel face is roughly twice the width per
+character, and without it "0.45 U/h" renders as "0.45" — a dose readout quietly losing its unit while
+still looking like a complete number.
+
 **A skin has to be legible before it is allowed on screen.** This app decides insulin and the number
 on the hero is the number you act on, so a palette is checked on import *and* on every load — the
 rules can tighten in a later build, and a skin accepted under looser ones must not keep rendering.
