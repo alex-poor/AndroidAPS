@@ -24,7 +24,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Dot
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Connectivity & sync screen (handoff Section 7): a CGM → phone → cloud data-flow row and a
@@ -37,7 +36,7 @@ fun ConnectivityScreen(state: ConnectivityUiState, onCard: (id: String) -> Unit)
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
-        Text("Connections", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
+        Text("Connections", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         // data-flow row
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
@@ -58,8 +57,8 @@ fun ConnectivityScreen(state: ConnectivityUiState, onCard: (id: String) -> Unit)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Dot(levelColor(c.level), size = 9.dp)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(c.name, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(c.sub, style = AapsType.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(c.name, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(c.sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                     if (c.tappable) Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary)
                 }
@@ -74,7 +73,7 @@ private fun FlowNode(label: String, modifier: Modifier) {
     val colors = AapsTheme.colors
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Dot(colors.inRange, size = 8.dp)
-        Text(label, style = AapsType.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

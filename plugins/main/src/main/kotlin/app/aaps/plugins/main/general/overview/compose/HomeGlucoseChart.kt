@@ -21,7 +21,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.aaps.core.compose.theme.AapsColors
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.HankenGrotesk
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
@@ -48,8 +47,11 @@ import kotlin.math.sqrt
 fun HomeGlucoseChart(data: HomeChartData, modifier: Modifier = Modifier) {
     val colors = AapsTheme.colors
     val measurer = rememberTextMeasurer()
-    val axisStyle = TextStyle(fontFamily = HankenGrotesk, fontSize = 9.sp, color = colors.textTertiary)
-    val valueStyle = TextStyle(fontFamily = HankenGrotesk, fontSize = 13.sp)
+    // Derived from the skin's own caption style rather than a hardcoded family, so the axis labels
+    // change font with everything else instead of staying on the built-in one.
+    val caption = AapsTheme.type.caption
+    val axisStyle = caption.copy(fontSize = 9.sp, color = colors.textTertiary)
+    val valueStyle = caption.copy(fontSize = 13.sp)
 
     Box(modifier) {
         Canvas(Modifier.fillMaxSize()) {

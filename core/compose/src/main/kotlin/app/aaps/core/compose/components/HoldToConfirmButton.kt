@@ -29,9 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * "Hold to deliver" control — the explicit replacement for AAPS's hidden long-press. Press and hold
@@ -68,7 +66,7 @@ fun HoldToConfirmButton(
         modifier = modifier
             .fillMaxWidth()
             .height(60.dp)
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(container)
             .then(
                 if (enabled) Modifier.pointerInput(Unit) {
@@ -107,7 +105,7 @@ fun HoldToConfirmButton(
                 tint = if (enabled) colors.onAccent else colors.textTertiary,
                 modifier = Modifier.size(20.dp).padding(end = 8.dp)
             )
-            Text(label, style = AapsType.title, color = if (enabled) colors.onAccent else colors.textTertiary)
+            Text(label, style = AapsTheme.type.title, color = if (enabled) colors.onAccent else colors.textTertiary)
         }
     }
 }

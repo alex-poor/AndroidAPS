@@ -32,7 +32,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Read-only profile view (handoff Section 4, presentation): Basal/ISF/Carb-ratio/Target tabs, a 24h
@@ -54,23 +53,23 @@ fun ProfileView(state: ProfileViewState, onEdit: () -> Unit) {
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Profile", style = AapsType.title, color = colors.textPrimary)
-                if (state.profileName.isNotBlank()) Text(state.profileName, style = AapsType.caption, color = colors.textTertiary)
+                Text("Profile", style = AapsTheme.type.title, color = colors.textPrimary)
+                if (state.profileName.isNotBlank()) Text(state.profileName, style = AapsTheme.type.caption, color = colors.textTertiary)
             }
             Row(
-                Modifier.background(colors.accentTint, app.aaps.core.compose.theme.AapsShape.pill).clickable(onClick = onEdit).padding(horizontal = 14.dp, vertical = 8.dp),
+                Modifier.background(colors.accentTint, app.aaps.core.compose.theme.AapsTheme.shape.pill).clickable(onClick = onEdit).padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Rounded.Edit, contentDescription = null, tint = colors.accentOnLight, modifier = Modifier.height(16.dp))
-                Text("  Edit", style = AapsType.listTitle, color = colors.accentOnLight)
+                Text("  Edit", style = AapsTheme.type.listTitle, color = colors.accentOnLight)
             }
         }
 
         if (state.dia.isNotBlank()) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Insulin duration (DIA)", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                    Text(state.dia, style = AapsType.listTitle, color = colors.textPrimary)
+                    Text("Insulin duration (DIA)", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                    Text(state.dia, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                 }
             }
         }
@@ -86,12 +85,12 @@ fun ProfileView(state: ProfileViewState, onEdit: () -> Unit) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row {
-                        Text("24-HOUR BASAL", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                        Text(state.dailyBasal, style = AapsType.listTitle, color = colors.textPrimary)
+                        Text("24-HOUR BASAL", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                        Text(state.dailyBasal, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                     }
                     BasalCurve(state.basal)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        listOf("00", "06", "12", "18", "24").forEach { Text(it, style = AapsType.caption, color = colors.textTertiary) }
+                        listOf("00", "06", "12", "18", "24").forEach { Text(it, style = AapsTheme.type.caption, color = colors.textTertiary) }
                     }
                 }
             }
@@ -102,11 +101,11 @@ fun ProfileView(state: ProfileViewState, onEdit: () -> Unit) {
                 blocks.forEachIndexed { i, b ->
                     if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(b.time, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                        Text(b.value, style = AapsType.listTitle, color = colors.textPrimary)
+                        Text(b.time, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+                        Text(b.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                     }
                 }
-                if (blocks.isEmpty()) Text("No data", style = AapsType.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
+                if (blocks.isEmpty()) Text("No data", style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
             }
         }
     }

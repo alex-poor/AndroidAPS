@@ -17,29 +17,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** A multi-line notes input styled for the redesigned dialogs. */
 @Composable
 fun NotesField(value: String, onValue: (String) -> Unit, modifier: Modifier = Modifier, label: String = "NOTES") {
     val colors = AapsTheme.colors
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = AapsType.label, color = colors.textSecondary)
+        Text(label, style = AapsTheme.type.label, color = colors.textSecondary)
         Box(
             Modifier
                 .fillMaxWidth()
-                .clip(AapsShape.cardSmall)
+                .clip(AapsTheme.shape.cardSmall)
                 .background(colors.surface2)
                 .padding(horizontal = 12.dp, vertical = 12.dp)
                 .heightIn(min = 40.dp)
         ) {
-            if (value.isEmpty()) Text("Add a note…", style = AapsType.body, color = colors.textTertiary)
+            if (value.isEmpty()) Text("Add a note…", style = AapsTheme.type.body, color = colors.textTertiary)
             BasicTextField(
                 value = value,
                 onValueChange = onValue,
-                textStyle = AapsType.body.copy(color = colors.textPrimary),
+                textStyle = AapsTheme.type.body.copy(color = colors.textPrimary),
                 cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -59,8 +57,8 @@ fun ToggleRow(
     val colors = AapsTheme.colors
     Row(modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
-            if (sub != null) Text(sub, style = AapsType.caption, color = colors.textTertiary)
+            Text(title, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
         Switch(
             checked = checked,

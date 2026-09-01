@@ -17,7 +17,6 @@ import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** Presentation params for the redesigned Treatment (Bolus + Carbs) sheet. */
 data class TreatmentSheetState(
@@ -51,7 +50,7 @@ fun TreatmentSheet(state: TreatmentSheetState, onDeliver: (insulin: Double, carb
                 modifier = Modifier.fillMaxWidth()
             )
             if (state.recordOnly)
-                Text("Follower mode — this will be recorded only, not delivered.", style = AapsType.caption, color = colors.textTertiary)
+                Text("Follower mode — this will be recorded only, not delivered.", style = AapsTheme.type.caption, color = colors.textTertiary)
             PrimaryButton(
                 label = if (state.recordOnly) "Record" else "Deliver",
                 onClick = { onDeliver(insulin, carbs) },

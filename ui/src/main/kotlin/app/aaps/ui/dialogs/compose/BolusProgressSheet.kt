@@ -16,7 +16,6 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.DangerButton
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Live bolus-delivery progress sheet. Presentation only — [percent]/[status] are driven by the
@@ -32,8 +31,8 @@ fun BolusProgressSheet(percent: Int, status: String, onStop: () -> Unit) {
 
     SheetSurface(title = "Delivering bolus", onClose = null) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(status, style = AapsType.body, color = colors.textSecondary)
-            Text("$percent%", style = AapsType.hero, color = colors.textPrimary)
+            Text(status, style = AapsTheme.type.body, color = colors.textSecondary)
+            Text("$percent%", style = AapsTheme.type.hero, color = colors.textPrimary)
             // progress track + accent-filled fraction (GaugeTile pattern)
             Box(
                 Modifier

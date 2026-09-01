@@ -32,10 +32,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned BG source tab: the day-grouped reading list with the same long-press-to-select /
@@ -72,20 +70,20 @@ fun BgSourceScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (state.selecting) {
-                Text("${state.selected.size} selected", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                Text("${state.selected.size} selected", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
                 Text(
-                    "Cancel", style = AapsType.body, color = colors.textSecondary,
-                    modifier = Modifier.clip(AapsShape.button).combinedClickable(onClick = onCancelSelecting).padding(horizontal = 10.dp, vertical = 6.dp)
+                    "Cancel", style = AapsTheme.type.body, color = colors.textSecondary,
+                    modifier = Modifier.clip(AapsTheme.shape.button).combinedClickable(onClick = onCancelSelecting).padding(horizontal = 10.dp, vertical = 6.dp)
                 )
                 Text(
-                    "Delete", style = AapsType.body, color = if (state.selected.isEmpty()) colors.textTertiary else colors.low,
+                    "Delete", style = AapsTheme.type.body, color = if (state.selected.isEmpty()) colors.textTertiary else colors.low,
                     modifier = Modifier
-                        .clip(AapsShape.button)
+                        .clip(AapsTheme.shape.button)
                         .then(if (state.selected.isEmpty()) Modifier else Modifier.combinedClickable(onClick = onDeleteSelected))
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             } else {
-                Text("Glucose readings", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                Text("Glucose readings", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
                 StatusPill(label = "${state.rows.size}", dotColor = colors.inRange)
             }
         }
@@ -94,7 +92,7 @@ fun BgSourceScreen(
             items(state.rows, key = { it.id }) { row ->
                 row.dayLabel?.let {
                     Text(
-                        it, style = AapsType.label, color = colors.textSecondary,
+                        it, style = AapsTheme.type.label, color = colors.textSecondary,
                         modifier = Modifier.fillMaxWidth().padding(start = AapsSpacing.screenH, end = AapsSpacing.screenH, top = 14.dp, bottom = 6.dp)
                     )
                 }
@@ -136,15 +134,15 @@ private fun BgReadingRow(
                 colors = CheckboxDefaults.colors(checkedColor = colors.accent, uncheckedColor = colors.textTertiary)
             )
 
-        Text(row.time, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.width(78.dp))
+        Text(row.time, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.width(78.dp))
         Text(
             row.value,
-            style = AapsType.listTitle,
+            style = AapsTheme.type.listTitle,
             color = if (row.valid) colors.textPrimary else colors.textTertiary,
             textDecoration = if (row.valid) null else TextDecoration.LineThrough,
             modifier = Modifier.weight(1f)
         )
-        Text(row.trend, style = AapsType.listTitle, color = colors.textSecondary)
+        Text(row.trend, style = AapsTheme.type.listTitle, color = colors.textSecondary)
         if (row.fromNightscout)
             Box(Modifier.size(6.dp).clip(CircleShape).background(colors.accent))
         else

@@ -35,10 +35,8 @@ import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.NumberField
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Callbacks the [ProfileEditor] fires back to the host ([app.aaps.plugins.main.profile.ProfileFragment]).
@@ -110,9 +108,9 @@ fun ProfileEditor(
     ) {
         // Header
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Edit profile", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
-            Text("Manage", style = AapsType.listTitle, color = colors.accentOnLight,
-                 modifier = Modifier.clip(AapsShape.pill).clickable(onClick = onManage).padding(horizontal = 12.dp, vertical = 8.dp))
+            Text("Edit profile", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            Text("Manage", style = AapsTheme.type.listTitle, color = colors.accentOnLight,
+                 modifier = Modifier.clip(AapsTheme.shape.pill).clickable(onClick = onManage).padding(horizontal = 12.dp, vertical = 8.dp))
         }
 
         // Profile selector (only when >1 profile)
@@ -131,16 +129,16 @@ fun ProfileEditor(
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("NAME", style = AapsType.label, color = colors.textSecondary)
+                    Text("NAME", style = AapsTheme.type.label, color = colors.textSecondary)
                     Box(
-                        Modifier.fillMaxWidth().clip(AapsShape.cardSmall).background(colors.surface2)
+                        Modifier.fillMaxWidth().clip(AapsTheme.shape.cardSmall).background(colors.surface2)
                             .padding(horizontal = 12.dp, vertical = 12.dp)
                     ) {
                         BasicTextField(
                             value = state.name,
                             onValueChange = callbacks::onName,
                             singleLine = true,
-                            textStyle = AapsType.listTitle.copy(color = colors.textPrimary),
+                            textStyle = AapsTheme.type.listTitle.copy(color = colors.textPrimary),
                             cursorBrush = SolidColor(colors.accent),
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -170,8 +168,8 @@ fun ProfileEditor(
         if (tab == 0 && state.dailyBasal.isNotBlank()) {
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("DAILY BASAL", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                    Text(state.dailyBasal, style = AapsType.listTitle, color = colors.textPrimary)
+                    Text("DAILY BASAL", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                    Text(state.dailyBasal, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                 }
             }
         }
@@ -197,18 +195,18 @@ fun ProfileEditor(
                         onRemove = { callbacks.onRemoveBlock(tab, b.index) }
                     )
                 }
-                if (blocks.isEmpty()) Text("No data", style = AapsType.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
+                if (blocks.isEmpty()) Text("No data", style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
             }
         }
 
         // Add block
         Row(
-            Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap).clip(AapsShape.pill)
+            Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap).clip(AapsTheme.shape.pill)
                 .background(colors.accentTint).clickable { callbacks.onAddBlock(tab) }.padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Rounded.Add, contentDescription = null, tint = colors.accentOnLight, modifier = Modifier.size(18.dp))
-            Text("  Add block", style = AapsType.listTitle, color = colors.accentOnLight)
+            Text("  Add block", style = AapsTheme.type.listTitle, color = colors.accentOnLight)
         }
 
         // Save
@@ -235,20 +233,20 @@ private fun BlockRow(
     // Keeping the value field on its own line stops the "U/h" unit from wrapping/overlapping.
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("FROM", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(end = 10.dp))
+            Text("FROM", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(end = 10.dp))
             if (canPickTime) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     TimeStep("−") { onTimeShift(-1) }
                     Text(
-                        block.timeLabel, style = AapsType.listTitle, color = colors.textOnSurfaceStrong,
-                        modifier = Modifier.clip(AapsShape.pill).background(colors.controlFill).padding(horizontal = 12.dp, vertical = 6.dp)
+                        block.timeLabel, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong,
+                        modifier = Modifier.clip(AapsTheme.shape.pill).background(colors.controlFill).padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                     TimeStep("+") { onTimeShift(1) }
                 }
             } else {
                 Text(
-                    block.timeLabel, style = AapsType.listTitle, color = colors.textTertiary,
-                    modifier = Modifier.clip(AapsShape.pill).background(colors.controlFill).padding(horizontal = 12.dp, vertical = 6.dp)
+                    block.timeLabel, style = AapsTheme.type.listTitle, color = colors.textTertiary,
+                    modifier = Modifier.clip(AapsTheme.shape.pill).background(colors.controlFill).padding(horizontal = 12.dp, vertical = 6.dp)
                 )
             }
             Box(Modifier.weight(1f))
@@ -290,6 +288,6 @@ private fun TimeStep(symbol: String, onClick: () -> Unit) {
         Modifier.size(32.dp).clip(CircleShape).background(colors.controlFill).clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Text(symbol, style = AapsType.listTitle, color = colors.textPrimary)
+        Text(symbol, style = AapsTheme.type.listTitle, color = colors.textPrimary)
     }
 }

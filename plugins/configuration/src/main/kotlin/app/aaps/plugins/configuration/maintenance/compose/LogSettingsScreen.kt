@@ -20,10 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** One log category and whether it is currently being written. */
 data class LogToggle(val name: String, val enabled: Boolean)
@@ -45,13 +43,13 @@ fun LogSettingsScreen(
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "←", style = AapsType.title, color = colors.textSecondary,
-                modifier = Modifier.clip(AapsShape.iconButton).clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 4.dp)
+                "←", style = AapsTheme.type.title, color = colors.textSecondary,
+                modifier = Modifier.clip(AapsTheme.shape.iconButton).clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 4.dp)
             )
-            Text("Log settings", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 6.dp))
+            Text("Log settings", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 6.dp))
             Text(
-                "Reset", style = AapsType.label, color = colors.accent,
-                modifier = Modifier.clip(AapsShape.button).clickable(onClick = onReset).padding(horizontal = 10.dp, vertical = 8.dp)
+                "Reset", style = AapsTheme.type.label, color = colors.accent,
+                modifier = Modifier.clip(AapsTheme.shape.button).clickable(onClick = onReset).padding(horizontal = 10.dp, vertical = 8.dp)
             )
         }
 
@@ -60,7 +58,7 @@ fun LogSettingsScreen(
                 elements.forEachIndexed { i, element ->
                     if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(element.name, style = AapsType.body, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                        Text(element.name, style = AapsTheme.type.body, color = colors.textPrimary, modifier = Modifier.weight(1f))
                         Switch(
                             checked = element.enabled,
                             onCheckedChange = { onToggle(element.name, it) },

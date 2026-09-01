@@ -26,7 +26,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import java.util.Locale
 
 /**
@@ -45,7 +44,7 @@ fun AlgorithmScreen(
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
-        Text(state.title, style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
+        Text(state.title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         if (state.chips.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = AapsSpacing.sectionGap), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -57,10 +56,10 @@ fun AlgorithmScreen(
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row {
-                        Text("MODEL RESPONSE · PREDICTED BG", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                        if (state.targetMmol != null) Text("target ${fmt1(state.targetMmol)}", style = AapsType.caption, color = colors.accentOnLight)
+                        Text("MODEL RESPONSE · PREDICTED BG", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                        if (state.targetMmol != null) Text("target ${fmt1(state.targetMmol)}", style = AapsTheme.type.caption, color = colors.accentOnLight)
                     }
-                    Text("${fmt1(state.predictedMmol)} mmol/L", style = AapsType.cardValue, color = colors.textPrimary)
+                    Text("${fmt1(state.predictedMmol)} mmol/L", style = AapsTheme.type.cardValue, color = colors.textPrimary)
                 }
             }
         }
@@ -72,8 +71,8 @@ fun AlgorithmScreen(
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(t.label, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
-                                if (t.sub.isNotBlank()) Text(t.sub, style = AapsType.caption, color = colors.textTertiary)
+                                Text(t.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+                                if (t.sub.isNotBlank()) Text(t.sub, style = AapsTheme.type.caption, color = colors.textTertiary)
                             }
                             Switch(
                                 checked = t.on,
@@ -95,9 +94,9 @@ fun AlgorithmScreen(
         AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp), onClick = onOpenSettings) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Advanced settings", style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
+                    Text("Advanced settings", style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
                     val sub = state.bodyWeight?.let { "Body weight ${fmt1(it)} kg · all parameters" } ?: "All algorithm parameters"
-                    Text(sub, style = AapsType.caption, color = colors.textTertiary)
+                    Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
                 }
                 Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
             }

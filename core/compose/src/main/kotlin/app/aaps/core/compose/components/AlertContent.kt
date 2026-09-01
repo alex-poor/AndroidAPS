@@ -20,10 +20,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** One button in an [AlertContent] footer. */
 data class AlertAction(
@@ -58,7 +56,7 @@ fun AlertContent(
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(AapsShape.hero)
+                .clip(AapsTheme.shape.hero)
                 .background(colors.surface)
                 .padding(AapsSpacing.cardPad),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)
@@ -68,15 +66,15 @@ fun AlertContent(
                     Box(
                         Modifier
                             .size(width = 3.dp, height = 20.dp)
-                            .clip(AapsShape.pill)
+                            .clip(AapsTheme.shape.pill)
                             .background(rule)
                     )
-                    Text(title, style = AapsType.title, color = colors.textPrimary)
+                    Text(title, style = AapsTheme.type.title, color = colors.textPrimary)
                 }
             if (message.isNotBlank())
                 Text(
                     message,
-                    style = AapsType.body,
+                    style = AapsTheme.type.body,
                     color = colors.textSecondary,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -105,12 +103,12 @@ fun SecondaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Mod
     val colors = AapsTheme.colors
     Text(
         label,
-        style = AapsType.body,
+        style = AapsTheme.type.body,
         color = colors.textSecondary,
         textAlign = TextAlign.Center,
         modifier = modifier
             .fillMaxWidth()
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(colors.controlFill)
             .clickable(onClick = onClick)
             .padding(vertical = 12.dp)

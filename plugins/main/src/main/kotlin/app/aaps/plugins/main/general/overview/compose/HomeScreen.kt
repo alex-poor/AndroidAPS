@@ -45,11 +45,9 @@ import app.aaps.core.compose.components.RoundIconButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import app.aaps.core.compose.theme.color
 
 /**
@@ -112,25 +110,25 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
                 Notification.LOW    -> colors.inRange
                 else                -> colors.accent
             }
-            AapsCard(shape = AapsShape.cardSmall) {
+            AapsCard(shape = AapsTheme.shape.cardSmall) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier
                             .padding(end = 10.dp)
                             .size(width = 3.dp, height = 30.dp)
-                            .clip(AapsShape.pill)
+                            .clip(AapsTheme.shape.pill)
                             .background(tint)
                     )
                     Column(Modifier.weight(1f)) {
-                        Text(alert.text, style = AapsType.body, color = colors.textPrimary)
-                        Text(alert.time, style = AapsType.caption, color = colors.textTertiary)
+                        Text(alert.text, style = AapsTheme.type.body, color = colors.textPrimary)
+                        Text(alert.time, style = AapsTheme.type.caption, color = colors.textTertiary)
                     }
                     Text(
                         alert.buttonText,
-                        style = AapsType.label,
+                        style = AapsTheme.type.label,
                         color = tint,
                         modifier = Modifier
-                            .clip(AapsShape.button)
+                            .clip(AapsTheme.shape.button)
                             .clickable { onDismiss(alert) }
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     )
@@ -144,7 +142,7 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
 private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () -> Unit, onIobClick: () -> Unit) {
     val colors = AapsTheme.colors
     val bgColor = state.bgTone?.color() ?: colors.textPrimary
-    AapsCard(shape = AapsShape.hero) {
+    AapsCard(shape = AapsTheme.shape.hero) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // row 1 — loop pill (tap → Loop mode chooser) + time
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -158,32 +156,32 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                     labelColor = colors.textPrimary,
                     onClick = actions.onLoop
                 )
-                Text(state.timeAgo, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
+                Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
             }
             // row 2 — BG + inline trend (left) · eventual (right)
             Row(verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(state.bg, style = AapsType.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp), color = bgColor)
+                    Text(state.bg, style = AapsTheme.type.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp), color = bgColor)
                     if (state.trendArrow.isNotBlank() || state.delta.isNotBlank())
                         Text(
                             "${state.trendArrow} ${state.delta}".trim(),
-                            style = AapsType.listTitle.copy(fontWeight = FontWeight.ExtraBold),
+                            style = AapsTheme.type.listTitle.copy(fontWeight = FontWeight.ExtraBold),
                             color = bgColor,
                             modifier = Modifier.padding(bottom = 10.dp)
                         )
                 }
                 if (state.eventualBg.isNotBlank())
                     Column(horizontalAlignment = Alignment.End) {
-                        Text(state.eventualBg, style = AapsType.title, color = colors.textPrimary)
-                        Text("EVENTUAL", style = AapsType.label, color = colors.textTertiary)
+                        Text(state.eventualBg, style = AapsTheme.type.title, color = colors.textPrimary)
+                        Text("EVENTUAL", style = AapsTheme.type.label, color = colors.textTertiary)
                     }
             }
             // row 3 — state line (current reading only): "<n above target> · <range>"
             if (state.stateLine.isNotBlank())
                 Row {
-                    Text(state.stateLine, style = AapsType.caption.copy(fontWeight = FontWeight.Bold), color = bgColor)
+                    Text(state.stateLine, style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold), color = bgColor)
                     if (state.targetRange.isNotBlank())
-                        Text(" · ${state.targetRange}", style = AapsType.caption.copy(fontWeight = FontWeight.Bold), color = colors.textSecondary)
+                        Text(" · ${state.targetRange}", style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold), color = colors.textSecondary)
                 }
             // divider + stat row (IOB / COB / Basal)
             Box(
@@ -225,14 +223,14 @@ private fun HeroStat(
 ) {
     val colors = AapsTheme.colors
     Column(
-        (if (onClick != null) modifier.clip(AapsShape.cardSmall).clickable(onClick = onClick) else modifier)
+        (if (onClick != null) modifier.clip(AapsTheme.shape.cardSmall).clickable(onClick = onClick) else modifier)
             .padding(horizontal = HeroStatInset, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        Text(label, style = AapsType.label, color = colors.textSecondary)
-        Text(value, style = AapsType.cardValue.copy(fontSize = 18.sp, lineHeight = 20.sp), color = valueColor, maxLines = 1)
+        Text(label, style = AapsTheme.type.label, color = colors.textSecondary)
+        Text(value, style = AapsTheme.type.cardValue.copy(fontSize = 18.sp, lineHeight = 20.sp), color = valueColor, maxLines = 1)
         // sub kept readable (secondary color, real caption size) — was too small/dark to see before
-        if (sub.isNotBlank()) Text(sub, style = AapsType.caption, color = colors.textSecondary, maxLines = 1)
+        if (sub.isNotBlank()) Text(sub, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1)
     }
 }
 
@@ -254,16 +252,16 @@ private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
 private fun SupplyCell(s: HomeUiState.Supply, modifier: Modifier) {
     val colors = AapsTheme.colors
     Column(
-        modifier.clip(AapsShape.cardSmall).background(colors.controlFill).padding(horizontal = 8.dp, vertical = 8.dp),
+        modifier.clip(AapsTheme.shape.cardSmall).background(colors.controlFill).padding(horizontal = 8.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             val dot = s.dotTone.color()
             if (s.fraction != null) CountdownRing(s.fraction, dot, size = 12.dp) else Dot(dot, size = 8.dp)
-            Text(s.label, style = AapsType.caption, color = colors.textSecondary, maxLines = 1)
+            Text(s.label, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1)
         }
-        Text(s.value, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1)
+        Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1)
     }
 }
 
@@ -292,7 +290,7 @@ private fun GraphCard(rangeHours: Int, onRange: (Int) -> Unit, graph: @Composabl
     AapsCard(contentPadding = androidx.compose.foundation.layout.PaddingValues(AapsSpacing.cardPadSmall)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Glucose", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                Text("Glucose", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
                 SegmentedControl(
                     options = ranges.map { "${it}h" },
                     selectedIndex = selected,
@@ -314,14 +312,14 @@ private fun DetailsHandle(onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(AapsShape.pill)
+            .clip(AapsTheme.shape.pill)
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(AapsIcons.ExpandLess, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.padding(end = 6.dp))
-        Text("Details — status, sensitivity & graphs", style = AapsType.caption, color = colors.textTertiary)
+        Text("Details — status, sensitivity & graphs", style = AapsTheme.type.caption, color = colors.textTertiary)
     }
 }
 
@@ -340,22 +338,22 @@ private fun DetailsSheet(state: HomeUiState, onClose: () -> Unit) {
             SheetSurface(title = "Details", onClose = onClose) {
                 // Supplies & status
                 if (state.supplies.isNotEmpty()) {
-                    Text("SUPPLIES & STATUS", style = AapsType.label, color = colors.textSecondary)
+                    Text("SUPPLIES & STATUS", style = AapsTheme.type.label, color = colors.textSecondary)
                     AapsCard(Modifier.fillMaxWidth()) {
                         Column {
                             state.supplies.forEachIndexed { i, s ->
                                 if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                                 Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     Dot(s.dotTone.color(), size = 9.dp)
-                                    Text(s.label, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                                    Text(s.value, style = AapsType.listTitle, color = colors.textPrimary)
+                                    Text(s.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+                                    Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                                 }
                             }
                         }
                     }
                 }
                 // Loop algorithm & sensitivity
-                Text("LOOP & SENSITIVITY", style = AapsType.label, color = colors.textSecondary)
+                Text("LOOP & SENSITIVITY", style = AapsTheme.type.label, color = colors.textSecondary)
                 AapsCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         DetailRow("Algorithm", state.algorithmName.ifBlank { "—" })
@@ -388,9 +386,9 @@ private fun CarbsUndoSheet(
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             SheetSurface(title = "Recent carbs", onClose = onClose) {
                 if (carbs.isEmpty()) {
-                    Text("No carb entries in the last few hours.", style = AapsType.body, color = colors.textSecondary)
+                    Text("No carb entries in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
                 } else {
-                    Text("Remove a mistaken or duplicate entry — this asks you to confirm.", style = AapsType.caption, color = colors.textTertiary)
+                    Text("Remove a mistaken or duplicate entry — this asks you to confirm.", style = AapsTheme.type.caption, color = colors.textTertiary)
                     AapsCard(Modifier.fillMaxWidth()) {
                         Column {
                             carbs.forEachIndexed { i, c ->
@@ -401,8 +399,8 @@ private fun CarbsUndoSheet(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Column(Modifier.weight(1f)) {
-                                        Text(c.grams, style = AapsType.listTitle, color = colors.textPrimary)
-                                        Text(c.time, style = AapsType.caption, color = colors.textTertiary)
+                                        Text(c.grams, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                                        Text(c.time, style = AapsTheme.type.caption, color = colors.textTertiary)
                                     }
                                     RoundIconButton(Icons.Rounded.Delete, "Remove ${c.grams}", onClick = { onDelete(c) })
                                 }
@@ -448,11 +446,11 @@ private fun InsulinUndoSheet(
                     }
                 }
                 if (state.recentInsulin.isEmpty()) {
-                    Text("No boluses in the last few hours.", style = AapsType.body, color = colors.textSecondary)
+                    Text("No boluses in the last few hours.", style = AapsTheme.type.body, color = colors.textSecondary)
                 } else {
                     Text(
                         "Remove a dose the pump did not actually deliver — this asks you to confirm.",
-                        style = AapsType.caption, color = colors.textTertiary
+                        style = AapsTheme.type.caption, color = colors.textTertiary
                     )
                     AapsCard(Modifier.fillMaxWidth()) {
                         Column {
@@ -464,10 +462,10 @@ private fun InsulinUndoSheet(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     Column(Modifier.weight(1f)) {
-                                        Text(e.units, style = AapsType.listTitle, color = colors.textPrimary)
+                                        Text(e.units, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                                         Text(
                                             if (e.kind.isBlank()) e.time else "${e.time} · ${e.kind}",
-                                            style = AapsType.caption, color = colors.textTertiary
+                                            style = AapsTheme.type.caption, color = colors.textTertiary
                                         )
                                     }
                                     RoundIconButton(Icons.Rounded.Delete, "Remove ${e.units}", onClick = { onDelete(e) })
@@ -486,8 +484,8 @@ private fun InsulinUndoSheet(
 private fun DetailRow(label: String, value: String) {
     val colors = AapsTheme.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-        Text(value, style = AapsType.listTitle, color = colors.textPrimary)
+        Text(label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+        Text(value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
     }
 }
 

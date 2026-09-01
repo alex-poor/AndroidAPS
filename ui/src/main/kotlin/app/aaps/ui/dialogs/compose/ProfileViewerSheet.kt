@@ -25,7 +25,6 @@ import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * One time-block row for the read-only profile viewer: a start-time label plus the formatted value.
@@ -78,30 +77,30 @@ fun ProfileViewerSheet(state: ProfileViewerState, onClose: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.compare && state.name2 != null) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(state.name, style = AapsType.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
-                            Text(state.name2, style = AapsType.listTitle, color = colors.accent)
+                            Text(state.name, style = AapsTheme.type.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                            Text(state.name2, style = AapsTheme.type.listTitle, color = colors.accent)
                         }
                     }
                     if (!state.date.isNullOrBlank()) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Date", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                            Text(state.date, style = AapsType.listTitle, color = colors.textPrimary)
+                            Text("Date", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                            Text(state.date, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Insulin duration (DIA)", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                        Text(state.dia, style = AapsType.listTitle, color = colors.textPrimary)
+                        Text("Insulin duration (DIA)", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                        Text(state.dia, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Units", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                        Text(state.unitsLabel, style = AapsType.listTitle, color = colors.textPrimary)
+                        Text("Units", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                        Text(state.unitsLabel, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                     }
                 }
             }
 
             if (!state.invalid.isNullOrBlank()) {
                 AapsCard(Modifier.fillMaxWidth(), color = colors.surface2) {
-                    Text(state.invalid, style = AapsType.body, color = colors.low)
+                    Text(state.invalid, style = AapsTheme.type.body, color = colors.low)
                 }
             }
 
@@ -116,10 +115,10 @@ fun ProfileViewerSheet(state: ProfileViewerState, onClose: () -> Unit) {
             if (tab == 0) {
                 AapsCard(Modifier.fillMaxWidth()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Total", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                        Text(state.dailyBasal, style = AapsType.listTitle, color = colors.textPrimary)
+                        Text("Total", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                        Text(state.dailyBasal, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                         if (state.compare && state.dailyBasal2 != null)
-                            Text("  ${state.dailyBasal2}", style = AapsType.listTitle, color = colors.accent)
+                            Text("  ${state.dailyBasal2}", style = AapsTheme.type.listTitle, color = colors.accent)
                     }
                 }
             }
@@ -129,14 +128,14 @@ fun ProfileViewerSheet(state: ProfileViewerState, onClose: () -> Unit) {
                     current.rows.forEachIndexed { i, r ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(r.time, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
-                            Text(r.value, style = AapsType.listTitle, color = colors.textPrimary, textAlign = TextAlign.End)
+                            Text(r.time, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, textAlign = TextAlign.End)
                             if (state.compare && r.value2 != null)
-                                Text("  ${r.value2}", style = AapsType.listTitle, color = colors.accent, textAlign = TextAlign.End)
+                                Text("  ${r.value2}", style = AapsTheme.type.listTitle, color = colors.accent, textAlign = TextAlign.End)
                         }
                     }
                     if (current.rows.isEmpty())
-                        Text("No data", style = AapsType.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
+                        Text("No data", style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
                 }
             }
         }

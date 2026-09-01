@@ -26,9 +26,7 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.Dot
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import app.aaps.core.compose.theme.color
 
 /**
@@ -53,17 +51,17 @@ fun LoopSheet(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Dot(state.statusTone?.color() ?: colors.inRange, glow = state.looping, size = 10.dp)
                     Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                        Text(state.statusLabel, style = AapsType.listTitle, color = colors.textPrimary)
-                        if (state.algoLine.isNotBlank()) Text(state.algoLine, style = AapsType.caption, color = colors.textTertiary)
-                        if (state.enactedLine.isNotBlank()) Text(state.enactedLine, style = AapsType.caption, color = colors.textTertiary)
-                        if (state.reasons.isNotBlank()) Text(state.reasons, style = AapsType.caption, color = colors.textTertiary)
+                        Text(state.statusLabel, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                        if (state.algoLine.isNotBlank()) Text(state.algoLine, style = AapsTheme.type.caption, color = colors.textTertiary)
+                        if (state.enactedLine.isNotBlank()) Text(state.enactedLine, style = AapsTheme.type.caption, color = colors.textTertiary)
+                        if (state.reasons.isNotBlank()) Text(state.reasons, style = AapsTheme.type.caption, color = colors.textTertiary)
                     }
                 }
             }
 
             // mode radio list
             if (state.modes.isNotEmpty()) {
-                Text("MODE", style = AapsType.label, color = colors.textSecondary)
+                Text("MODE", style = AapsTheme.type.label, color = colors.textSecondary)
                 AapsCard(Modifier.fillMaxWidth()) {
                     Column {
                         state.modes.forEach { m -> ModeRow(m, colors, onAction) }
@@ -73,7 +71,7 @@ fun LoopSheet(
 
             // suspend
             if (state.suspendVisible) {
-                Text("SUSPEND LOOP", style = AapsType.label, color = colors.textSecondary)
+                Text("SUSPEND LOOP", style = AapsTheme.type.label, color = colors.textSecondary)
                 AapsCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Chip("1h", { onAction(LoopActionId.SUSPEND_1H) }, Modifier.weight(1f))
@@ -87,7 +85,7 @@ fun LoopSheet(
 
             // disconnect
             if (state.disconnectVisible) {
-                Text("DISCONNECT PUMP", style = AapsType.label, color = colors.textSecondary)
+                Text("DISCONNECT PUMP", style = AapsTheme.type.label, color = colors.textSecondary)
                 AapsCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (state.disconnect15m) Chip("15m", { onAction(LoopActionId.DISCONNECT_15M) }, Modifier.weight(1f))
@@ -108,14 +106,14 @@ private fun ModeRow(m: LoopModeOption, colors: app.aaps.core.compose.theme.AapsC
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(AapsShape.cardSmall)
+            .clip(AapsTheme.shape.cardSmall)
             .then(if (m.enabled && !m.selected) Modifier.clickable { onAction(m.id) } else Modifier)
             .padding(vertical = 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(m.title, style = AapsType.listTitle, color = if (m.enabled || m.selected) colors.textPrimary else colors.textTertiary)
-            if (m.sub.isNotBlank()) Text(m.sub, style = AapsType.caption, color = colors.textTertiary)
+            Text(m.title, style = AapsTheme.type.listTitle, color = if (m.enabled || m.selected) colors.textPrimary else colors.textTertiary)
+            if (m.sub.isNotBlank()) Text(m.sub, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
         if (m.selected)
             Box(Modifier.size(24.dp).clip(CircleShape).background(colors.accent), contentAlignment = Alignment.Center) {
@@ -131,12 +129,12 @@ private fun FullButton(label: String, onClick: () -> Unit) {
     val colors = AapsTheme.colors
     Text(
         label,
-        style = AapsType.title,
+        style = AapsTheme.type.title,
         color = colors.onAccent,
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(colors.accent)
             .clickable(onClick = onClick)
             .padding(vertical = 14.dp)

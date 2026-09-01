@@ -27,9 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import java.util.Locale
 
 /**
@@ -57,14 +55,14 @@ fun NumberField(
     LaunchedEffect(value) { if (parse(text) != value) text = fmt(value) }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (label.isNotBlank()) Text(label.uppercase(Locale.getDefault()), style = AapsType.label, color = colors.textSecondary)
+        if (label.isNotBlank()) Text(label.uppercase(Locale.getDefault()), style = AapsTheme.type.label, color = colors.textSecondary)
         Row(verticalAlignment = Alignment.CenterVertically) {
             StepButton(minus = true) { onValue((value - step).coerceIn(min, max)) }
             Box(
                 Modifier
                     .weight(1f)
                     .padding(horizontal = 10.dp)
-                    .clip(AapsShape.cardSmall)
+                    .clip(AapsTheme.shape.cardSmall)
                     .background(colors.surface2)
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
@@ -77,11 +75,11 @@ fun NumberField(
                             onValue(parse(it).coerceIn(min, max))
                         },
                         singleLine = true,
-                        textStyle = AapsType.cardValue.copy(color = colors.textPrimary),
+                        textStyle = AapsTheme.type.cardValue.copy(color = colors.textPrimary),
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
                         keyboardOptions = KeyboardOptions(keyboardType = if (decimals > 0 || min < 0) KeyboardType.Number else KeyboardType.Number)
                     )
-                    if (unit.isNotBlank()) Text(unit, style = AapsType.body, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
+                    if (unit.isNotBlank()) Text(unit, style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(bottom = 3.dp))
                 }
             }
             StepButton(minus = false) { onValue((value + step).coerceIn(min, max)) }

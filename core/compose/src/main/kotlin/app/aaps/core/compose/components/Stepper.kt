@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * A circular −/+ stepper with a big centered value + caption. [value] is pre-formatted by the caller.
@@ -37,8 +36,8 @@ fun Stepper(
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         StepBtn(minus = true, onClick = onMinus)
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(value, style = AapsType.bigValue, color = colors.textPrimary)
-            Text(caption, style = AapsType.caption, color = colors.textTertiary)
+            Text(value, style = AapsTheme.type.bigValue, color = colors.textPrimary)
+            Text(caption, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
         StepBtn(minus = false, onClick = onPlus)
     }

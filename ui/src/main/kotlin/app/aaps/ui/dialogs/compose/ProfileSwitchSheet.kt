@@ -25,9 +25,7 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.Stepper
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Profile switch sheet (handoff Section 3): profile chips, percentage stepper+chips,
@@ -54,13 +52,13 @@ fun ProfileSwitchSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (state.profiles.size > 1) {
-                Text("PROFILE", style = AapsType.label, color = colors.textSecondary)
+                Text("PROFILE", style = AapsTheme.type.label, color = colors.textSecondary)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.profiles.forEach { p -> Chip(p, { profile = p }, selected = p == profile) }
                 }
             }
 
-            Text("PERCENTAGE", style = AapsType.label, color = colors.textSecondary)
+            Text("PERCENTAGE", style = AapsTheme.type.label, color = colors.textSecondary)
             AapsCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Stepper(
@@ -77,7 +75,7 @@ fun ProfileSwitchSheet(
                 }
             }
 
-            Text("TIMESHIFT & DURATION", style = AapsType.label, color = colors.textSecondary)
+            Text("TIMESHIFT & DURATION", style = AapsTheme.type.label, color = colors.textSecondary)
             AapsCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Stepper(
@@ -99,12 +97,12 @@ fun ProfileSwitchSheet(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .clip(AapsShape.card)
+                        .clip(AapsTheme.shape.card)
                         .background(colors.inRange.copy(alpha = 0.10f))
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("EFFECT AT $percent%", style = AapsType.label, color = colors.inRange)
+                    Text("EFFECT AT $percent%", style = AapsTheme.type.label, color = colors.inRange)
                     EffectRow("Basal", effect.basalBefore, effect.basalAfter, colors)
                     EffectRow("ISF", effect.isfBefore, effect.isfAfter, colors)
                     EffectRow("Carb ratio", effect.icBefore, effect.icAfter, colors)
@@ -113,12 +111,12 @@ fun ProfileSwitchSheet(
 
             Text(
                 "Apply profile switch",
-                style = AapsType.title,
+                style = AapsTheme.type.title,
                 color = colors.onAccent,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(AapsShape.button)
+                    .clip(AapsTheme.shape.button)
                     .background(colors.accent)
                     .clickable { onApply(profile, percent, timeshift, durationMin) }
                     .padding(vertical = 14.dp)
@@ -130,8 +128,8 @@ fun ProfileSwitchSheet(
 @Composable
 private fun EffectRow(label: String, before: String, after: String, colors: app.aaps.core.compose.theme.AapsColors) {
     Row(Modifier.fillMaxWidth()) {
-        Text(label, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-        Text("$before → ", style = AapsType.body, color = colors.textTertiary)
-        Text(after, style = AapsType.listTitle, color = colors.textPrimary)
+        Text(label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+        Text("$before → ", style = AapsTheme.type.body, color = colors.textTertiary)
+        Text(after, style = AapsTheme.type.listTitle, color = colors.textPrimary)
     }
 }

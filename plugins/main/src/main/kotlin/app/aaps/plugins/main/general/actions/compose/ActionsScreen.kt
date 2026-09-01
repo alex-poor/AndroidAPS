@@ -27,10 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.TintIcon
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Actions & Careportal screen (handoff Section 3): Therapy 2-col cards, a "Log an event"
@@ -47,7 +45,7 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = AapsSpacing.screenH)
     ) {
-        Text("Actions", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
+        Text("Actions", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         if (state.therapy.isNotEmpty()) {
             SectionLabel("THERAPY")
@@ -90,7 +88,7 @@ fun ActionsScreen(state: ActionsUiState, onAction: (ActionId) -> Unit) {
 
 @Composable
 private fun SectionLabel(text: String) =
-    Text(text, style = AapsType.label, color = AapsTheme.colors.textSecondary, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+    Text(text, style = AapsTheme.type.label, color = AapsTheme.colors.textSecondary, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
 
 @Composable
 private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionId) -> Unit) {
@@ -104,10 +102,10 @@ private fun TherapyCard(t: TherapyAction, modifier: Modifier, onAction: (ActionI
         Row(verticalAlignment = Alignment.CenterVertically) {
             TintIcon(iconFor(t.id), tint = if (accent) colors.accentOnLight else colors.accent, background = colors.controlFill)
             Column(Modifier.padding(start = 10.dp).weight(1f)) {
-                Text(t.label, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.label, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
                     t.sub.ifBlank { if (t.cancelable) "tap to cancel" else "" },
-                    style = AapsType.caption,
+                    style = AapsTheme.type.caption,
                     color = if (accent) colors.accentOnLight else colors.textTertiary,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
@@ -131,7 +129,7 @@ private fun EventTile(e: EventAction, modifier: Modifier, onAction: (ActionId) -
             Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(colors.controlFill),
             contentAlignment = Alignment.Center
         ) { Icon(iconFor(e.id), contentDescription = e.label, tint = colors.textSecondary, modifier = Modifier.size(22.dp)) }
-        Text(e.label, style = AapsType.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(e.label, style = AapsTheme.type.caption, color = colors.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -144,7 +142,7 @@ private fun ToolRow(tool: ToolAction, onAction: (ActionId) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         TintIcon(iconFor(tool.id), tint = colors.accent, background = colors.accentTint, size = 34.dp)
-        Text(tool.label, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+        Text(tool.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
         Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
     }
 }

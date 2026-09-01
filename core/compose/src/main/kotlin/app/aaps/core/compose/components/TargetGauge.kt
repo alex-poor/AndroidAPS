@@ -17,7 +17,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Horizontal target gauge from the Home hero: a rounded track with a red→green→amber gradient and
@@ -57,9 +56,9 @@ fun TargetGauge(
             drawCircle(color = Color.Black.copy(alpha = 0.25f), radius = 8.dp.toPx(), center = Offset(x, h / 2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx()))
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(lowLabel, style = AapsType.caption, color = colors.textTertiary)
-            Text(targetLabel, style = AapsType.caption, color = colors.textSecondary)
-            Text(highLabel, style = AapsType.caption, color = colors.textTertiary)
+            Text(lowLabel, style = AapsTheme.type.caption, color = colors.textTertiary)
+            Text(targetLabel, style = AapsTheme.type.caption, color = colors.textSecondary)
+            Text(highLabel, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
     }
 }

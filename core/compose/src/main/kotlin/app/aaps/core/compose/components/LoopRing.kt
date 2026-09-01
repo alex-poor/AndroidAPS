@@ -13,7 +13,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * The loop ring from the Home hero card: a track + a progress arc colored by loop/glucose state,
@@ -50,8 +49,8 @@ fun LoopRing(
             )
         }
         androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(centerValue, style = AapsType.cardValue, color = colors.textPrimary)
-            if (centerLabel != null) Text(centerLabel, style = AapsType.label, color = colors.textTertiary)
+            Text(centerValue, style = AapsTheme.type.cardValue, color = colors.textPrimary)
+            if (centerLabel != null) Text(centerLabel, style = AapsTheme.type.label, color = colors.textTertiary)
         }
     }
 }

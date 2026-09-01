@@ -22,10 +22,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Chip
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import java.util.Locale
 import kotlin.math.exp
 
@@ -40,7 +38,7 @@ fun InsulinScreen(state: InsulinUiState) {
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
-        Text("Insulin", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
+        Text("Insulin", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         if (state.types.isNotEmpty()) {
             Row(
@@ -53,12 +51,12 @@ fun InsulinScreen(state: InsulinUiState) {
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
-                Text("INSULIN ACTIVITY · % PER HOUR", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 12.dp))
+                Text("INSULIN ACTIVITY · % PER HOUR", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 12.dp))
                 InsulinCurve(state.diaHours, state.peakMinutes, Modifier.fillMaxWidth().height(150.dp))
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                    Text("0", style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.weight(1f))
-                    Text("peak ${state.peakMinutes}m", style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.weight(1f))
-                    Text(fmtHours(state.diaHours), style = AapsType.caption, color = colors.textTertiary)
+                    Text("0", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f))
+                    Text("peak ${state.peakMinutes}m", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f))
+                    Text(fmtHours(state.diaHours), style = AapsTheme.type.caption, color = colors.textTertiary)
                 }
             }
         }
@@ -70,7 +68,7 @@ fun InsulinScreen(state: InsulinUiState) {
 
         Text(
             "This curve is how AAPS models insulin working in your body over time. Changing type reshapes it — and with it every dose calculation. Change the active insulin in Config Builder.",
-            style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 24.dp)
+            style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 24.dp)
         )
     }
 }
@@ -80,8 +78,8 @@ private fun Tile(label: String, value: String, modifier: Modifier) {
     val colors = AapsTheme.colors
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(label, style = AapsType.label, color = colors.textSecondary)
-            Text(value, style = AapsType.cardValue, color = colors.textPrimary)
+            Text(label, style = AapsTheme.type.label, color = colors.textSecondary)
+            Text(value, style = AapsTheme.type.cardValue, color = colors.textPrimary)
         }
     }
 }

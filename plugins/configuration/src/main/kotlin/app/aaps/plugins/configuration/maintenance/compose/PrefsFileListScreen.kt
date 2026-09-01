@@ -18,10 +18,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * One exported settings file. [flavourOk] / [versionOk] carry the legacy metadata warning colouring —
@@ -60,19 +58,19 @@ fun PrefsFileListScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "←", style = AapsType.title, color = colors.textSecondary,
-                modifier = Modifier.clip(AapsShape.iconButton).clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 4.dp)
+                "←", style = AapsTheme.type.title, color = colors.textSecondary,
+                modifier = Modifier.clip(AapsTheme.shape.iconButton).clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 4.dp)
             )
             Column(Modifier.weight(1f).padding(start = 6.dp)) {
-                Text(title, style = AapsType.title, color = colors.textPrimary)
-                subtitle?.let { Text(it, style = AapsType.caption, color = colors.textTertiary) }
+                Text(title, style = AapsTheme.type.title, color = colors.textPrimary)
+                subtitle?.let { Text(it, style = AapsTheme.type.caption, color = colors.textTertiary) }
             }
         }
 
         if (files.isEmpty()) {
             Text(
                 "No exported settings found",
-                style = AapsType.body,
+                style = AapsTheme.type.body,
                 color = colors.textTertiary,
                 modifier = Modifier.padding(horizontal = AapsSpacing.screenH)
             )
@@ -84,9 +82,9 @@ fun PrefsFileListScreen(
                 val index = files.indexOf(file)
                 AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap).clickable { onSelect(index) }) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(file.name, style = AapsType.listTitle, color = colors.textPrimary)
+                        Text(file.name, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                         if (file.exportedAgo.isNotBlank())
-                            Text(file.exportedAgo, style = AapsType.caption, color = colors.textSecondary)
+                            Text(file.exportedAgo, style = AapsTheme.type.caption, color = colors.textSecondary)
                         Row(horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
                             if (file.flavour.isNotBlank())
                                 Meta(file.flavour, if (file.flavourOk) colors.textSecondary else colors.high)
@@ -103,12 +101,12 @@ fun PrefsFileListScreen(
                 item {
                     Text(
                         loadMoreLabel,
-                        style = AapsType.label,
+                        style = AapsTheme.type.label,
                         color = if (loadMoreEnabled) colors.textOnSurfaceStrong else colors.textTertiary,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = AapsSpacing.sectionGap)
-                            .clip(AapsShape.button)
+                            .clip(AapsTheme.shape.button)
                             .background(colors.controlFill)
                             .then(if (loadMoreEnabled) Modifier.clickable(onClick = onLoadMore) else Modifier)
                             .padding(vertical = 12.dp)
@@ -121,5 +119,5 @@ fun PrefsFileListScreen(
 
 @Composable
 private fun Meta(text: String, color: Color) {
-    Text(text, style = AapsType.caption, color = color)
+    Text(text, style = AapsTheme.type.caption, color = color)
 }

@@ -27,10 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Objectives journey (handoff Section 8 — Objectives): a collapsed "complete" summary, the
@@ -44,8 +42,8 @@ fun ObjectivesJourney(state: ObjectivesUiState, onManage: () -> Unit) {
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Objectives", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
-            Text("${state.completed} of ${state.total}", style = AapsType.listTitle, color = colors.textSecondary)
+            Text("Objectives", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            Text("${state.completed} of ${state.total}", style = AapsTheme.type.listTitle, color = colors.textSecondary)
         }
 
         if (state.completed > 0) {
@@ -55,7 +53,7 @@ fun ObjectivesJourney(state: ObjectivesUiState, onManage: () -> Unit) {
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.inRange, modifier = Modifier.size(20.dp))
-                    Text("Objectives 1–${state.completed} complete", style = AapsType.listTitle, color = colors.textPrimary)
+                    Text("Objectives 1–${state.completed} complete", style = AapsTheme.type.listTitle, color = colors.textPrimary)
                 }
             }
         }
@@ -69,10 +67,10 @@ fun ObjectivesJourney(state: ObjectivesUiState, onManage: () -> Unit) {
 
         Box(
             Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 24.dp)
-                .clip(AapsShape.button).background(colors.accentTint).clickable(onClick = onManage).padding(vertical = 14.dp),
+                .clip(AapsTheme.shape.button).background(colors.accentTint).clickable(onClick = onManage).padding(vertical = 14.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text("Manage & verify objectives", style = AapsType.listTitle, color = colors.accentOnLight)
+            Text("Manage & verify objectives", style = AapsTheme.type.listTitle, color = colors.accentOnLight)
         }
     }
 }
@@ -81,14 +79,14 @@ fun ObjectivesJourney(state: ObjectivesUiState, onManage: () -> Unit) {
 private fun CurrentCard(item: ObjItem) {
     val colors = AapsTheme.colors
     AapsCard(
-        Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap).border(BorderStroke(1.dp, colors.accent), AapsShape.card)
+        Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap).border(BorderStroke(1.dp, colors.accent), AapsTheme.shape.card)
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             NumberBadge(item.number, colors.accent, colors.onAccent)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(item.title, style = AapsType.listTitle, color = colors.textPrimary)
-                if (item.gate.isNotBlank()) Text(item.gate, style = AapsType.caption, color = colors.textTertiary)
-                if (item.progress.isNotBlank()) Text(item.progress, style = AapsType.caption, color = colors.accentOnLight, modifier = Modifier.padding(top = 2.dp))
+                Text(item.title, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                if (item.gate.isNotBlank()) Text(item.gate, style = AapsTheme.type.caption, color = colors.textTertiary)
+                if (item.progress.isNotBlank()) Text(item.progress, style = AapsTheme.type.caption, color = colors.accentOnLight, modifier = Modifier.padding(top = 2.dp))
             }
         }
     }
@@ -100,7 +98,7 @@ private fun LockedCard(item: ObjItem) {
     AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             NumberBadge(item.number, colors.controlFill, colors.textTertiary)
-            Text(item.title, style = AapsType.listTitle, color = colors.textTertiary, modifier = Modifier.weight(1f))
+            Text(item.title, style = AapsTheme.type.listTitle, color = colors.textTertiary, modifier = Modifier.weight(1f))
             Icon(Icons.Rounded.Lock, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
         }
     }
@@ -109,6 +107,6 @@ private fun LockedCard(item: ObjItem) {
 @Composable
 private fun NumberBadge(number: Int, bg: androidx.compose.ui.graphics.Color, fg: androidx.compose.ui.graphics.Color) {
     Box(Modifier.size(28.dp).clip(RoundedCornerShape(9.dp)).background(bg), contentAlignment = Alignment.Center) {
-        Text("$number", style = AapsType.listTitle, color = fg)
+        Text("$number", style = AapsTheme.type.listTitle, color = fg)
     }
 }

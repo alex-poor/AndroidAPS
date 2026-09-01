@@ -16,9 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * A tonal action-bar button (icon + label), 58dp tall. Tint conveys role:
@@ -42,14 +40,14 @@ fun ActionBarButton(
     Column(
         modifier = modifier
             .height(58.dp)
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(bg)
             .clickable(onClick = onClick, role = Role.Button),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Icon(icon, contentDescription = label, tint = fg, modifier = Modifier.size(22.dp))
-        Text(label, style = AapsType.label, color = fg)
+        Text(label, style = AapsTheme.type.label, color = fg)
     }
 }
 

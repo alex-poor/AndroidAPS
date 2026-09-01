@@ -25,9 +25,7 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.Stepper
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import java.util.Locale
 
 /**
@@ -53,14 +51,14 @@ fun TempTargetSheet(
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("PICK AN INTENT", style = AapsType.label, color = colors.textSecondary)
+            Text("PICK AN INTENT", style = AapsTheme.type.label, color = colors.textSecondary)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.presets.forEach { p ->
                     val selected = reason == p.reason
                     Column(
                         Modifier
                             .weight(1f)
-                            .clip(AapsShape.card)
+                            .clip(AapsTheme.shape.card)
                             .background(if (selected) colors.accentTintStrong else colors.surface2)
                             .clickable {
                                 target = p.target; duration = p.durationMin; reason = p.reason
@@ -68,14 +66,14 @@ fun TempTargetSheet(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(p.label, style = AapsType.listTitle, color = if (selected) colors.accentOnLight else colors.textPrimary)
-                        Text(p.targetText, style = AapsType.caption, color = colors.textSecondary)
-                        Text(p.durationText, style = AapsType.caption, color = colors.textTertiary)
+                        Text(p.label, style = AapsTheme.type.listTitle, color = if (selected) colors.accentOnLight else colors.textPrimary)
+                        Text(p.targetText, style = AapsTheme.type.caption, color = colors.textSecondary)
+                        Text(p.durationText, style = AapsTheme.type.caption, color = colors.textTertiary)
                     }
                 }
             }
 
-            Text("ADJUST", style = AapsType.label, color = colors.textSecondary)
+            Text("ADJUST", style = AapsTheme.type.label, color = colors.textSecondary)
             AapsCard(Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Stepper(
@@ -96,12 +94,12 @@ fun TempTargetSheet(
             val enabled = target > 0.0 && duration > 0
             Text(
                 "Start temp target",
-                style = AapsType.title,
+                style = AapsTheme.type.title,
                 color = if (enabled) colors.onAccent else colors.textTertiary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(AapsShape.button)
+                    .clip(AapsTheme.shape.button)
                     .background(if (enabled) colors.accent else colors.controlFill)
                     .then(if (enabled) Modifier.clickable { onStart(target, duration, reason) } else Modifier)
                     .padding(vertical = 14.dp)
@@ -109,12 +107,12 @@ fun TempTargetSheet(
             if (state.hasActive)
                 Text(
                     "Cancel current temp target",
-                    style = AapsType.body,
+                    style = AapsTheme.type.body,
                     color = colors.low,
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(AapsShape.pill)
+                        .clip(AapsTheme.shape.pill)
                         .clickable(onClick = onCancelActive)
                         .padding(vertical = 10.dp)
                 )

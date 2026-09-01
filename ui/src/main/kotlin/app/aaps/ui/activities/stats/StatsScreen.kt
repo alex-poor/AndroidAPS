@@ -31,7 +31,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import kotlin.math.roundToInt
 
 /**
@@ -53,17 +52,17 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
             Box(
                 Modifier.clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onBack).padding(8.dp)
             ) { Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary) }
-            Text("Statistics", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
+            Text("Statistics", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
             SegmentedControl(ranges.map { "${it}d" }, ranges.indexOf(state.rangeDays).coerceAtLeast(0), { onRange(ranges[it]) })
         }
 
         // TIR card
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("TIME IN RANGE", style = AapsType.label, color = colors.textSecondary)
+                Text("TIME IN RANGE", style = AapsTheme.type.label, color = colors.textSecondary)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(if (state.loading) "--" else "${state.inRange.roundToInt()}%", style = AapsType.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
-                    Text("in range", style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 8.dp, bottom = 12.dp))
+                    Text(if (state.loading) "--" else "${state.inRange.roundToInt()}%", style = AapsTheme.type.hero.copy(fontSize = 56.sp, lineHeight = 56.sp), color = colors.inRange)
+                    Text("in range", style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(start = 8.dp, bottom = 12.dp))
                 }
                 // stacked bar
                 Row(
@@ -96,8 +95,8 @@ fun StatsScreen(state: StatsUiState, onRange: (Int) -> Unit, onBack: () -> Unit)
         // extra
         AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Carbs / day", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                Text(state.carbsPerDay, style = AapsType.listTitle, color = colors.textPrimary)
+                Text("Carbs / day", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                Text(state.carbsPerDay, style = AapsTheme.type.listTitle, color = colors.textPrimary)
             }
         }
     }
@@ -112,7 +111,7 @@ private fun androidx.compose.foundation.layout.RowScope.Seg(pct: Double, color: 
 private fun BarLabel(name: String, pct: Double, dot: Color, textColor: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(dot))
-        Text("  $name ${pct.roundToInt()}%", style = AapsType.caption, color = textColor)
+        Text("  $name ${pct.roundToInt()}%", style = AapsTheme.type.caption, color = textColor)
     }
 }
 
@@ -121,8 +120,8 @@ private fun StatTile(label: String, value: String, modifier: Modifier = Modifier
     val colors = AapsTheme.colors
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, style = AapsType.label.copy(fontSize = 9.sp), color = colors.textSecondary)
-            Text(value, style = AapsType.cardValue, color = valueColor, maxLines = 1)
+            Text(label, style = AapsTheme.type.label.copy(fontSize = 9.sp), color = colors.textSecondary)
+            Text(value, style = AapsTheme.type.cardValue, color = valueColor, maxLines = 1)
         }
     }
 }

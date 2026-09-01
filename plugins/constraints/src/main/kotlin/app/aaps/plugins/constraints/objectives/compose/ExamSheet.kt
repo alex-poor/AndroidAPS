@@ -23,10 +23,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** One answer option: the text, whether the user has ticked it, and whether it is still editable. */
 data class ExamOption(val text: String, val selected: Boolean)
@@ -68,9 +66,9 @@ fun ExamSheet(
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(state.question, style = AapsType.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                Text(state.question, style = AapsTheme.type.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
                 if (state.position.isNotBlank())
-                    Text(state.position, style = AapsType.caption, color = colors.textTertiary)
+                    Text(state.position, style = AapsTheme.type.caption, color = colors.textTertiary)
             }
 
             AapsCard(Modifier.fillMaxWidth()) {
@@ -91,7 +89,7 @@ fun ExamSheet(
                             )
                             Text(
                                 option.text,
-                                style = AapsType.body,
+                                style = AapsTheme.type.body,
                                 color = if (state.answered) colors.textSecondary else colors.textPrimary,
                                 modifier = Modifier.padding(start = 4.dp)
                             )
@@ -101,13 +99,13 @@ fun ExamSheet(
             }
 
             state.disabledUntil?.let {
-                Text(it, style = AapsType.caption, color = colors.high)
+                Text(it, style = AapsTheme.type.caption, color = colors.high)
             }
 
             if (hintViews.isNotEmpty())
                 AapsCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
-                        Text("HINTS", style = AapsType.label, color = colors.textSecondary)
+                        Text("HINTS", style = AapsTheme.type.label, color = colors.textSecondary)
                         hintViews.forEach { hint ->
                             AndroidView(factory = { hint }, modifier = Modifier.fillMaxWidth())
                         }
@@ -130,9 +128,9 @@ fun ExamSheet(
             if (state.answered)
                 Text(
                     "Reset answer",
-                    style = AapsType.label,
+                    style = AapsTheme.type.label,
                     color = colors.textSecondary,
-                    modifier = Modifier.clip(AapsShape.button).clickable(onClick = onReset).padding(vertical = 10.dp)
+                    modifier = Modifier.clip(AapsTheme.shape.button).clickable(onClick = onReset).padding(vertical = 10.dp)
                 )
             Box(Modifier.padding(bottom = AapsSpacing.rowGap))
         }
@@ -144,10 +142,10 @@ private fun NavAction(label: String, enabled: Boolean, onClick: () -> Unit, modi
     val colors = AapsTheme.colors
     Text(
         label,
-        style = AapsType.label,
+        style = AapsTheme.type.label,
         color = if (enabled) colors.textOnSurfaceStrong else colors.textTertiary,
         modifier = modifier
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(colors.controlFill)
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(vertical = 12.dp),

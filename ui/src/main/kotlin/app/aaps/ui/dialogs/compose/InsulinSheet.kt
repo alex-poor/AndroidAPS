@@ -23,7 +23,6 @@ import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 data class InsulinSheetState(
     val maxInsulin: Double,
@@ -57,7 +56,7 @@ fun InsulinSheet(state: InsulinSheetState, onSubmit: (InsulinInputs) -> Unit, on
     SheetSurface(title = "Insulin", onClose = onClose) {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)) {
             if (state.suspendedWarning)
-                Text("Pump is suspended / not ready — this will be recorded only.", style = AapsType.caption, color = colors.high)
+                Text("Pump is suspended / not ready — this will be recorded only.", style = AapsTheme.type.caption, color = colors.high)
             NumberField("Insulin", amount, { amount = it }, step = state.bolusStep, min = 0.0, max = state.maxInsulin, decimals = state.decimals, unit = "U", modifier = Modifier.fillMaxWidth())
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.quickIncrements.forEach { inc -> Chip(fmtInc(inc), onClick = { amount = (amount + inc).coerceIn(0.0, state.maxInsulin) }) }

@@ -54,6 +54,8 @@ data class AapsColors(
 )
 
 val LocalAapsColors = staticCompositionLocalOf { AapsColors() }
+val LocalAapsTextStyles = staticCompositionLocalOf { DefaultAapsTextStyles }
+val LocalAapsShapes = staticCompositionLocalOf { DefaultAapsShapes }
 
 /**
  * Root theme for all redesigned AAPS surfaces.
@@ -128,13 +130,18 @@ fun AapsTheme(
             onError = colors.onAccent
         )
 
+    // Material's own typography and shapes are derived from the same tokens, so a dialog or a
+    // switch follows the skin instead of staying on the platform default while the app around it
+    // changes.
     MaterialTheme(
         colorScheme = m3,
-        typography = AapsTypography,
-        shapes = AapsShapes
+        typography = aapsM3Typography(skin.fontFamily, skin.singleWeightFont),
+        shapes = aapsM3Shapes(skin.shapes)
     ) {
         CompositionLocalProvider(
             LocalAapsColors provides colors,
+            LocalAapsTextStyles provides skin.type,
+            LocalAapsShapes provides skin.shapes,
             content = content
         )
     }
@@ -145,6 +152,12 @@ object AapsTheme {
 
     val colors: AapsColors
         @Composable @ReadOnlyComposable get() = LocalAapsColors.current
+
+    val type: AapsTextStyles
+        @Composable @ReadOnlyComposable get() = LocalAapsTextStyles.current
+
+    val shape: AapsShapes
+        @Composable @ReadOnlyComposable get() = LocalAapsShapes.current
 }
 
 /**

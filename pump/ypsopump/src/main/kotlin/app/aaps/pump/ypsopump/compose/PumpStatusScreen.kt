@@ -27,7 +27,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned pump status screen (handoff Section 7): connection pill, Reservoir + Battery gauge tiles,
@@ -41,7 +40,7 @@ fun PumpStatusScreen(state: PumpStatusState) {
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(state.title, style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            Text(state.title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
                 label = if (state.connected) "Connected" else state.connection.ifBlank { "Disconnected" },
                 dotColor = if (state.connected) colors.inRange else colors.low
@@ -66,31 +65,31 @@ fun PumpStatusScreen(state: PumpStatusState) {
                     state.rows.forEachIndexed { i, r ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(r.label, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                            Text(r.value, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(r.label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
             }
         }
 
-        Text("COMMAND QUEUE", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+        Text("COMMAND QUEUE", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
         AapsCard(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
             Column {
                 if (state.queue.isEmpty()) {
-                    Text("Idle", style = AapsType.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
+                    Text("Idle", style = AapsTheme.type.body, color = colors.textTertiary, modifier = Modifier.padding(vertical = 12.dp))
                 } else state.queue.forEachIndexed { i, q ->
                     if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(8.dp).clip(CircleShape).background(if (q.running) colors.inRange else colors.textTertiary))
-                        Text(q.text, style = AapsType.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                        if (q.running) Text("running", style = AapsType.caption, color = colors.inRange)
+                        Text(q.text, style = AapsTheme.type.body, color = colors.textOnSurfaceStrong, modifier = Modifier.padding(start = 10.dp).weight(1f))
+                        if (q.running) Text("running", style = AapsTheme.type.caption, color = colors.inRange)
                     }
                 }
             }
         }
 
-        if (state.note.isNotBlank()) Text(state.note, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 24.dp))
+        if (state.note.isNotBlank()) Text(state.note, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 24.dp))
     }
 }
 
@@ -100,8 +99,8 @@ private fun GaugeTile(label: String, value: String, fraction: Float, color: Colo
     val colors = AapsTheme.colors
     AapsCard(modifier) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(label, style = AapsType.label.copy(fontSize = 9.sp), color = colors.textSecondary)
-            Text(value, style = AapsType.cardValue, color = colors.textPrimary)
+            Text(label, style = AapsTheme.type.label.copy(fontSize = 9.sp), color = colors.textSecondary)
+            Text(value, style = AapsTheme.type.cardValue, color = colors.textPrimary)
             Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(colors.controlFill)) {
                 Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(6.dp).clip(RoundedCornerShape(3.dp)).background(color))
             }

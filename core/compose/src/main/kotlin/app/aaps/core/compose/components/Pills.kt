@@ -15,9 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Status pill: a colored dot (glucose/status color) + label + optional bold value, on a flat
@@ -37,7 +35,7 @@ fun StatusPill(
     val colors = AapsTheme.colors
     Row(
         modifier = modifier
-            .clip(AapsShape.pill)
+            .clip(AapsTheme.shape.pill)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .background(colors.controlFill)
             .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -45,8 +43,8 @@ fun StatusPill(
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         if (dotColor != null) Dot(dotColor, glow)
-        Text(label, style = AapsType.caption, color = labelColor)
-        if (value != null) Text(value, style = AapsType.listTitle, color = colors.textPrimary)
+        Text(label, style = AapsTheme.type.caption, color = labelColor)
+        if (value != null) Text(value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
     }
 }
 

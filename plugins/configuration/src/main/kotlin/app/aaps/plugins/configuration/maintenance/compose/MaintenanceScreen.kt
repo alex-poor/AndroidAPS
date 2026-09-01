@@ -24,10 +24,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Maintenance & backup screen (handoff Section 8): a primary "Export settings" action, an
@@ -46,7 +44,7 @@ fun MaintenanceScreen(
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
-        Text("Maintenance", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
+        Text("Maintenance", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap), color = colors.inRange.copy(alpha = 0.10f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -54,17 +52,17 @@ fun MaintenanceScreen(
                     Icon(AapsIcons.CloudUpload, contentDescription = null, tint = colors.inRange, modifier = Modifier.size(20.dp))
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Back up your settings", style = AapsType.listTitle, color = colors.textPrimary)
-                    Text("Keep a copy you can restore after a reinstall", style = AapsType.caption, color = colors.textTertiary)
+                    Text("Back up your settings", style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                    Text("Keep a copy you can restore after a reinstall", style = AapsTheme.type.caption, color = colors.textTertiary)
                 }
             }
         }
 
         Box(
             Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)
-                .clip(AapsShape.button).background(colors.accent).clickable(onClick = onExport).padding(vertical = 15.dp),
+                .clip(AapsTheme.shape.button).background(colors.accent).clickable(onClick = onExport).padding(vertical = 15.dp),
             contentAlignment = Alignment.Center
-        ) { Text("Export settings now", style = AapsType.listTitle, color = colors.onAccent) }
+        ) { Text("Export settings now", style = AapsTheme.type.listTitle, color = colors.onAccent) }
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
@@ -78,10 +76,10 @@ fun MaintenanceScreen(
 
         if (state.version.isNotBlank()) AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("App version", style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                Text("App version", style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(state.version, style = AapsType.listTitle, color = colors.textPrimary)
-                    if (state.buildInfo.isNotBlank()) Text(state.buildInfo, style = AapsType.caption, color = colors.textTertiary)
+                    Text(state.version, style = AapsTheme.type.listTitle, color = colors.textPrimary)
+                    if (state.buildInfo.isNotBlank()) Text(state.buildInfo, style = AapsTheme.type.caption, color = colors.textTertiary)
                 }
             }
         }
@@ -92,12 +90,12 @@ fun MaintenanceScreen(
 private fun ActionRow(icon: ImageVector, title: String, sub: String, onClick: () -> Unit) {
     val colors = AapsTheme.colors
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.size(36.dp).clip(AapsShape.iconButton).background(colors.accentTint), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(36.dp).clip(AapsTheme.shape.iconButton).background(colors.accentTint), contentAlignment = Alignment.Center) {
             Icon(icon, contentDescription = null, tint = colors.accentOnLight, modifier = Modifier.size(20.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
-            Text(sub, style = AapsType.caption, color = colors.textTertiary)
+            Text(title, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+            Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
         Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary)
     }

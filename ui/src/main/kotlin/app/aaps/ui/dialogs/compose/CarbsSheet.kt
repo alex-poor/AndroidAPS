@@ -23,7 +23,6 @@ import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 enum class CarbTt { NONE, ACTIVITY, EATING_SOON, HYPO }
 
@@ -69,7 +68,7 @@ fun CarbsSheet(state: CarbsSheetState, onSubmit: (CarbsInputs) -> Unit, onClose:
                 }
             }
 
-            Text("PRE-SET TEMP TARGET", style = AapsType.label, color = colors.textSecondary)
+            Text("PRE-SET TEMP TARGET", style = AapsTheme.type.label, color = colors.textSecondary)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("None", onClick = { tt = CarbTt.NONE }, selected = tt == CarbTt.NONE)
                 Chip("Activity", onClick = { tt = CarbTt.ACTIVITY }, selected = tt == CarbTt.ACTIVITY)

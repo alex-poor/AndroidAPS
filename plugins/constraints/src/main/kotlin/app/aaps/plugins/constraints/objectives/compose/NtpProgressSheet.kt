@@ -16,10 +16,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Network-time check progress. Objectives runs this to prove the phone clock has not been wound back;
@@ -34,15 +32,15 @@ fun NtpProgressSheet(title: String, status: String, percent: Int, closeLabel: St
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)
         ) {
-            Text(status, style = AapsType.body, color = colors.textSecondary, textAlign = TextAlign.Center)
+            Text(status, style = AapsTheme.type.body, color = colors.textSecondary, textAlign = TextAlign.Center)
 
             // Determinate bar: the check reports real percentages, so a spinner would understate progress.
-            Box(Modifier.fillMaxWidth().height(6.dp).clip(AapsShape.pill).background(colors.controlFill)) {
+            Box(Modifier.fillMaxWidth().height(6.dp).clip(AapsTheme.shape.pill).background(colors.controlFill)) {
                 Box(
                     Modifier
                         .fillMaxWidth(percent.coerceIn(0, 100) / 100f)
                         .height(6.dp)
-                        .clip(AapsShape.pill)
+                        .clip(AapsTheme.shape.pill)
                         .background(colors.accent)
                 )
             }

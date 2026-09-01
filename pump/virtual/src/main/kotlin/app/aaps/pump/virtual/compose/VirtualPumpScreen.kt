@@ -21,7 +21,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 data class VirtualPumpRow(val label: String, val value: String)
 
@@ -42,7 +41,7 @@ fun VirtualPumpScreen(state: VirtualPumpState, onSuspendedChange: (Boolean) -> U
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Virtual pump", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            Text("Virtual pump", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
                 label = if (state.suspended) "Suspended" else "Running",
                 dotColor = if (state.suspended) colors.high else colors.inRange
@@ -51,7 +50,7 @@ fun VirtualPumpScreen(state: VirtualPumpState, onSuspendedChange: (Boolean) -> U
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Pump suspended", style = AapsType.body, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                Text("Pump suspended", style = AapsTheme.type.body, color = colors.textPrimary, modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.suspended,
                     onCheckedChange = onSuspendedChange,
@@ -66,17 +65,17 @@ fun VirtualPumpScreen(state: VirtualPumpState, onSuspendedChange: (Boolean) -> U
                     state.status.forEachIndexed { i, r ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(r.label, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-                            Text(r.value, style = AapsType.listTitle, color = colors.textPrimary)
+                            Text(r.label, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                            Text(r.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
                         }
                     }
                 }
             }
 
         if (state.definition.isNotBlank()) {
-            Text("CAPABILITIES", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            Text("CAPABILITIES", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
-                Text(state.definition, style = AapsType.caption, color = colors.textSecondary)
+                Text(state.definition, style = AapsTheme.type.caption, color = colors.textSecondary)
             }
         }
     }

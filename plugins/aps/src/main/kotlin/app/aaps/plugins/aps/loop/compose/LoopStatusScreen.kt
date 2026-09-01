@@ -21,7 +21,6 @@ import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.StatusPill
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Loop tab: what the algorithm last asked for, what the constraints did to it, and when the
@@ -35,7 +34,7 @@ fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit) {
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Loop", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            Text("Loop", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             StatusPill(
                 label = if (state.running) "Running" else "Idle",
                 dotColor = if (state.running) colors.inRange else colors.textTertiary
@@ -44,15 +43,15 @@ fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit) {
 
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             Column {
-                Text("LAST RUN", style = AapsType.label, color = colors.textSecondary)
+                Text("LAST RUN", style = AapsTheme.type.label, color = colors.textSecondary)
                 Text(
                     state.lastRun.ifBlank { "Never" },
-                    style = AapsType.listTitle,
+                    style = AapsTheme.type.listTitle,
                     color = colors.textPrimary,
                     modifier = Modifier.padding(top = 4.dp)
                 )
                 if (state.source.isNotBlank())
-                    Text(state.source, style = AapsType.caption, color = colors.textSecondary, modifier = Modifier.padding(top = 2.dp))
+                    Text(state.source, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.padding(top = 2.dp))
                 PrimaryButton(
                     label = "Run now",
                     onClick = onRunNow,
@@ -72,7 +71,7 @@ fun LoopStatusScreen(state: LoopStatusState, onRunNow: () -> Unit) {
 private fun Section(title: String, rows: List<LoopStatusRow>) {
     if (rows.none { it.value.isNotBlank() }) return
     val colors = AapsTheme.colors
-    Text(title, style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+    Text(title, style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
     AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
         Column {
             var drawn = 0
@@ -81,8 +80,8 @@ private fun Section(title: String, rows: List<LoopStatusRow>) {
                 if (drawn > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                 drawn++
                 Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(r.label, style = AapsType.caption, color = colors.textSecondary)
-                    Text(r.value.toString(), style = AapsType.body, color = colors.textPrimary)
+                    Text(r.label, style = AapsTheme.type.caption, color = colors.textSecondary)
+                    Text(r.value.toString(), style = AapsTheme.type.body, color = colors.textPrimary)
                 }
             }
         }

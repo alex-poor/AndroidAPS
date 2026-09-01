@@ -18,10 +18,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Alarm / error sheet. Deliberately loud: a red mark, the failing message, and three explicit exits
@@ -48,7 +46,7 @@ fun ErrorSheet(
             }
             if (status.isNotBlank())
                 Text(
-                    status, style = AapsType.body, color = colors.textSecondary, textAlign = TextAlign.Center,
+                    status, style = AapsTheme.type.body, color = colors.textSecondary, textAlign = TextAlign.Center,
                     modifier = Modifier.padding(bottom = AapsSpacing.rowGapSmall)
                 )
 
@@ -66,12 +64,12 @@ private fun SecondaryAction(label: String, onClick: () -> Unit) {
     val colors = AapsTheme.colors
     Text(
         label,
-        style = AapsType.title,
+        style = AapsTheme.type.title,
         color = colors.textOnSurfaceStrong,
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(colors.controlFill)
             .clickable(onClick = onClick)
             .padding(vertical = 14.dp)

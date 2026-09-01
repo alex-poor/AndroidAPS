@@ -26,10 +26,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Base surface card for the redesign: [AapsTheme] surface fill + hairline border, no elevation.
@@ -38,7 +36,7 @@ import app.aaps.core.compose.theme.AapsType
 @Composable
 fun AapsCard(
     modifier: Modifier = Modifier,
-    shape: Shape = AapsShape.card,
+    shape: Shape = AapsTheme.shape.card,
     color: Color = AapsTheme.colors.surface,
     onClick: (() -> Unit)? = null,
     contentPadding: PaddingValues = PaddingValues(AapsSpacing.cardPad),
@@ -75,11 +73,11 @@ fun StatCard(
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(label, style = AapsType.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
+                Text(label, style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.weight(1f))
                 if (onClick != null) Chevron()
             }
-            Text(value, style = AapsType.cardValue, color = valueColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (sub != null) Text(sub, style = AapsType.caption, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(value, style = AapsTheme.type.cardValue, color = valueColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

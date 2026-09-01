@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned History timeline (handoff Section 4): filter chips + a chronological, day-grouped list of
@@ -59,7 +58,7 @@ fun HistoryScreen(state: HistoryUiState, onBack: () -> Unit) {
             Box(Modifier.clip(CircleShape).clickable(onClick = onBack).padding(8.dp)) {
                 Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = colors.textSecondary)
             }
-            Text("History", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(start = 4.dp))
+            Text("History", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(start = 4.dp))
         }
         // filter chips
         Row(Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.screenH, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -70,16 +69,16 @@ fun HistoryScreen(state: HistoryUiState, onBack: () -> Unit) {
         }
 
         if (state.loading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Loading…", style = AapsType.body, color = colors.textTertiary) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Loading…", style = AapsTheme.type.body, color = colors.textTertiary) }
         } else if (filtered.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No entries", style = AapsType.body, color = colors.textTertiary) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No entries", style = AapsTheme.type.body, color = colors.textTertiary) }
         } else {
             // group by day, preserving order (items already sorted desc)
             val groups = filtered.groupBy { it.dayLabel }
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = AapsSpacing.screenH), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
                 groups.forEach { (day, dayItems) ->
                     item(key = "h_$day") {
-                        Text(day.uppercase(), style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+                        Text(day.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
                     }
                     items(dayItems, key = { it.kind.name + it.timestamp }) { HistoryRow(it) }
                 }
@@ -96,16 +95,16 @@ private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) =
 private fun HistoryRow(item: HistoryItem) {
     val colors = AapsTheme.colors
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(item.time, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(end = 10.dp))
+        Text(item.time, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(end = 10.dp))
         Box(
             Modifier.size(34.dp).clip(CircleShape).background(tintFor(item.kind).copy(alpha = 0.15f)),
             contentAlignment = Alignment.Center
         ) { Icon(iconFor(item.kind), contentDescription = null, tint = tintFor(item.kind), modifier = Modifier.size(18.dp)) }
         Column(Modifier.padding(start = 10.dp).weight(1f)) {
-            Text(item.title, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
-            if (item.sub.isNotBlank()) Text(item.sub, style = AapsType.caption, color = colors.textTertiary)
+            Text(item.title, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+            if (item.sub.isNotBlank()) Text(item.sub, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
-        if (item.value.isNotBlank()) Text(item.value, style = AapsType.listTitle, color = colors.textPrimary)
+        if (item.value.isNotBlank()) Text(item.value, style = AapsTheme.type.listTitle, color = colors.textPrimary)
     }
 }
 

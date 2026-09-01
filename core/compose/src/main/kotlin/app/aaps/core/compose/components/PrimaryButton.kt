@@ -10,9 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** Full-width filled-accent confirm button used across the redesigned dialogs. */
 @Composable
@@ -20,12 +18,12 @@ fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modif
     val colors = AapsTheme.colors
     Text(
         label,
-        style = AapsType.title,
+        style = AapsTheme.type.title,
         color = if (enabled) colors.onAccent else colors.textTertiary,
         textAlign = TextAlign.Center,
         modifier = modifier
             .fillMaxWidth()
-            .clip(AapsShape.button)
+            .clip(AapsTheme.shape.button)
             .background(if (enabled) colors.accent else colors.controlFill)
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(vertical = 14.dp)
@@ -38,12 +36,12 @@ fun DangerButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifi
     val colors = AapsTheme.colors
     Text(
         label,
-        style = AapsType.body,
+        style = AapsTheme.type.body,
         color = colors.low,
         textAlign = TextAlign.Center,
         modifier = modifier
             .fillMaxWidth()
-            .clip(AapsShape.pill)
+            .clip(AapsTheme.shape.pill)
             .clickable(onClick = onClick)
             .padding(vertical = 10.dp)
     )

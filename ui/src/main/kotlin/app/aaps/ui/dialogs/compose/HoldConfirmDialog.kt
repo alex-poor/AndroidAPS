@@ -29,10 +29,8 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import app.aaps.core.compose.components.HoldToConfirmButton
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Confirmation for an action that will actually move insulin.
@@ -97,17 +95,17 @@ private fun HoldConfirmContent(title: String, message: String, onConfirm: () -> 
         Column(
             Modifier
                 .fillMaxWidth()
-                .clip(AapsShape.hero)
+                .clip(AapsTheme.shape.hero)
                 .background(colors.surface)
                 .padding(AapsSpacing.cardPad),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)
         ) {
-            Text(AnnotatedString(title), style = AapsType.title, color = colors.textPrimary, textAlign = TextAlign.Center)
+            Text(AnnotatedString(title), style = AapsTheme.type.title, color = colors.textPrimary, textAlign = TextAlign.Center)
             if (message.isNotBlank())
                 Text(
                     message,
-                    style = AapsType.body,
+                    style = AapsTheme.type.body,
                     color = colors.textSecondary,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
@@ -119,12 +117,12 @@ private fun HoldConfirmContent(title: String, message: String, onConfirm: () -> 
             )
             Text(
                 "Cancel",
-                style = AapsType.label,
+                style = AapsTheme.type.label,
                 color = colors.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(AapsShape.button)
+                    .clip(AapsTheme.shape.button)
                     .clickable(onClick = onCancel)
                     .padding(vertical = 12.dp)
             )

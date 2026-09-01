@@ -20,10 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Bottom-sheet surface: scrim-less rounded-top panel with a grabber and a title row. Hosted inside a
@@ -40,7 +38,7 @@ fun SheetSurface(
     Column(
         modifier
             .fillMaxWidth()
-            .clip(AapsShape.sheet)
+            .clip(AapsTheme.shape.sheet)
             .background(colors.surface3)
             .padding(bottom = 12.dp)
     ) {
@@ -64,7 +62,7 @@ fun SheetSurface(
                 .padding(horizontal = AapsSpacing.screenH, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(title, style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
+            Text(title, style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f))
             if (onClose != null) Box(Modifier.clip(androidx.compose.foundation.shape.CircleShape).clickable(onClick = onClose).padding(4.dp)) {
                 Icon(Icons.Rounded.Close, contentDescription = "Close", tint = colors.textSecondary)
             }
@@ -97,10 +95,10 @@ fun Chip(
     }
     Text(
         label,
-        style = AapsType.listTitle,
+        style = AapsTheme.type.listTitle,
         color = fg,
         modifier = modifier
-            .clip(AapsShape.pill)
+            .clip(AapsTheme.shape.pill)
             .background(bg)
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 10.dp)

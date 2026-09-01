@@ -23,7 +23,6 @@ import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.ToggleRow
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 import app.aaps.core.keys.interfaces.BooleanPreferenceKey
 import app.aaps.core.keys.interfaces.DoublePreferenceKey
 import app.aaps.core.keys.interfaces.IntPreferenceKey
@@ -116,7 +115,7 @@ fun PreferenceScreenCompose(
                 while (j < rows.size && rows[j] is PrefRow.Leaf) {
                     leaves += (rows[j] as PrefRow.Leaf).preference; j++
                 }
-                Text(row.title.uppercase(), style = AapsType.label, color = colors.textSecondary)
+                Text(row.title.uppercase(), style = AapsTheme.type.label, color = colors.textSecondary)
                 if (leaves.isNotEmpty()) AapsCard {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         leaves.forEach { PreferenceRow(it, preferences) }
@@ -174,7 +173,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
                 min = typed.min, max = typed.max,
                 decimals = if (typed.max - typed.min <= 20.0) 2 else 1
             )
-            if (sub != null) Text(sub, style = AapsType.caption, color = AapsTheme.colors.textTertiary)
+            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
         }
 
         is IntPreferenceKey     -> {
@@ -188,7 +187,7 @@ private fun PreferenceRow(pref: Preference, preferences: Preferences) {
                 },
                 step = 1.0, min = typed.min.toDouble(), max = typed.max.toDouble(), decimals = 0
             )
-            if (sub != null) Text(sub, style = AapsType.caption, color = AapsTheme.colors.textTertiary)
+            if (sub != null) Text(sub, style = AapsTheme.type.caption, color = AapsTheme.colors.textTertiary)
         }
 
         is StringPreferenceKey  -> {

@@ -26,7 +26,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.Dot
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Config Builder (handoff Section 5): a "Your loop, right now" summary card + a list of
@@ -38,18 +37,18 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
     Column(
         Modifier.fillMaxSize().background(colors.background).verticalScroll(rememberScrollState()).padding(horizontal = AapsSpacing.screenH)
     ) {
-        Text("Config Builder", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
+        Text("Config Builder", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.padding(vertical = 14.dp))
 
         if (state.summary.isNotEmpty()) {
-            Text("YOUR LOOP, RIGHT NOW", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            Text("YOUR LOOP, RIGHT NOW", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
                 Column {
                     state.summary.forEachIndexed { i, s ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Dot(if (s.ok) colors.inRange else colors.high, size = 9.dp)
-                            Text(s.label, style = AapsType.listTitle, color = colors.textSecondary, modifier = Modifier.padding(start = 10.dp).weight(1f))
-                            Text(s.value, style = AapsType.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(s.label, style = AapsTheme.type.listTitle, color = colors.textSecondary, modifier = Modifier.padding(start = 10.dp).weight(1f))
+                            Text(s.value, style = AapsTheme.type.listTitle, color = colors.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -57,15 +56,15 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
         }
 
         if (state.plugins.isNotEmpty()) {
-            Text("PLUGINS", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            Text("PLUGINS", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
             AapsCard(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 Column {
                     state.plugins.forEachIndexed { i, p ->
                         if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
                         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(p.name, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (p.sub.isNotBlank()) Text(p.sub, style = AapsType.caption, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(p.name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (p.sub.isNotBlank()) Text(p.sub, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                             Switch(
                                 checked = p.enabled,
@@ -85,9 +84,9 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
         }
 
         if (state.prefs.isNotEmpty()) {
-            Text("SETTINGS", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            Text("SETTINGS", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
             state.prefs.groupBy { it.group }.forEach { (group, rows) ->
-                Text(group, style = AapsType.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp, top = 4.dp))
+                Text(group, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.padding(bottom = 4.dp, top = 4.dp))
                 AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.rowGap)) {
                     Column {
                         rows.forEachIndexed { i, p ->
@@ -96,7 +95,7 @@ fun ConfigScreen(state: ConfigUiState, onToggle: (index: Int, enabled: Boolean) 
                                 Modifier.fillMaxWidth().clickable { onOpenPrefs(p.index) }.padding(vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(p.name, style = AapsType.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
+                                Text(p.name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, modifier = Modifier.weight(1f))
                                 Icon(AapsIcons.ChevronRight, contentDescription = null, tint = colors.textTertiary, modifier = Modifier.height(18.dp))
                             }
                         }

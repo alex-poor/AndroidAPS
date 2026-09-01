@@ -22,7 +22,6 @@ import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** Which glucose source the user tapped (mirrors the legacy meter/sensor/other radio group). */
 enum class CareMeter { METER, SENSOR, MANUAL }
@@ -78,7 +77,7 @@ fun CareSheet(state: CareSheetState, onSubmit: (CareInputs) -> Unit, onClose: ()
                     step = state.bgStep, min = state.bgMin, max = state.bgMax, decimals = state.bgDecimals, unit = state.bgUnit,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("SOURCE", style = AapsType.label, color = colors.textSecondary)
+                Text("SOURCE", style = AapsTheme.type.label, color = colors.textSecondary)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("Meter", onClick = { meter = CareMeter.METER }, selected = meter == CareMeter.METER)
                     Chip("Sensor", onClick = { meter = CareMeter.SENSOR }, selected = meter == CareMeter.SENSOR)

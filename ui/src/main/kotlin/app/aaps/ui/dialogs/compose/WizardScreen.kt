@@ -40,10 +40,8 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.HoldToConfirmButton
 import app.aaps.core.compose.components.StatusPill
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * Redesigned Bolus/Carb Wizard. Two steps (Input → Confirm) in a single composable. Stateless w.r.t.
@@ -85,7 +83,7 @@ fun WizardScreen(
             }
             Text(
                 if (confirming) "Confirm bolus" else "Bolus Wizard",
-                style = AapsType.title, color = colors.textPrimary,
+                style = AapsTheme.type.title, color = colors.textPrimary,
                 modifier = Modifier.weight(1f).padding(start = 4.dp)
             )
         }
@@ -134,11 +132,11 @@ private fun InputStep(
                         modifier = Modifier.clickable { editingBg = !editingBg }
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text(result.bgFromText.ifBlank { "From CGM" }, style = AapsType.caption, color = colors.textTertiary)
+                            Text(result.bgFromText.ifBlank { "From CGM" }, style = AapsTheme.type.caption, color = colors.textTertiary)
                             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(result.bgText, style = AapsType.cardValue, color = if (result.bgInRange) colors.inRange else colors.high)
+                                Text(result.bgText, style = AapsTheme.type.cardValue, color = if (result.bgInRange) colors.inRange else colors.high)
                                 if (result.bgTrendArrow.isNotBlank())
-                                    Text(result.bgTrendArrow, style = AapsType.listTitle, color = if (result.bgInRange) colors.inRange else colors.high, modifier = Modifier.padding(bottom = 2.dp))
+                                    Text(result.bgTrendArrow, style = AapsTheme.type.listTitle, color = if (result.bgInRange) colors.inRange else colors.high, modifier = Modifier.padding(bottom = 2.dp))
                             }
                         }
                         StatusPill(
@@ -159,10 +157,10 @@ private fun InputStep(
                         if (result.bgIsManual)
                             Text(
                                 "Trend is not applied to a manually entered value.",
-                                style = AapsType.caption, color = colors.textTertiary
+                                style = AapsTheme.type.caption, color = colors.textTertiary
                             )
                         TextButton(onClick = { onInputs(inputs.copy(manualBg = null)); editingBg = false }) {
-                            Text(if (result.bgIsManual) "Use CGM reading" else "Cancel", style = AapsType.caption, color = colors.textSecondary)
+                            Text(if (result.bgIsManual) "Use CGM reading" else "Cancel", style = AapsTheme.type.caption, color = colors.textSecondary)
                         }
                     }
                 }
@@ -171,14 +169,14 @@ private fun InputStep(
             // Carbs stepper + chips
             AapsCard {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("CARBS", style = AapsType.label, color = colors.textSecondary)
+                    Text("CARBS", style = AapsTheme.type.label, color = colors.textSecondary)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
                             onInputs(inputs.copy(carbs = (inputs.carbs - 5).coerceAtLeast(0)))
                         }
                         Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("${inputs.carbs}", style = AapsType.bigValue, color = colors.textPrimary)
-                            Text("grams", style = AapsType.caption, color = colors.textTertiary)
+                            Text("${inputs.carbs}", style = AapsTheme.type.bigValue, color = colors.textPrimary)
+                            Text("grams", style = AapsTheme.type.caption, color = colors.textTertiary)
                         }
                         StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
                             onInputs(inputs.copy(carbs = inputs.carbs + 5))
@@ -189,12 +187,12 @@ private fun InputStep(
                             val active = inputs.carbs == g
                             Text(
                                 "$g",
-                                style = AapsType.listTitle,
+                                style = AapsTheme.type.listTitle,
                                 color = if (active) colors.accentOnLight else colors.textSecondary,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clip(AapsShape.pill)
+                                    .clip(AapsTheme.shape.pill)
                                     .clickable { onInputs(inputs.copy(carbs = g)) }
                                     .background(if (active) colors.accentTintStrong else colors.controlFill)
                                     .padding(vertical = 10.dp)
@@ -209,7 +207,7 @@ private fun InputStep(
             if (inputs.carbs > 0) {
                 AapsCard {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("PRE-BOLUS", style = AapsType.label, color = colors.textSecondary)
+                        Text("PRE-BOLUS", style = AapsTheme.type.label, color = colors.textSecondary)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
                                 onInputs(inputs.copy(carbTime = (inputs.carbTime - 5).coerceAtLeast(-60)))
@@ -217,7 +215,7 @@ private fun InputStep(
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
                                     if (inputs.carbTime > 0) "+${inputs.carbTime}" else "${inputs.carbTime}",
-                                    style = AapsType.bigValue, color = colors.textPrimary
+                                    style = AapsTheme.type.bigValue, color = colors.textPrimary
                                 )
                                 Text(
                                     when {
@@ -225,7 +223,7 @@ private fun InputStep(
                                         inputs.carbTime < 0 -> "min since you ate"
                                         else               -> "eating now"
                                     },
-                                    style = AapsType.caption, color = colors.textTertiary
+                                    style = AapsTheme.type.caption, color = colors.textTertiary
                                 )
                             }
                             StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
@@ -237,12 +235,12 @@ private fun InputStep(
                                 val active = inputs.carbTime == m
                                 Text(
                                     if (m == 0) "now" else "+$m",
-                                    style = AapsType.listTitle,
+                                    style = AapsTheme.type.listTitle,
                                     color = if (active) colors.accentOnLight else colors.textSecondary,
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clip(AapsShape.pill)
+                                        .clip(AapsTheme.shape.pill)
                                         .clickable { onInputs(inputs.copy(carbTime = m)) }
                                         .background(if (active) colors.accentTintStrong else colors.controlFill)
                                         .padding(vertical = 10.dp)
@@ -257,7 +255,7 @@ private fun InputStep(
                 // AAPS splits the entry into 15-min chunks that the APS/COB path already consumes.
                 AapsCard {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("CARB ABSORPTION", style = AapsType.label, color = colors.textSecondary)
+                        Text("CARB ABSORPTION", style = AapsTheme.type.label, color = colors.textSecondary)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
                                 onInputs(inputs.copy(carbDurationHours = (inputs.carbDurationHours - 1).coerceAtLeast(0)))
@@ -265,11 +263,11 @@ private fun InputStep(
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
                                     if (inputs.carbDurationHours == 0) "fast" else "${inputs.carbDurationHours} h",
-                                    style = AapsType.bigValue, color = colors.textPrimary
+                                    style = AapsTheme.type.bigValue, color = colors.textPrimary
                                 )
                                 Text(
                                     if (inputs.carbDurationHours == 0) "all at once" else "spread over",
-                                    style = AapsType.caption, color = colors.textTertiary
+                                    style = AapsTheme.type.caption, color = colors.textTertiary
                                 )
                             }
                             StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
@@ -281,12 +279,12 @@ private fun InputStep(
                                 val active = inputs.carbDurationHours == h
                                 Text(
                                     if (h == 0) "fast" else "${h}h",
-                                    style = AapsType.listTitle,
+                                    style = AapsTheme.type.listTitle,
                                     color = if (active) colors.accentOnLight else colors.textSecondary,
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clip(AapsShape.pill)
+                                        .clip(AapsTheme.shape.pill)
                                         .clickable { onInputs(inputs.copy(carbDurationHours = h)) }
                                         .background(if (active) colors.accentTintStrong else colors.controlFill)
                                         .padding(vertical = 10.dp)
@@ -300,7 +298,7 @@ private fun InputStep(
             // Included in this dose
             AapsCard {
                 Column {
-                    Text("INCLUDED IN THIS DOSE", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 4.dp))
+                    Text("INCLUDED IN THIS DOSE", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 4.dp))
                     FactorRow("Carbs", "${inputs.carbs} g", result.carbsInsulin, colors, base = true)
                     FactorRow("BG correction", "toward target", result.bgInsulin, colors, on = inputs.useBg, onToggle = { onInputs(inputs.copy(useBg = it)) })
                     FactorRow("Active insulin (IOB)", "reduces dose", result.iobInsulin, colors, on = inputs.useIob, softRed = true, onToggle = { onInputs(inputs.copy(useIob = it)) })
@@ -320,16 +318,16 @@ private fun InputStep(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Recommended", style = AapsType.label, color = colors.textSecondary)
-                Text(result.totalText, style = AapsType.cardValue, color = colors.textPrimary)
+                Text("Recommended", style = AapsTheme.type.label, color = colors.textSecondary)
+                Text(result.totalText, style = AapsTheme.type.cardValue, color = colors.textPrimary)
             }
             val enabled = result.deliverable || result.carbsOnly
             Text(
                 "Continue →",
-                style = AapsType.title,
+                style = AapsTheme.type.title,
                 color = if (enabled) colors.onAccent else colors.textTertiary,
                 modifier = Modifier
-                    .clip(AapsShape.button)
+                    .clip(AapsTheme.shape.button)
                     .background(if (enabled) colors.accent else colors.controlFill)
                     .then(if (enabled) Modifier.clickable(onClick = onContinue) else Modifier)
                     .padding(horizontal = 20.dp, vertical = 12.dp)
@@ -362,13 +360,13 @@ private fun ConfirmStep(
             Modifier.size(64.dp).clip(CircleShape).background(colors.accentTint),
             contentAlignment = Alignment.Center
         ) { Icon(AapsIcons.WaterDrop, contentDescription = null, tint = colors.accent, modifier = Modifier.size(30.dp)) }
-        Text(result.totalText, style = AapsType.hero, color = colors.textPrimary)
-        Text("insulin to deliver", style = AapsType.caption, color = colors.textTertiary)
+        Text(result.totalText, style = AapsTheme.type.hero, color = colors.textPrimary)
+        Text("insulin to deliver", style = AapsTheme.type.caption, color = colors.textTertiary)
 
         // breakdown
         AapsCard(Modifier.fillMaxWidth()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("HOW THIS WAS CALCULATED", style = AapsType.label, color = colors.textSecondary)
+                Text("HOW THIS WAS CALCULATED", style = AapsTheme.type.label, color = colors.textSecondary)
                 BreakdownRow("Carbs", result.carbsInsulin, colors)
                 BreakdownRow("BG correction", result.bgInsulin, colors)
                 BreakdownRow("15-min trend", result.trendInsulin, colors)
@@ -376,8 +374,8 @@ private fun ConfirmStep(
                 if (result.superBolusAvailable) BreakdownRow("Superbolus", result.superBolusInsulin, colors)
                 Box(Modifier.fillMaxWidth().padding(top = 4.dp).background(colors.hairline).size(1.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    Text("Total (rounded)", style = AapsType.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
-                    Text(result.totalText, style = AapsType.listTitle, color = colors.textPrimary, fontWeight = FontWeight.ExtraBold)
+                    Text("Total (rounded)", style = AapsTheme.type.listTitle, color = colors.textPrimary, modifier = Modifier.weight(1f))
+                    Text(result.totalText, style = AapsTheme.type.listTitle, color = colors.textPrimary, fontWeight = FontWeight.ExtraBold)
                 }
             }
         }
@@ -386,7 +384,7 @@ private fun ConfirmStep(
         if (inputs.carbs > 0 && inputs.carbDurationHours > 0)
             Text(
                 "Extended carbs: ${inputs.carbs} g absorbing over ${inputs.carbDurationHours} h",
-                style = AapsType.body, color = colors.accent, textAlign = TextAlign.Center
+                style = AapsTheme.type.body, color = colors.accent, textAlign = TextAlign.Center
             )
         if (inputs.carbs > 0 && inputs.carbTime != 0)
             Text(
@@ -394,26 +392,26 @@ private fun ConfirmStep(
                     "Pre-bolus: delivering now — eat ${inputs.carbs} g in ${inputs.carbTime} min"
                 else
                     "Carbs eaten ${-inputs.carbTime} min ago",
-                style = AapsType.body, color = colors.accent, textAlign = TextAlign.Center
+                style = AapsTheme.type.body, color = colors.accent, textAlign = TextAlign.Center
             )
-        if (result.note.isNotBlank()) Text(result.note, style = AapsType.caption, color = colors.textTertiary)
+        if (result.note.isNotBlank()) Text(result.note, style = AapsTheme.type.caption, color = colors.textTertiary)
         // Max-bolus cap — previously surfaced by the legacy confirm dialog we no longer show. Warn in red.
         if (result.cappedWarning.isNotBlank())
-            Text(result.cappedWarning, style = AapsType.body, color = colors.high, textAlign = TextAlign.Center)
+            Text(result.cappedWarning, style = AapsTheme.type.body, color = colors.high, textAlign = TextAlign.Center)
         // Fresh-site advisory. Amber, not red: this is guidance about HOW to give the dose, not a
         // constraint on it — `low` is reserved for urgent/hypo in the semantic palette.
         if (result.siteWarning.isNotBlank())
-            Text(result.siteWarning, style = AapsType.body, color = colors.high, textAlign = TextAlign.Center)
+            Text(result.siteWarning, style = AapsTheme.type.body, color = colors.high, textAlign = TextAlign.Center)
 
         HoldToConfirmButton(
             label = "Hold to deliver · ${result.totalText}",
             onConfirm = onDeliver,
             enabled = result.deliverable || result.carbsOnly
         )
-        Text("Press and hold — no hidden gestures", style = AapsType.caption, color = colors.textTertiary)
+        Text("Press and hold — no hidden gestures", style = AapsTheme.type.caption, color = colors.textTertiary)
         Text(
-            "Cancel", style = AapsType.body, color = colors.textSecondary,
-            modifier = Modifier.clip(AapsShape.pill).clickable(onClick = onCancel).padding(horizontal = 24.dp, vertical = 10.dp)
+            "Cancel", style = AapsTheme.type.body, color = colors.textSecondary,
+            modifier = Modifier.clip(AapsTheme.shape.pill).clickable(onClick = onCancel).padding(horizontal = 24.dp, vertical = 10.dp)
         )
     }
 }
@@ -434,17 +432,17 @@ private fun FactorRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text(name, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
-            Text(sub, style = AapsType.caption, color = colors.textTertiary)
+            Text(name, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+            Text(sub, style = AapsTheme.type.caption, color = colors.textTertiary)
         }
         Text(
             contribution,
-            style = AapsType.listTitle,
+            style = AapsTheme.type.listTitle,
             color = if (softRed) colors.iob else colors.textPrimary,
             modifier = Modifier.padding(end = 12.dp)
         )
         when {
-            base            -> Text("BASE", style = AapsType.label, color = colors.textTertiary)
+            base            -> Text("BASE", style = AapsTheme.type.label, color = colors.textTertiary)
             onToggle != null -> Switch(
                 checked = on, onCheckedChange = onToggle,
                 colors = SwitchDefaults.colors(
@@ -462,8 +460,8 @@ private fun FactorRow(
 @Composable
 private fun BreakdownRow(name: String, value: String, colors: app.aaps.core.compose.theme.AapsColors, softRed: Boolean = false) {
     Row(Modifier.fillMaxWidth()) {
-        Text(name, style = AapsType.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
-        Text(value, style = AapsType.body, color = if (softRed) colors.iob else colors.textPrimary)
+        Text(name, style = AapsTheme.type.body, color = colors.textSecondary, modifier = Modifier.weight(1f))
+        Text(value, style = AapsTheme.type.body, color = if (softRed) colors.iob else colors.textPrimary)
     }
 }
 

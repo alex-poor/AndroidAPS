@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 
 /**
  * Which ground of a skin to render. Not chosen directly any more — it is a property of the selected
@@ -37,8 +39,22 @@ data class AapsSkin(
     val id: String,
     val label: String,
     val dark: AapsColors,
-    val light: AapsColors
+    val light: AapsColors,
+    // Type and shape are declared as SEEDS, not as finished scales, and do not vary between grounds
+    // — a font does not change when the lights go out. Seeds rather than scales because storing both
+    // a family and a ready-made set of styles lets the two disagree: a skin could name a pixel font,
+    // forget to rebuild the styles, and ship Material components in one font and app text in another.
+    // Deriving makes that unrepresentable, and it is what keeps a skin file short enough to hand-write.
+    val fontFamily: androidx.compose.ui.text.font.FontFamily = HankenGrotesk,
+    /** Set for a font that ships one weight; the scale then uses size alone for hierarchy. */
+    val singleWeightFont: Boolean = false,
+    val typeScale: Float = 1f,
+    /** One number for the whole shape language. `0.dp` squares every corner, pills included. */
+    val cornerRadius: Dp = 18.dp
 ) {
+
+    val type: AapsTextStyles by lazy(LazyThreadSafetyMode.NONE) { aapsTextStyles(fontFamily, typeScale, singleWeightFont) }
+    val shapes: AapsShapes by lazy(LazyThreadSafetyMode.NONE) { aapsShapes(cornerRadius) }
 
     fun colors(dark: Boolean): AapsColors = if (dark) this.dark else this.light
 }

@@ -24,10 +24,8 @@ import app.aaps.core.compose.components.Chip
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.components.SegmentedControl
 import app.aaps.core.compose.components.Stepper
-import app.aaps.core.compose.theme.AapsShape
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /** The five things a comparison slot can be filled with. Mirrors `ProfileHelperActivity.ProfileType`. */
 enum class ProfileKind { MOTOL_DEFAULT, DPV_DEFAULT, CURRENT, AVAILABLE_PROFILE, PROFILE_SWITCH }
@@ -78,10 +76,10 @@ fun ProfileHelperScreen(
     ) {
         Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "←", style = AapsType.title, color = colors.textSecondary,
-                modifier = Modifier.clip(AapsShape.iconButton).clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 4.dp)
+                "←", style = AapsTheme.type.title, color = colors.textSecondary,
+                modifier = Modifier.clip(AapsTheme.shape.iconButton).clickable(onClick = onBack).padding(horizontal = 8.dp, vertical = 4.dp)
             )
-            Text("Profile helper", style = AapsType.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 6.dp))
+            Text("Profile helper", style = AapsTheme.type.title, color = colors.textPrimary, modifier = Modifier.weight(1f).padding(start = 6.dp))
         }
 
         SegmentedControl(
@@ -91,7 +89,7 @@ fun ProfileHelperScreen(
             modifier = Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)
         )
 
-        Text("SOURCE", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+        Text("SOURCE", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
         FlowRow(
             Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap),
             horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall),
@@ -163,16 +161,16 @@ private fun DefaultProfileInputs(
                 )
             Text(
                 "Copy to local profile",
-                style = AapsType.label,
+                style = AapsTheme.type.label,
                 color = colors.accent,
-                modifier = Modifier.clip(AapsShape.button).clickable(onClick = onCopyToLocal).padding(vertical = 10.dp)
+                modifier = Modifier.clip(AapsTheme.shape.button).clickable(onClick = onCopyToLocal).padding(vertical = 10.dp)
             )
         }
     }
 
     // Recent TDD table, rendered by TddCalculator as a plain View.
     tddStatsView?.let {
-        Text("YOUR RECENT TDD", style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+        Text("YOUR RECENT TDD", style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
         AapsCard(Modifier.fillMaxWidth().padding(bottom = AapsSpacing.sectionGap)) {
             AndroidView(factory = { _ -> it }, modifier = Modifier.fillMaxWidth())
         }
@@ -184,8 +182,8 @@ private fun InfoCard(label: String, value: String) {
     val colors = AapsTheme.colors
     AapsCard(Modifier.fillMaxWidth()) {
         Column {
-            Text(label, style = AapsType.label, color = colors.textSecondary)
-            Text(value, style = AapsType.listTitle, color = colors.textPrimary, modifier = Modifier.padding(top = 4.dp))
+            Text(label, style = AapsTheme.type.label, color = colors.textSecondary)
+            Text(value, style = AapsTheme.type.listTitle, color = colors.textPrimary, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
@@ -195,9 +193,9 @@ private fun PickerCard(label: String, options: List<String>, selected: Int, onSe
     val colors = AapsTheme.colors
     AapsCard(Modifier.fillMaxWidth()) {
         Column {
-            Text(label, style = AapsType.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
+            Text(label, style = AapsTheme.type.label, color = colors.textSecondary, modifier = Modifier.padding(bottom = 8.dp))
             if (options.isEmpty())
-                Text("None available", style = AapsType.body, color = colors.textTertiary)
+                Text("None available", style = AapsTheme.type.body, color = colors.textTertiary)
             else
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall),

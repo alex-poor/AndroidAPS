@@ -21,7 +21,6 @@ import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.SheetSurface
 import app.aaps.core.compose.theme.AapsSpacing
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.compose.theme.AapsType
 
 /**
  * One line in the wizard breakdown. [label] on the left, [value] (an insulin amount, already
@@ -59,14 +58,14 @@ fun WizardInfoSheet(state: WizardInfoState, onClose: () -> Unit) {
             Modifier.verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(AapsSpacing.sectionGap)
         ) {
-            Text("Inputs", style = AapsType.label, color = colors.textSecondary)
+            Text("Inputs", style = AapsTheme.type.label, color = colors.textSecondary)
             AapsCard(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
                     state.inputs.forEach { BreakdownRow(it) }
                 }
             }
 
-            Text("Result", style = AapsType.label, color = colors.textSecondary)
+            Text("Result", style = AapsTheme.type.label, color = colors.textSecondary)
             AapsCard(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGap)) {
                     state.result.forEach { BreakdownRow(it) }
@@ -110,12 +109,12 @@ private fun BreakdownRow(row: WizardInfoRow) {
             }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(row.label, style = AapsType.listTitle, color = colors.textOnSurfaceStrong)
-            row.detail?.let { Text(it, style = AapsType.caption, color = colors.textTertiary) }
+            Text(row.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong)
+            row.detail?.let { Text(it, style = AapsTheme.type.caption, color = colors.textTertiary) }
         }
         Text(
             row.value,
-            style = AapsType.body,
+            style = AapsTheme.type.body,
             color = if (row.used == false) colors.textTertiary else colors.textPrimary,
             textAlign = TextAlign.End
         )
