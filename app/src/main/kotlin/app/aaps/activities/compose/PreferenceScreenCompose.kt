@@ -141,9 +141,13 @@ fun PreferenceScreenCompose(
 
 @Composable
 private fun PreferenceRow(pref: Preference, preferences: Preferences) {
-    val keyString = pref.key ?: return
-    val typed = remember(keyString) { runCatching { preferences.get(keyString) }.getOrNull() }
-    val title = pref.title?.toString().orEmpty().ifBlank { keyString }
+    // A preference need not have a key: AndroidX allows keyless rows that only open something, and
+    // returning early on one drew NOTHING while leaving it in the tree — an entry point that exists,
+    // is clickable in the legacy hierarchy, and is simply invisible here. Treat a missing key as
+    // "no stored value", which lands on the click-through row at the bottom of the `when`.
+    val keyString = pref.key
+    val typed = remember(keyString) { keyString?.let { k -> runCatching { preferences.get(k) }.getOrNull() } }
+    val title = pref.title?.toString().orEmpty().ifBlank { keyString.orEmpty() }
     val sub = pref.summary?.toString()?.takeIf { it.isNotBlank() }
 
     when (typed) {

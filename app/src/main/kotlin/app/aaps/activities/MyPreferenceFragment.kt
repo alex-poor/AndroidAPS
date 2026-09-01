@@ -453,8 +453,15 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
             // A plain Preference rather than an Adaptive* one: this row stores no value, it just
             // opens a screen, and the Adaptive wrappers all key their visibility rules off a
             // preference key that would then have to exist for no reason.
+            //
+            // It still needs a `key`. The Compose renderer starts with `pref.key ?: return`, so a
+            // keyless preference is in the tree and draws NOTHING — which is exactly how this row
+            // shipped invisible. The key is never read as a setting; it only has to be non-null and
+            // not collide with a real one, and an unregistered string falls through to the
+            // click-through row, which is the intended rendering.
             addPreference(
                 Preference(context).apply {
+                    key = "skins_manage_screen"
                     title = rh.gs(app.aaps.plugins.main.R.string.manage_skins)
                     setSummary(app.aaps.plugins.main.R.string.manage_skins_summary)
                     setOnPreferenceClickListener {
