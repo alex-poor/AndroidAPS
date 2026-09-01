@@ -7,11 +7,46 @@
 
         <service android:name=".general.persistentNotification.DummyService" />
 
-        <!-- Not exported: it manages files in app-private storage and is only ever reached from Settings. -->
+        <!--
+          Exported so a .aapsskin tapped in a mail app or file manager opens here directly, instead of
+          the recipient having to save it and hunt for it in the import picker. Being exported means
+          any app can point this at a URI, so an incoming file is never installed without a
+          confirmation naming the skin — see SkinManagerActivity.handleIncomingFile.
+
+          Matching a custom extension is unreliable by nature: for a content:// URI the filename is
+          not in the path, so pathPattern cannot see it and matching falls to the MIME type the
+          provider reports — usually application/zip, sometimes application/octet-stream. The
+          octet-stream filter is therefore constrained by pathPattern so AAPS does not offer itself
+          for every unrecognised file on the phone; senders that report neither are handled by the
+          import picker, which is why that stays.
+        -->
         <activity
             android:name=".general.themes.SkinManagerActivity"
-            android:exported="false"
-            android:label="Skins" />
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/AppTheme"
+            android:label="Skins">
+            <intent-filter android:label="Install AAPS skin">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-aapsskin" />
+            </intent-filter>
+            <intent-filter android:label="Install AAPS skin">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:pathPattern=".*\\.aapsskin" />
+                <data android:pathPattern=".*\\..*\\.aapsskin" />
+            </intent-filter>
+        </activity>
 
     </application>
 

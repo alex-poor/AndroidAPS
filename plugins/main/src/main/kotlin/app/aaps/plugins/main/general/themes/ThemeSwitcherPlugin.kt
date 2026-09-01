@@ -133,7 +133,14 @@ class ThemeSwitcherPlugin @Inject constructor(
                 AapsUiMode.SYSTEM -> AapsAppearances.FollowSystem
                 AapsUiMode.DARK   -> AapsAppearances.Dark
             }
-        preferences.put(StringKey.GeneralSkin, migrated.id)
+
+        // Only WRITE for a value that is genuinely from the old scheme. An id that simply does not
+        // resolve right now usually means an installed skin has not been read yet — storage was slow,
+        // the load failed once, the app restarted oddly — and persisting the fallback would turn a
+        // momentary hiccup into permanently losing the theme the user chose. Resolve for this run and
+        // leave the preference alone, so the skin comes back when it loads.
+        val isLegacyValue = stored.isBlank() || forStoredSkin.isNotEmpty() || stored.contains('.')
+        if (isLegacyValue) preferences.put(StringKey.GeneralSkin, migrated.id)
         return migrated.id
     }
 
