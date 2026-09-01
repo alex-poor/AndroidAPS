@@ -1,5 +1,7 @@
 package app.aaps.plugins.configuration.setupwizard.elements
 
+import android.view.View
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.protection.PasswordCheck
@@ -24,6 +26,29 @@ class SWFragment @Inject constructor(aapsLogger: AAPSLogger, rh: ResourceHelper,
             ClassLoader.getSystemClassLoader(),
             fragmentName
         )
-        activity.supportFragmentManager.beginTransaction().add(layout.id, fragment, fragment.tag).commit()
+        // Host the fragment in a container with an explicit height rather than adding it straight to the
+        // wizard's item column. That column lives inside a ScrollView, which measures its children with an
+        // unbounded height -- and a plugin fragment is free to be Compose with a verticalScroll inside it,
+        // which throws when measured that way ("Vertically scrollable component was measured with an
+        // infinity maximum height"). That crash took out the Local Profile screen and, because the wizard
+        // has no way past a screen that dies, every screen after it -- pump selection included.
+        //
+        // A fixed height gives the fragment a real constraint to measure against, so it scrolls inside
+        // itself exactly as it does when the plugin owns the whole screen.
+        val host = FrameLayout(layout.context).apply {
+            id = View.generateViewId()
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (layout.context.resources.displayMetrics.heightPixels * FRAGMENT_HEIGHT_FRACTION).toInt()
+            )
+        }
+        layout.addView(host)
+        activity.supportFragmentManager.beginTransaction().replace(host.id, fragment, fragmentName).commitAllowingStateLoss()
+    }
+
+    companion object {
+
+        /** Leaves room for the wizard's own title and its previous/next bar. */
+        private const val FRAGMENT_HEIGHT_FRACTION = 0.72f
     }
 }

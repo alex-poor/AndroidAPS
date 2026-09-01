@@ -208,6 +208,11 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         key ?: return
         rxBus.send(EventPreferenceChange(key))
+        // A preference that opens its own dialog (the string editors, list pickers) writes straight to
+        // SharedPreferences -- Compose is not watching those. Recompute the rows so the new value is
+        // read back, otherwise a row keeps showing whatever it was composed with: a serial number typed
+        // into the dialog and accepted still reads as its default until the screen is reopened.
+        view?.post { refreshComposeRows() }
         if (key == StringKey.GeneralLanguage.key) {
             rxBus.send(EventRebuildTabs(true))
             //recreate() does not update language so better close settings
