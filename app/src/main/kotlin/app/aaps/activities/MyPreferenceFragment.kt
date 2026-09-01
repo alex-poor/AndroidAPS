@@ -419,12 +419,6 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
         val languageValues = arrayOf<CharSequence>("default", "en", "af", "bg", "cs", "de", "dk", "fr", "nl", "es", "el", "ga", "it", "ko", "lt", "nb", "pl", "pt", "pt_BR", "ro", "ru", "sk", "sv", "tr", "zh_TW", "zh_CN")
         assert(languageEntries.size == languageValues.size)
 
-        // One flat appearance list rather than a palette AND a light/dark setting. Two knobs let the
-        // user pick combinations that do nothing (a dark-only palette plus "light"), and most skins
-        // have a single look anyway. Entries come from the registry, so adding one stays a data change.
-        val themeEntries = AapsAppearances.all.map { it.label as CharSequence }.toTypedArray()
-        val themeValues = AapsAppearances.all.map { it.id as CharSequence }.toTypedArray()
-
         val category = PreferenceCategory(context)
         rootScreen.addPreference(category)
         category.apply {
@@ -440,30 +434,20 @@ class MyPreferenceFragment : PreferenceFragmentCompat(), OnSharedPreferenceChang
                     validatorParams = DefaultEditTextValidator.Parameters(testType = EditTextValidator.TEST_PERSONNAME)
                 )
             )
-            addPreference(
-                AdaptiveListPreference(
-                    ctx = context,
-                    stringKey = StringKey.GeneralSkin,
-                    entries = themeEntries,
-                    entryValues = themeValues,
-                    title = app.aaps.plugins.main.R.string.app_theme,
-                    summary = app.aaps.plugins.main.R.string.app_theme_summary
-                )
-            )
-            // A plain Preference rather than an Adaptive* one: this row stores no value, it just
-            // opens a screen, and the Adaptive wrappers all key their visibility rules off a
-            // preference key that would then have to exist for no reason.
+            // ONE entry point, not a list picker here plus a manager screen elsewhere. Choosing an
+            // appearance and managing the files that add to the choice are the same job to the person
+            // doing it, and splitting them produced a screen that listed skins and ignored taps.
             //
-            // It still needs a `key`. The Compose renderer starts with `pref.key ?: return`, so a
-            // keyless preference is in the tree and draws NOTHING — which is exactly how this row
-            // shipped invisible. The key is never read as a setting; it only has to be non-null and
-            // not collide with a real one, and an unregistered string falls through to the
-            // click-through row, which is the intended rendering.
+            // A plain Preference rather than an Adaptive* one: it stores no value, it opens a screen.
+            // It still needs a `key` — the Compose renderer starts with `pref.key ?: return`, so a
+            // keyless preference sits in the tree and draws NOTHING. The key is never read as a
+            // setting; an unregistered string falls through to the click-through row, which is the
+            // rendering this wants.
             addPreference(
                 Preference(context).apply {
                     key = "skins_manage_screen"
-                    title = rh.gs(app.aaps.plugins.main.R.string.manage_skins)
-                    setSummary(app.aaps.plugins.main.R.string.manage_skins_summary)
+                    title = rh.gs(app.aaps.plugins.main.R.string.app_theme)
+                    summary = AapsAppearances.byId(preferences.get(StringKey.GeneralSkin)).label
                     setOnPreferenceClickListener {
                         startActivity(Intent(context, SkinManagerActivity::class.java))
                         true

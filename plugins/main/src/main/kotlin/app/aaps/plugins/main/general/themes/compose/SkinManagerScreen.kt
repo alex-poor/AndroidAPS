@@ -28,15 +28,13 @@ import androidx.compose.ui.unit.dp
 import app.aaps.core.compose.components.AapsCard
 import app.aaps.core.compose.components.PrimaryButton
 import app.aaps.core.compose.theme.AapsColors
-import app.aaps.core.compose.theme.AapsSkin
 import app.aaps.core.compose.theme.AapsTheme
 
 /**
  * Presentation state for [SkinManagerScreen]. Built by the activity; no domain types.
  */
 data class SkinManagerState(
-    val installed: List<Entry> = emptyList(),
-    val builtIn: List<Entry> = emptyList(),
+    val entries: List<Entry> = emptyList(),
     /** Set after a failed import — the reason, phrased for whoever wrote the file. */
     val error: String? = null,
     val activeId: String = ""
@@ -46,7 +44,9 @@ data class SkinManagerState(
         val id: String,
         val label: String,
         val byline: String?,
-        val swatches: List<Color>,
+        /** Null for an appearance with no palette of its own to show, like "Follow system". */
+        val swatches: List<Color>?,
+        /** File-backed skins can be sent on and deleted; built-in appearances cannot. */
         val removable: Boolean
     )
 
@@ -55,13 +55,11 @@ data class SkinManagerState(
         /** The colours that say most about a skin at a glance: its ground, its accent, its bands. */
         fun swatchesOf(colors: AapsColors) =
             listOf(colors.background, colors.surface, colors.accent, colors.inRange, colors.high, colors.low)
-
-        fun entryOf(skin: AapsSkin, byline: String?, removable: Boolean) =
-            Entry(skin.id, skin.label, byline, swatchesOf(skin.dark), removable)
     }
 }
 
 data class SkinManagerActions(
+    val onSelect: (id: String) -> Unit,
     val onImport: () -> Unit,
     val onExportTemplate: () -> Unit,
     val onExport: (id: String) -> Unit,
@@ -70,11 +68,12 @@ data class SkinManagerActions(
 )
 
 /**
- * Manage installed skin files: see what is there, add one, send one on, remove one.
+ * Choose how the app looks, and manage the skin files that add to the choice.
  *
- * Selecting which skin is *active* deliberately stays in the theme picker in Settings rather than
- * being duplicated here — one place to choose, one place to manage, so neither has to explain the
- * other.
+ * One list, not two screens. An earlier version showed the installed skins here and kept *selecting*
+ * one in a separate preference picker, on the reasoning that choosing and managing are different
+ * jobs. They are not different to the person doing them: it produced a screen that listed skins,
+ * marked which was active, and did nothing when you tapped one.
  */
 @Composable
 fun SkinManagerScreen(state: SkinManagerState, actions: SkinManagerActions) {
@@ -105,21 +104,12 @@ fun SkinManagerScreen(state: SkinManagerState, actions: SkinManagerActions) {
             }
         }
 
-        Text("INSTALLED", style = AapsTheme.type.label, color = colors.textSecondary)
-        if (state.installed.isEmpty()) {
-            AapsCard(Modifier.fillMaxWidth()) {
-                Text(
-                    "No skin files yet. Import one, or export a template to start from.",
-                    style = AapsTheme.type.body, color = colors.textTertiary
-                )
-            }
-        } else {
-            AapsCard(Modifier.fillMaxWidth()) {
-                Column {
-                    state.installed.forEachIndexed { i, entry ->
-                        if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                        SkinRow(entry, state.activeId == entry.id, actions)
-                    }
+        Text("APPEARANCE", style = AapsTheme.type.label, color = colors.textSecondary)
+        AapsCard(Modifier.fillMaxWidth()) {
+            Column {
+                state.entries.forEachIndexed { i, entry ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
+                    SkinRow(entry, state.activeId == entry.id, actions)
                 }
             }
         }
@@ -133,16 +123,6 @@ fun SkinManagerScreen(state: SkinManagerState, actions: SkinManagerActions) {
                 modifier = Modifier.clickable(onClick = actions.onExportTemplate).padding(8.dp)
             )
         }
-
-        Text("BUILT IN", style = AapsTheme.type.label, color = colors.textSecondary)
-        AapsCard(Modifier.fillMaxWidth()) {
-            Column {
-                state.builtIn.forEachIndexed { i, entry ->
-                    if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.divider))
-                    SkinRow(entry, state.activeId == entry.id, actions)
-                }
-            }
-        }
     }
 }
 
@@ -150,21 +130,33 @@ fun SkinManagerScreen(state: SkinManagerState, actions: SkinManagerActions) {
 private fun SkinRow(entry: SkinManagerState.Entry, active: Boolean, actions: SkinManagerActions) {
     val colors = AapsTheme.colors
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        // The whole row is the tap target, so the obvious gesture does the obvious thing.
+        Modifier
+            .fillMaxWidth()
+            .clickable { actions.onSelect(entry.id) }
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        Icon(
+            Icons.Rounded.Check,
+            contentDescription = if (active) "in use" else null,
+            // Reserved rather than conditional, so selecting does not shuffle the row's contents.
+            tint = if (active) colors.inRange else Color.Transparent,
+            modifier = Modifier.size(18.dp)
+        )
         // The palette itself is the clearest label a skin can have.
-        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            entry.swatches.forEach { swatch ->
-                Box(Modifier.size(12.dp).clip(CircleShape).background(swatch))
+        entry.swatches?.let { swatches ->
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                swatches.forEach { Box(Modifier.size(12.dp).clip(CircleShape).background(it)) }
             }
         }
-        Column(Modifier.weight(1f)) {
+        // Spaced rather than stacked flush: a skin supplies its own font, and a face whose glyphs
+        // are taller than their line box — a pixel font, say — runs the label into the byline.
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(entry.label, style = AapsTheme.type.listTitle, color = colors.textOnSurfaceStrong, maxLines = 1)
             entry.byline?.let { Text(it, style = AapsTheme.type.caption, color = colors.textTertiary, maxLines = 1) }
         }
-        if (active) Icon(Icons.Rounded.Check, contentDescription = "in use", tint = colors.inRange, modifier = Modifier.size(18.dp))
         if (entry.removable) {
             Icon(
                 Icons.Rounded.Share, contentDescription = "export", tint = colors.textSecondary,
@@ -177,4 +169,3 @@ private fun SkinRow(entry: SkinManagerState.Entry, active: Boolean, actions: Ski
         }
     }
 }
-

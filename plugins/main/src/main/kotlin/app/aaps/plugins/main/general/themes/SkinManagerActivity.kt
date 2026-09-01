@@ -7,13 +7,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
+import app.aaps.core.compose.theme.AapsAppearances
 import app.aaps.core.compose.theme.AapsSkinState
 import app.aaps.core.compose.theme.AapsSkins
 import app.aaps.core.compose.theme.AapsTheme
 import app.aaps.core.compose.theme.SkinFormatException
+import app.aaps.core.compose.theme.AapsUiMode
 import app.aaps.core.compose.theme.SkinSpec
 import app.aaps.core.compose.theme.toSkinHex
 import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.keys.StringKey
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.ui.activities.TranslatedDaggerAppCompatActivity
 import app.aaps.core.ui.dialogs.OKDialog
@@ -35,6 +39,7 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
     @Inject lateinit var skinStore: SkinStore
     @Inject lateinit var themeSwitcherPlugin: ThemeSwitcherPlugin
     @Inject lateinit var aapsLogger: AAPSLogger
+    @Inject lateinit var preferences: Preferences
 
     private var state by mutableStateOf(SkinManagerState())
 
@@ -74,6 +79,7 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
                         SkinManagerScreen(
                             state = state,
                             actions = SkinManagerActions(
+                                onSelect = ::select,
                                 onImport = { importFile.launch(arrayOf("*/*")) },
                                 onExportTemplate = {
                                     pendingExportId = null
@@ -154,14 +160,37 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
 
     override fun onSupportNavigateUp(): Boolean = also { finish() }.let { true }
 
+    /**
+     * Apply an appearance immediately.
+     *
+     * Written straight to the preference then applied, rather than waiting for an EventPreferenceChange
+     * that a direct write does not raise. The Compose surfaces repaint from snapshot state, so the
+     * change is visible behind this screen before the tap finishes.
+     */
+    private fun select(id: String) {
+        preferences.put(StringKey.GeneralSkin, id)
+        themeSwitcherPlugin.applyAppearance()
+        refresh()
+    }
+
     private fun refresh() {
+        // One list, in the order the picker used to offer: the built-in appearances first, then the
+        // skins the user added.
         state = SkinManagerState(
-            installed = AapsSkins.installed.map { skin ->
-                val spec = skinStore.specOf(skin.id)
-                SkinManagerState.entryOf(skin, spec?.author?.let { "by $it" } ?: spec?.description, removable = true)
+            entries = AapsAppearances.all.map { appearance ->
+                val installed = AapsSkins.installed.any { it.id == appearance.skin.id }
+                val spec = if (installed) skinStore.specOf(appearance.skin.id) else null
+                SkinManagerState.Entry(
+                    id = appearance.id,
+                    label = appearance.label,
+                    byline = spec?.author?.let { "by $it" } ?: spec?.description,
+                    // "Follow system" has no palette of its own to preview; everything else does.
+                    swatches = if (appearance.mode == AapsUiMode.SYSTEM && !installed) null
+                    else SkinManagerState.swatchesOf(appearance.skin.colors(appearance.mode != AapsUiMode.LIGHT)),
+                    removable = installed
+                )
             },
-            builtIn = AapsSkins.builtIn.map { SkinManagerState.entryOf(it, null, removable = false) },
-            activeId = AapsSkinState.skin.id,
+            activeId = AapsSkinState.appearanceId,
             error = state.error
         )
     }
