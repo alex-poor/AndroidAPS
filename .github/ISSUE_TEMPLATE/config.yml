@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Using upstream AndroidAPS, not this fork?
+    url: https://github.com/nightscout/AndroidAPS/issues/new/choose
+    about: Anything about the released AAPS app belongs upstream. This tracker covers only what this fork adds on top of it.
+  - name: AAPS setup, objectives, profiles, CGM sources
+    url: https://wiki.aaps.app/
+    about: The upstream wiki and the AAPS community answer these, and are far better placed to help than this fork is.
