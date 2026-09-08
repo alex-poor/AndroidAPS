@@ -134,8 +134,13 @@ class TddAdapterV2(
     fun foldTrailing(ledger: List<Day?>, foldDays: Int = FOLD_DAYS): String {
         var reason = ""
         for (k in foldDays downTo 1) {
-            val i = ledger.size - k
-            if (i < 0) continue
+            // +1 so the LAST fold's recent window ends at the most recent completed day. Without it,
+            // subList(rf, size-1) drops that day entirely and the gain is a day stale — which defeats
+            // the recency weights, since half their mass sits on exactly the day being dropped. Caught
+            // by the harness's asymmetric-safety check: a hypo day appended to the ledger moved the
+            // gain not at all.
+            val i = ledger.size - k + 1
+            if (i <= 0) continue
             val rf = max(0, i - recentDays)
             reason = fold(ledger.subList(rf, i).filterNotNull(), ledger.subList(0, rf).filterNotNull())
         }

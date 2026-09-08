@@ -1,5 +1,6 @@
 package hovorka.mpc
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -29,9 +30,9 @@ import kotlin.math.min
  *
  * Inputs: u = insulin infusion (mU/min); carbs handled as impulses into D1 (see [addMeal]).
  */
-class HovorkaModel(val p: HovorkaParams) {
+open class HovorkaModel(val p: HovorkaParams) {
 
-    val nStates = 10
+    open val nStates = 10
 
     /** Plasma glucose concentration G = Q1/VG (mmol/L). */
     fun glucoseMmol(s: DoubleArray): Double = s[0] / p.vg
@@ -39,7 +40,7 @@ class HovorkaModel(val p: HovorkaParams) {
     fun glucoseMgdl(s: DoubleArray): Double = glucoseMmol(s) * 18.0
 
     /** d(state)/dt for insulin infusion u (mU/min). Returns a fresh derivative array. */
-    fun derivative(s: DoubleArray, u: Double): DoubleArray {
+    open fun derivative(s: DoubleArray, u: Double): DoubleArray {
         val q1 = s[0]; val q2 = s[1]
         val x1 = s[2]; val x2 = s[3]; val x3 = s[4]
         val s1 = s[5]; val s2 = s[6]; val ins = s[7]
@@ -68,7 +69,7 @@ class HovorkaModel(val p: HovorkaParams) {
     }
 
     /** RK4 step of dt minutes, constant infusion u over the step. Returns a new state. */
-    fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
+    open fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
         val k1 = derivative(s, u)
         val k2 = derivative(add(s, k1, dtMin / 2), u)
         val k3 = derivative(add(s, k2, dtMin / 2), u)
@@ -83,6 +84,52 @@ class HovorkaModel(val p: HovorkaParams) {
     fun addMeal(s: DoubleArray, carbsG: Double): DoubleArray {
         val out = s.copyOf()
         out[8] += p.ag * carbsG * MMOL_PER_G_CHO
+        return out
+    }
+
+    /**
+     * CARB LAG (2026-07-25) — a NEW degree of freedom, not a re-tune of an existing one.
+     *
+     * The model has one insulin curve (tMaxI) and one carb curve (tMaxG), and both start at t=0. That
+     * structure can express "carbs are slow" and "insulin is fast", but it CANNOT express "the carbs start
+     * arriving later than the insulin does" — the two curves are pinned to the same origin.
+     *
+     * This user's dinners need exactly that. Measured over 21 days:
+     *   - the 6-hour balance is CORRECT (start 8.0 -> +6h 7.8, implied IC 9.2 vs profile 9.5), so the
+     *     total insulin and total carbs match;
+     *   - yet within those 6 hours glucose drops 3.3 mmol/L to a dip at ~90 min (vs ~57 min at breakfast
+     *     and lunch) and then climbs back.
+     * Right totals, wrong relative timing. Fitting tMaxG alone returns 90 for every block, and fitting
+     * tMaxI alone returns a uniform value that makes control worse — because neither parameter describes
+     * an OFFSET between the two curves.
+     *
+     * [lagMin] holds the carbs out of the gut compartment entirely for that many minutes, then deposits
+     * them normally. The absorption SHAPE afterwards is unchanged (still tMaxG), so this is orthogonal to
+     * the existing parameter rather than a repackaging of it: tMaxG says how fast, lag says how late.
+     */
+    fun addMealLagged(s: DoubleArray, carbsG: Double, lagMin: Double, pending: MutableList<Pair<Double, Double>>): DoubleArray {
+        if (lagMin <= 0.0) return addMeal(s, carbsG)
+        pending.add(lagMin to carbsG)          // released by releaseDueMeals() once the lag elapses
+        return s
+    }
+
+    /**
+     * Advance pending lagged meals by [dtMin] and deposit any whose lag has elapsed.
+     * Call once per model step, after stepping the state.
+     */
+    fun releaseDueMeals(s: DoubleArray, dtMin: Double, pending: MutableList<Pair<Double, Double>>): DoubleArray {
+        if (pending.isEmpty()) return s
+        var out = s
+        val it = pending.iterator()
+        val ready = ArrayList<Double>()
+        val remaining = ArrayList<Pair<Double, Double>>()
+        while (it.hasNext()) {
+            val (lag, g) = it.next()
+            val left = lag - dtMin
+            if (left <= 0.0) ready.add(g) else remaining.add(left to g)
+        }
+        pending.clear(); pending.addAll(remaining)
+        for (g in ready) out = addMeal(out, g)
         return out
     }
 
@@ -102,12 +149,30 @@ class HovorkaModel(val p: HovorkaParams) {
         return 0.5 * (lo + hi)
     }
 
-    /** Run the model to (approximate) steady state at constant infusion u, no meals. */
-    fun steadyState(u: Double, minutes: Int = 6000): DoubleArray {
+    /**
+     * Run the model to steady state at constant infusion u, no meals.
+     *
+     * [minutes] is a CEILING, not a fixed horizon: the integration stops as soon as glucose stops moving.
+     * That matters because callers compare results computed with different horizons. `personalize` anchors
+     * egp0 using a 3000-minute run while most other call sites use the 6000-minute default, and on a
+     * low-sensitivity model 3000 minutes is not converged — the anchor held target at 3000 min and the same
+     * model settled 0.3 mmol/L lower by 6000, so the controller's operating point sat below the target it had
+     * just been calibrated to. Converging rather than counting removes the discrepancy in both directions and
+     * is usually FASTER, since a typical model settles well inside the ceiling.
+     */
+    open fun steadyState(u: Double, minutes: Int = SS_MAX_MIN): DoubleArray {
         var s = doubleArrayOf(
             p.vg * 6.0, p.vg * 3.0, 0.0, 0.0, 0.0, u * p.tMaxI, u * p.tMaxI, 0.0, 0.0, 0.0
         )
-        repeat(minutes) { s = step(s, u, 1.0) }
+        var prevG = glucoseMmol(s)
+        for (i in 1..minutes) {
+            s = step(s, u, 1.0)
+            if (i % SS_CHECK_MIN == 0) {
+                val g = glucoseMmol(s)
+                if (abs(g - prevG) < SS_TOL_MMOL) return s
+                prevG = g
+            }
+        }
         return s
     }
 
@@ -119,5 +184,14 @@ class HovorkaModel(val p: HovorkaParams) {
 
     companion object {
         const val MMOL_PER_G_CHO = 1000.0 / 180.0   // 1 g glucose ≈ 5.556 mmol
+        // steady-state convergence: glucose moving less than this over a check interval is settled. 1e-4
+        // mmol/L per 60 min is far below anything the controller can act on, and below CGM resolution.
+        private const val SS_CHECK_MIN = 60
+        private const val SS_TOL_MMOL = 1e-4
+        // Default CEILING. Generous rather than tight, because the old 6000 was not a converged answer for
+        // low-sensitivity models (they were still drifting ~0.1 mmol/L at 6000 min) and callers that used
+        // different horizons then disagreed with each other about the same model's operating point. The
+        // convergence test above means a fast-settling model never pays for the extra headroom.
+        const val SS_MAX_MIN = 20000
     }
 }

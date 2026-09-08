@@ -109,8 +109,13 @@ data class MultiDayResult(val perDay: List<LoopMetrics>, val basalByDayUhr: List
 /**
  * Multi-day in-silico loop for the 2d adaptive-gain layer. Plant + estimator state persist across days;
  * the MPC is rebuilt each day around the current operating basal, and (if [adapter] != null) the day's
- * enacted basal + glucose summary fold into the gain at midnight — so the operating point WALKS over days.
+ * TOTAL insulin + glucose summary fold into the ledger at midnight — so the operating point WALKS over days.
  * Pass adapter=null for the static-gain baseline (operating basal fixed at [startBasalMuMin]).
+ *
+ * [TddAdapterV2] emits a dimensionless GAIN on the profile rather than a replacement operating basal, and
+ * it learns from TOTAL daily dose (basal + boluses), so the ledger below counts both. It also needs a
+ * baseline window behind it before the gain means anything — run enough days or it will sit at 1.0 by
+ * construction, which is correct behaviour and an uninformative test.
  *
  * The interesting scenario is a MISCALIBRATED start ([startBasalMuMin] ≠ the patient's true need): a good
  * adapter converges it toward the truth and lifts TIR, while never walking into hypo (asymmetric down-nudge).
@@ -126,7 +131,7 @@ fun simulateMultiDayAdaptive(
     bolusCoverage: Double = 0.65,
     carbAnnounceError: Double = 1.0,
     cgmSd: Double = 0.4,
-    adapter: TddAdapter? = null,
+    adapter: TddAdapterV2? = null,
     injectHypoDay: Int = -1              // force an over-bolus on this day to exercise the down-nudge
 ): MultiDayResult {
     val rng = java.util.Random(seed)
@@ -135,6 +140,7 @@ fun simulateMultiDayAdaptive(
     val ekf = HovorkaEkf(controllerModel, controllerModel.steadyState(opBasal))
     var u = opBasal
     val perDay = ArrayList<LoopMetrics>()
+    val ledger = ArrayList<TddAdapterV2.Day?>()          // oldest first; null = a day too sparse to score
     val basalByDay = ArrayList<Double>()
     val log = ArrayList<String>()
 
@@ -143,13 +149,14 @@ fun simulateMultiDayAdaptive(
         val mpc = HovorkaMpc(controllerModel, targetMmol = 6.0,
             nominalBasalMuPerMin = opBasal, maxBasalMuPerMin = maxBasalMuMin)
         val cov = if (day == injectHypoDay) 1.35 else bolusCoverage   // deliberate over-bolus → a hypo day
-        var sumEnacted = 0.0; var nEnacted = 0
+        var sumEnacted = 0.0; var nEnacted = 0; var sumBolusU = 0.0
         var tir = 0; var tbr = 0; var sev = 0; var tar = 0; var total = 0
         var minG = 99.0; var maxG = 0.0; var sumG = 0.0
         for (minute in 0 until 1440) {
             meals[minute]?.let { carbs ->
                 truth = plantModel.addMeal(truth, carbs); ekf.meal(carbs * carbAnnounceError)
                 val bolusU = carbs * 0.05 * cov
+                sumBolusU += bolusU                                   // TDD is basal AND boluses
                 truth = truth.copyOf().also { it[5] += bolusU * 1000.0 }; ekf.bolus(bolusU)
             }
             truth = plantModel.step(truth, u, 1.0); ekf.predict(u, 1.0)
@@ -167,8 +174,11 @@ fun simulateMultiDayAdaptive(
         val m = LoopMetrics(pct(tir), pct(tbr), pct(sev), pct(tar), sumG / total, minG, maxG)
         perDay.add(m)
         if (adapter != null) {
-            log.add("day %2d: ".format(day) + adapter.endOfDay(sumEnacted / nEnacted * 60.0 / 1000.0, m.meanG, m.tbrPct / 100.0, m.minG))
-            opBasal = adapter.operatingBasalUhr * 1000.0 / 60.0
+            val basalU = sumEnacted / nEnacted * 60.0 / 1000.0 * 24.0          // mean mU/min -> U delivered
+            ledger.add(TddAdapterV2.Day(basalU + sumBolusU, m.meanG, m.minG, m.tbrPct / 100.0))
+            log.add("day %2d: ".format(day) + adapter.foldTrailing(ledger))
+            // the gain SCALES the titrated profile; it does not replace it
+            opBasal = startBasalMuMin * adapter.gain
         }
     }
     return MultiDayResult(perDay, basalByDay, opBasal * 60.0 / 1000.0, log)

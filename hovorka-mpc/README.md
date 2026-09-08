@@ -4,7 +4,30 @@ Standalone Kotlin (no Android/AAPS) that validates the HovorkaMPC dosing algorit
 touches hardware. The algorithm files here (`HovorkaModel`, `HovorkaParams`, `HovorkaEkf`,
 `HovorkaMpc`, `HovorkaImmBank`, `TddAdapterV2`) are the **same clean-room code** shipped in the AAPS
 plugin at `plugins/aps/src/main/kotlin/app/aaps/plugins/aps/hovorka/` (package differs only:
-`hovorka.mpc` here vs `app.aaps.plugins.aps.hovorka` there). Keep the two in sync.
+`hovorka.mpc` here vs `app.aaps.plugins.aps.hovorka` there).
+
+**Keeping the two in sync is a manual step, and it has silently lapsed before.** In September 2026 this
+copy was found to be months behind: `HovorkaParams` still carried the parameter-ordering bug that shipped
+a model 37% too insulin-sensitive (fixed in the plugin on 2026-08-14), and `HovorkaMpc` still optimised a
+single basal rate rather than the piecewise-constant sequence. Anyone building on the harness in that
+window reproduced a defect that had already been fixed — and separately, this copy's `HovorkaMpc`
+reference-trajectory DEFAULTS stayed at the pre-2026-08 values (120/300/10) after the plugin moved to
+60/180/13, so any harness run that did not pass them explicitly was not testing the shipped controller.
+
+The two trees are not line-identical by design: the harness adds what only in-silico work needs (cohort
+generation, parameter jitter, A/B hooks that are inert at their defaults), so a plain `diff` always shows
+something. What matters is the one-directional check — plugin content MISSING here:
+
+```bash
+for f in HovorkaModel HovorkaParams HovorkaEkf HovorkaMpc HovorkaImmBank TddAdapterV2; do
+  n=$(diff <(sed 's/^package.*//' plugins/aps/src/main/kotlin/app/aaps/plugins/aps/hovorka/$f.kt) \
+           <(sed 's/^package.*//' hovorka-mpc/src/main/kotlin/hovorka/mpc/$f.kt) | grep -c '^<')
+  [ "$n" = 0 ] || echo "BEHIND: $f ($n plugin lines absent here)"
+done
+```
+
+Read the hits rather than trusting the count — `open` modifiers and rewrapped comments show up too. Any
+DEFAULT VALUE or logic line in that output is real drift and invalidates results from this harness.
 
 The controller is a clean-room Hovorka nonlinear-MPC reimplemented from the published Hovorka 2004
 model + our CamAPS FX reverse-engineering — NOT a binary port. See the design + decoded evidence in

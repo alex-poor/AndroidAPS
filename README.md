@@ -156,6 +156,15 @@ Each of these exists because the failure it prevents happened first:
 - **Hard hypo suspend** — 0 U/hr at or below 3.9 mmol/L on the *raw* sensor value, overriding the model
 - **Descent guard** — tapers basal toward zero on the *stricter* of two arms, a mass-balance projection
   and a raw-CGM taper, so no forecast can license dosing into an observed fall
+- **Current-glucose damper** — scales the *above-nominal* portion of the dose by how far glucose sits
+  above target, so a glucose climbing back out of a low can never be met with near-maximum basal. It is
+  released for one case, and only when both conditions hold: glucose **rising** and **no reading below
+  4.5 mmol/L in the last four hours**. Below target the damper is identically zero, which pinned the
+  controller at nominal through the first 30 minutes of a dawn rise even after it had correctly predicted
+  the climb — 82% of that morning's shortfall. The damper still guards the case it was built for, since a
+  post-hypo recovery and a dawn rise are indistinguishable by level and nearly so by direction; only the
+  preceding low separates them. Measured over 60 days, rising below target: 21% reach <4.0 mmol/L within
+  two hours *with* a preceding low, 8% without
 - **IOB divergence detector** — when glucose rises while the model insists it is falling, booked IOB is
   discounted, so a failed infusion site cannot silence the correction path at a high
 - **High-glucose correction floor** — ramps basal while the mass-balance eventual stays above target

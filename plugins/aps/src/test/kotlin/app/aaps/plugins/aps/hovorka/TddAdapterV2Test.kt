@@ -86,6 +86,20 @@ class TddAdapterV2Test {
     }
 
     @Test
+    fun `the most recent completed day influences the gain`() {
+        // foldTrailing used `size - k`, so its last recent window was subList(rf, size-1) and the most
+        // recent day fell out of every fold. The gain was a day stale — which defeats the whole point of
+        // the recency weights, half of whose mass sits on exactly the day being dropped. It went
+        // unnoticed because a stale gain still looks plausible; only appending a day that MUST move it
+        // exposes the silence.
+        val steady = MutableList<TddAdapterV2.Day?>(28) { ordinaryDay() }
+        val before = TddAdapterV2(weight, targetMmol = target).also { it.foldTrailing(steady) }.gain
+        steady.add(TddAdapterV2.Day(29.0, meanG = 5.4, minG = 2.6, tbrFrac = 0.12))   // an unmissable day
+        val after = TddAdapterV2(weight, targetMmol = target).also { it.foldTrailing(steady) }.gain
+        assert(after < before) { "appending a 12%-below-range day left the gain at $before -> $after" }
+    }
+
+    @Test
     fun `unscoreable days are skipped rather than guessed`() {
         // Days without enough CGM arrive as null. They must not be invented, and must not stall the walk.
         val withGaps = List(28) { if (it % 5 == 0) null else ordinaryDay() }

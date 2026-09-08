@@ -127,17 +127,24 @@ private fun validateSmb() {
 
 /**
  * #2d ADAPTIVE TDD: the slow day-to-day gain layer. Two tests:
- *   (A) MISCALIBRATED profile — the user's basal started 30% too LOW (a common under-titration). With a
- *       static gain the MPC's operating point (floor + effort centre) is stuck low → persistent highs.
- *       Adaptation should walk the operating basal up toward the true need over days → lift TIR, and must
- *       NEVER walk into hypo. Compares last-3-day TIR, adaptation ON vs OFF, across a cohort.
- *   (B) ASYMMETRIC SAFETY — a single hypo day must push the gain DOWN (down-nudge dominates), unit-tested
- *       directly on the adapter.
+ *   (A) STABILITY on a MISCALIBRATED profile — the user's basal starts 30% too LOW. Note what is being
+ *       asserted, because it CHANGED with TddAdapterV2: the old adapter was expected to walk the
+ *       operating basal up toward the true need, and that is exactly the behaviour that had to go. V2 is
+ *       a DRIFT detector — it compares a recent robust total daily dose against the user's own baseline —
+ *       so on a stable patient it correctly sits near gain 1.0 whatever the profile is worth. Correcting a
+ *       mis-titration is the titration's job, not a controller gain's. What this cohort still checks is
+ *       that the gain does not WANDER and never walks into hypo.
+ *   (B) ASYMMETRIC SAFETY — a hypo day must push the gain DOWN, unit-tested directly on the adapter.
+ *
+ * The load-bearing validation of this layer is NOT here: it is TddAdapterV2Test plus a replay of the
+ * user's own 60 days (see the fork README). This cohort is a mechanism check and a regression guard.
  */
 private fun validateTddAdaptation() {
-    println("\n=== 2d ADAPTIVE TDD: 30%-under-titrated profile, adaptation ON vs OFF (10-day, 12 patients) ===")
+    println("\n=== 2d ADAPTIVE TDD: 30%-under-titrated profile, adaptation ON vs OFF (21-day, 12 patients) ===")
     val rng = java.util.Random(2024)
-    val days = 10
+    // long enough that the gain has a baseline window behind it; below that it sits at 1.0 by
+    // construction and the run says nothing either way
+    val days = 21
     val ctrl = HovorkaModel(HovorkaParams.forWeight(70.0))            // population controller (honest mismatch)
     val lastTirOff = ArrayList<Double>(); val lastTirOn = ArrayList<Double>()
     val tbrOn = ArrayList<Double>(); var worstMinOn = 99.0; var stabilized = 0
@@ -150,7 +157,7 @@ private fun validateTddAdaptation() {
         val startMu = startUhr * 1000.0 / 60.0
         val maxMu = basalTrue * 8.0
         val carbErr = 0.85 + rng.nextDouble() * 0.3
-        val adapter = TddAdapter(w, startUhr, targetMmol = 6.0, maxBasalUhr = maxMu * 60.0 / 1000.0)
+        val adapter = TddAdapterV2(w, targetMmol = 6.0)
         val off = simulateMultiDayAdaptive(ctrl, patient, startMu, maxMu, STANDARD_MEALS, days = days, seed = 300L + i, carbAnnounceError = carbErr, adapter = null)
         val on = simulateMultiDayAdaptive(ctrl, patient, startMu, maxMu, STANDARD_MEALS, days = days, seed = 300L + i, carbAnnounceError = carbErr, adapter = adapter)
         fun last3Tir(r: MultiDayResult) = r.perDay.takeLast(3).map { it.tirPct }.average()
@@ -170,19 +177,34 @@ private fun validateTddAdaptation() {
     println("cohort last-3-day mean TIR: static=%.0f%%  adaptive=%.0f%%  (Δ=%+.0f pp)   adaptive mean TBR=%.1f%%  worst min=%.1f  stabilised=%d/12"
         .format(tOff, tOn, tOn - tOff, tbrOn.average(), worstMinOn, stabilized))
 
-    // (B) asymmetric safety — a hypo day must drive the gain DOWN, unit-tested on the adapter directly.
-    val a = TddAdapter(70.0, 1.0, targetMmol = 6.0, maxBasalUhr = 5.0)
-    a.endOfDay(1.0, 6.2, 0.0, 5.0)                                    // a normal day
-    val beforeHypo = a.operatingBasalUhr
-    a.endOfDay(1.0, 5.5, 0.10, 2.6)                                   // a hypo day (10% TBR, min 2.6)
-    val afterHypo = a.operatingBasalUhr
+    // (B) SAFETY, in the shape V2 actually has — this check had to change with the adapter, and the old
+    // form of it is worth stating because it was the defect. The previous adapter cut a flat x0.90 for
+    // any day containing a single low reading; on the real user's data that test fires on 42 of 58 days,
+    // so it was not a safety response at all, it was a ratchet that walked the operating point to 54% of
+    // the titrated profile. V2 responds to SUSTAINED time-below-range instead. The contract is therefore
+    // a PAIR, and asserting only the first half would re-admit the ratchet:
+    //   - a run of genuinely low days must pull the gain down, and
+    //   - one isolated low day must NOT.
+    fun day(tbr: Double, minG: Double) = TddAdapterV2.Day(tddU = 30.0, meanG = 6.2, minG = minG, tbrFrac = tbr)
+    fun gainOf(l: List<TddAdapterV2.Day?>) = TddAdapterV2(70.0, targetMmol = 6.0).also { it.foldTrailing(l) }.gain
+    val steady = List<TddAdapterV2.Day?>(28) { day(0.0, 5.0) }
+    val baseGain = gainOf(steady)
+    val gainOneLow = gainOf(steady + day(0.10, 2.6))                       // one bad night
+    val gainSustained = gainOf(steady + List(7) { day(0.12, 2.8) })        // a week of them
 
     println("\n=== ADAPTIVE-TDD CHECKS ===")
-    check("adaptation lifts last-3-day TIR vs static gain (>+2pp)", tOn > tOff + 2.0, "%.0f%% -> %.0f%%".format(tOff, tOn))
+    // NOT "TIR must improve": V2 deliberately does not correct a mis-titration (see the header). Report
+    // the TIR difference for information and assert only that adaptation does not COST time in range.
+    println("  (TIR static %.0f%% vs adaptive %.0f%% — informational; V2 tracks drift, not titration error)"
+        .format(tOff, tOn))
+    check("adaptation does not cost time in range (>= static - 2pp)", tOn >= tOff - 2.0, "%.0f%% -> %.0f%%".format(tOff, tOn))
     check("adaptation converges — operating basal stabilises, no windup/oscillation (>=9/12)", stabilized >= 9, "$stabilized/12")
     check("adaptation stays safe (worst min > 3.0, mean TBR < 4%)", worstMinOn > 3.0 && tbrOn.average() < 4.0,
         "min=%.1f TBR=%.1f%%".format(worstMinOn, tbrOn.average()))
-    check("a hypo day drives the gain DOWN (asymmetric)", afterHypo < beforeHypo, "%.3f -> %.3f".format(beforeHypo, afterHypo))
+    check("SUSTAINED time-below-range drives the gain DOWN", gainSustained < baseGain - 0.02,
+        "gain %.3f -> %.3f".format(baseGain, gainSustained))
+    check("one isolated low day does NOT ratchet the gain down", gainOneLow >= baseGain - 0.005,
+        "gain %.3f -> %.3f".format(baseGain, gainOneLow))
 }
 
 /**

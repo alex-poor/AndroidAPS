@@ -24,14 +24,27 @@ import kotlin.math.exp
 class HovorkaImmBank(
     baseParams: HovorkaParams,
     nominalBasalMuPerMin: Double,
-    private val tickMin: Double = 5.0            // measurement cadence — the "duration" fed to the transition prob
+    private val tickMin: Double = 5.0,           // measurement cadence — the "duration" fed to the transition prob
+    // bank of gut-absorption time-constants (min) the submodels span; and the two-axis transition dwell-times
+    // + mixing weights. All OPTIMISATION FREE VARIABLES (a bank spanning fast↔slow absorption; how sticky it is).
+    private val tMaxGBank: DoubleArray = HovorkaParams.TMAXG_BANK,
+    private val tau1: Double = 17.0,
+    private val tau2: Double = 180.0,
+    private val w1: Double = 0.2,
+    private val w2: Double = 0.1
 ) : GlucoseEstimator {
 
     private val n: Int
     private val filters: Array<HovorkaEkf>
     private var mu: DoubleArray                  // mode probabilities (posterior over submodels)
-    private val nModels = HovorkaParams.TMAXG_BANK.size   // 8
+    private val nModels = tMaxGBank.size
     private val trans: Array<DoubleArray>        // transition matrix π[i][j] = P(model j next | model i now)
+
+    companion object {
+        /** A bank of [n] absorption time-constants log-spaced over [lo, hi] min — a principled span, fast↔slow. */
+        fun logSpacedBank(n: Int, lo: Double, hi: Double): DoubleArray =
+            DoubleArray(n) { i -> lo * Math.pow(hi / lo, i.toDouble() / (n - 1).coerceAtLeast(1)) }
+    }
 
     // --- windowed-prediction discrimination (CamAPS GetWeightedResidual over Vector<80>) ---
     // A single 5-min innovation rewards AGILE (fast) models — it can't see the slow absorption property.
@@ -44,7 +57,7 @@ class HovorkaImmBank(
 
     init {
         filters = Array(nModels) { i ->
-            val p = baseParams.copy(tMaxG = HovorkaParams.TMAXG_BANK[i])
+            val p = baseParams.copy(tMaxG = tMaxGBank[i])
             val m = HovorkaModel(p)
             HovorkaEkf(m, m.steadyState(nominalBasalMuPerMin))
         }
@@ -55,10 +68,10 @@ class HovorkaImmBank(
 
     // ---- decoded transition-probability construction (ModelIMM1::InitialiseTransitionProb) ----
     private fun buildTransition(t: Double): Array<DoubleArray> {
-        // p1 = 0.2·(exp(-t/17) - 1) + 1 ; p2 = 0.1·(exp(-t/180) - 1) + 1  (immediates + halfTimeTran decoded)
-        val p1 = 0.2 * (exp(-t / 17.0) - 1.0) + 1.0
-        val p2 = 0.1 * (exp(-t / 180.0) - 1.0) + 1.0
-        val stay = p1 * p2                                 // decoded product/Kronecker "stay on both axes"
+        // factored two-axis "stay" probability over a duration t, from the dwell-times/weights (free vars)
+        val p1 = w1 * (exp(-t / tau1) - 1.0) + 1.0
+        val p2 = w2 * (exp(-t / tau2) - 1.0) + 1.0
+        val stay = p1 * p2                                 // product/Kronecker "stay on both axes"
         // APPROXIMATION (documented): exact 8×8 axis→submodel index map not decoded → uniform leak to the
         // other 7 models. Magnitude of the self-transition is the decoded value; only its distribution to
         // the off-diagonal is approximated. This is the one non-decoded piece and is safe (sticky bank).
