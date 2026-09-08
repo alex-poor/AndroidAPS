@@ -51,6 +51,7 @@ import javax.inject.Singleton
         PluginsConstraintsModule::class,
         SourceModule::class,
         SyncModule::class,
+        app.aaps.plugins.sync.swarm.SwarmModule::class,   // diaswarm add-on, this branch only
         WorkflowModule::class,
 
         // pumps

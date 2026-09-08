@@ -33,3 +33,8 @@ include ':shared:tests'
 include ':ui'
 include ':workflow'
 include ':libre3'
+
+// diaswarm add-on. THIS BRANCH ONLY — `main` builds the loop and does not
+// contain any of this. See /home/alex/projects/diaswarm/plugin/README.md
+include ':plugins:sync:swarm'
+project(':plugins:sync:swarm').projectDir = new File('/home/alex/projects/diaswarm/plugin')

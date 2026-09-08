@@ -214,6 +214,7 @@ dependencies {
     implementation(project(":plugins:source"))
     implementation(project(":libre3"))
     implementation(project(":plugins:sync"))
+    implementation(project(":plugins:sync:swarm"))          // diaswarm add-on, this branch only
     implementation(project(":implementation"))
     implementation(project(":database:impl"))
     implementation(project(":database:persistence"))

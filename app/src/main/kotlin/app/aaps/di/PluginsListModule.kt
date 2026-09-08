@@ -214,6 +214,12 @@ abstract class PluginsListModule {
     @Binds
     @AllConfigs
     @IntoMap
+    @IntKey(356)
+    abstract fun bindSwarmPlugin(plugin: app.aaps.plugins.sync.swarm.SwarmPlugin): PluginBase
+
+    @Binds
+    @AllConfigs
+    @IntoMap
     @IntKey(370)
     abstract fun bindMaintenancePlugin(plugin: MaintenancePlugin): PluginBase
 
