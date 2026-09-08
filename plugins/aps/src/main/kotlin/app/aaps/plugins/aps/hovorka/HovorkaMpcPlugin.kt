@@ -457,6 +457,12 @@ class HovorkaMpcPlugin @Inject constructor(
             max(0.0, min(min(min(maxBolus, SMB_ABS_CAP_U), maxIob - iobNow), stackHeadroomU))
         } else 0.0
 
+        // The current-BG damper pins basal at nominal below target, which is right when glucose is
+        // climbing back out of a low and wrong when it is a dawn rise. Release it only for the case the
+        // damper was never aimed at — see HovorkaMpc.bgDamperReleased and [damperReleaseAllowed].
+        val damperReleased = damperReleaseAllowed(now, glucoseStatus.glucose / MGDL_PER_MMOL)
+        val damperNote = if (damperReleased) " | DAMPER-RELEASED (rising, no low ${DAMPER_RELEASE_LOOKBACK_H}h)" else ""
+
         // 3a: if the estimator identifies a regime (IMM), roll the MPC out with that model
         // (ModelIMM1::PredictForOptimise); the single EKF returns null → the personalised model is used.
         val rolloutModel = ekf.rolloutModel() ?: model
@@ -467,6 +473,7 @@ class HovorkaMpcPlugin @Inject constructor(
             descentRateCap = descentRateCapOn,
             // in closed loop honour a model-requested full suspend (post-bolus) instead of the anti-spam floor
             allowFullSuspend = constraintsChecker.isClosedLoopAllowed().value(),
+            bgDamperReleased = damperReleased,
             enableSmb = smbAllowed, maxSmbU = maxSmbU
         )
         val decision = mpc.decide(ekf.x)
@@ -775,7 +782,7 @@ class HovorkaMpcPlugin @Inject constructor(
         val hypoNote = if (rawHypoSuspend) " | CGM-HYPO-SUSPEND %.1f≤%.1f".format(rawCgmMmol, HYPO_SUSPEND_MMOL) else ""
         val reIdNote = if (reIdReasonShort.isNotEmpty()) " | $reIdReasonShort" else ""
         val todNote = if (carbAbsorptionMin != carbAbsorptionBase) " | tMaxG=%.0f (ToD)".format(carbAbsorptionMin) else ""
-        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, corrNote, budgetNote, siteNote, todNote, reIdNote, decision.reason)
+        val reasonStr = "HovorkaMPC | est.G=%.1f mmol/L%s%s%s%s%s%s%s%s%s%s | %s".format(model.glucoseMmol(ekf.x), ttNote, hypoNote, mbNote, divNote, damperNote, corrNote, budgetNote, siteNote, todNote, reIdNote, decision.reason)
 
         // Build an oref-shaped RT so AAPS can persist/display it (toDb requires algorithm SMB/AMA + RT).
         // SMB rides on RT.units (+ deliverAt) → DetermineBasalResult.smb → commandQueue bolus (BOLUS_SMB).
@@ -1030,6 +1037,34 @@ class HovorkaMpcPlugin @Inject constructor(
         return basalU + bolusU
     }
 
+    /**
+     * May the current-BG damper be released this tick? Two conditions, both required:
+     *
+     *  - glucose is RISING — up at least [DAMPER_RELEASE_RISE_MMOL] over the last
+     *    [DAMPER_RELEASE_RISE_MIN] minutes. Inside the damper's band a rising sample carries about a
+     *    third of the hypo risk of a falling one at the same level (60 d: at 6.0-7.0, 7% reach <4.0
+     *    within 2 h rising vs 22% falling), while carrying twice the risk of exceeding 10.
+     *  - NO reading below [DAMPER_RELEASE_LOW_MMOL] in the last [DAMPER_RELEASE_LOOKBACK_H] hours.
+     *    This is the load-bearing half. The damper exists for glucose recovering from a low, which is
+     *    also rising with little insulin aboard — direction alone cannot tell the two apart, and a
+     *    release that fired there would walk straight back into the failure the damper was added for.
+     *    Rising below target WITH a preceding low: 21% reach <4.0 within 2 h. Without: 8%.
+     *
+     * Fails closed: no CGM history, no release.
+     */
+    private fun damperReleaseAllowed(now: Long, rawCgmMmol: Double): Boolean {
+        if (rawCgmMmol <= 0.0) return false
+        val from = now - DAMPER_RELEASE_LOOKBACK_H * 3_600_000L
+        val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true)
+        if (bg.isEmpty()) return false
+        if (bg.any { it.value / MGDL_PER_MMOL < DAMPER_RELEASE_LOW_MMOL }) return false
+        val at = now - DAMPER_RELEASE_RISE_MIN * 60_000L
+        val prior = bg.lastOrNull { it.timestamp <= at } ?: return false
+        // a reading far older than the window is not evidence of a rise over it
+        if (at - prior.timestamp > 10 * 60_000L) return false
+        return rawCgmMmol - prior.value / MGDL_PER_MMOL >= DAMPER_RELEASE_RISE_MMOL
+    }
+
     /** Time-weighted mean enacted basal (U/hr) over [start,end), honouring active temp basals. */
     private fun meanEnactedBasalUhr(profile: Profile, start: Long, end: Long): Double {
         val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start - 3_600_000L, end, true)
@@ -1114,6 +1149,12 @@ class HovorkaMpcPlugin @Inject constructor(
         const val TBR_DURATION_MIN = 30
         const val DAY_MS = 86_400_000L
         const val ADAPT_DAYS = 7                 // 2d: trailing window folded into the operating-basal gain
+        // bgDamper release (see damperReleaseAllowed) — thresholds measured in
+        // realdata/descent_guard_direction.py over 60 days, not chosen.
+        const val DAMPER_RELEASE_RISE_MMOL = 0.3
+        const val DAMPER_RELEASE_RISE_MIN = 15L
+        const val DAMPER_RELEASE_LOW_MMOL = 4.5
+        const val DAMPER_RELEASE_LOOKBACK_H = 4L
         const val HYPO_SUSPEND_MMOL = 3.9        // at/below this RAW CGM value, force a hard 0 U/hr suspend
         const val SMB_ABS_CAP_U = 1.5            // 3b: absolute per-tick microbolus cap (further bounded by maxIOB/maxBolus)
         const val SMB_MEAL_WINDOW_MIN = 180L     // SMB only in a FED state: carbs on board, or a meal within this window

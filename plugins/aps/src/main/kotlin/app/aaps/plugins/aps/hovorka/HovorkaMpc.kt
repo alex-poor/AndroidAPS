@@ -59,6 +59,25 @@ class HovorkaMpc(
     private val hypoSuspendMmol: Double = 3.9,       // at/below this a HARD 0 U/hr is forced (safety)
     private val deadbandFrac: Double = 0.1,          // snap rates within ±this of nominal back to nominal
     private val bgDamperBandMmol: Double = 3.0,      // current-BG safety damper: scale above-nominal basal by (G-target)/this
+    /**
+     * Skip the current-BG damper for THIS tick. The caller decides; see
+     * HovorkaMpcPlugin.damperReleaseAllowed.
+     *
+     * WHY IT IS NEEDED. The damper multiplies the above-nominal portion by (G-target)/band, so below
+     * target it is identically ZERO — the controller structurally cannot dose above nominal however
+     * hard its own rollout argues. Measured on 2026-09-09: through a dawn rise from 5.3 to 7.3 the
+     * optimiser asked for a mean 1.24 U/hr and the damper pinned it at nominal 0.49 for 30 minutes,
+     * which is 82% of that morning's shortfall (the descent guard accounted for the other 14%).
+     *
+     * WHY IT IS NOT SIMPLY REMOVED. The damper guards a real failure: glucose RECOVERING FROM A LOW
+     * with depleted insulin, where the model predicts an EGP-driven climb and slams basal into the
+     * next hypo. A dawn rise and a post-hypo recovery are indistinguishable by glucose LEVEL and very
+     * nearly so by DIRECTION — both are rising with little insulin aboard. Only the preceding low
+     * separates them, which is what the caller's condition tests. Measured over 60 days, rising below
+     * target: with a low in the prior 4 h, 21% go under 4.0 within 2 h; with none, 8% — half the 16%
+     * all-tick base rate, against a 24% chance of exceeding 10.
+     */
+    private val bgDamperReleased: Boolean = false,
     private val allowFullSuspend: Boolean = false,   // closed loop: honour a model-requested full suspend (bestU≈0) instead of flooring
     // --- 3b SMB (microbolus) — HIGHEST RISK, delivers insulin directly; OFF unless maxSmbU > 0 ---
     private val enableSmb: Boolean = false,          // master switch (plugin gates on Objective 8 + pref)
@@ -148,7 +167,7 @@ class HovorkaMpc(
         // recovering-from-low glucose can never slam max basal. Only ever REDUCES above-nominal basal — never
         // touches the floor or the suspend. In-silico: fixes the over-dose (1.74→0.65 U/hr, nadir 5.9→6.6),
         // cohort-neutral (all Demo checks green).
-        if (finalU > nominalBasalMuPerMin) {
+        if (finalU > nominalBasalMuPerMin && !bgDamperReleased) {
             val damp = ((g0 - targetMmol) / bgDamperBandMmol).coerceIn(0.0, 1.0)
             finalU = nominalBasalMuPerMin + (finalU - nominalBasalMuPerMin) * damp
         }
