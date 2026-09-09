@@ -44,6 +44,28 @@ class XdripSourcePlugin @Inject constructor(
         .preferencesId(PluginDescription.PREFERENCE_SCREEN)
         .pluginName(R.string.source_xdrip)
         .preferencesVisibleInSimpleMode(false)
+        // THE FALLBACK BG SOURCE, so the app can start on a clean device.
+        //
+        // NOT because this is the source anyone here uses — the loop runs on
+        // Libre 3 direct. It is this one because a fallback should do nothing
+        // until somebody configures it, and of the BG sources this build still
+        // registers, this is the only inert one: a broadcast receiver that sits
+        // silent unless xDrip is installed and sending. Libre3 carries
+        // credential and sensor machinery, and RandomBg INVENTS GLUCOSE VALUES,
+        // which is the last thing a default should do on a phone that might be
+        // attached to a pump.
+        //
+        // `NSClientSourcePlugin` used to carry this flag and was dropped from
+        // PluginsListModule when this fork removed the plugins it does not use.
+        // That left a category whose declared default is not registered, so on
+        // a phone with no preferences yet `PluginStore.getDefaultPlugin` threw
+        // and MainApp could not be created at all: the APK simply would not
+        // install-and-run on a new phone. It was invisible here because an
+        // existing install always has something enabled.
+        //
+        // This runs ONLY when nothing in the category is enabled, so it cannot
+        // change the behaviour of a configured phone.
+        .setDefault()
         .description(R.string.description_source_xdrip),
     aapsLogger, rh
 ), BgSource, XDripSource {
