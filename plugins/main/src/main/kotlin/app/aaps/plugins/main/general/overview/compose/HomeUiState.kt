@@ -16,6 +16,23 @@ import app.aaps.core.compose.theme.AapsTone
  */
 @Immutable
 data class HomeUiState(
+    /**
+     * This app is following somebody else, and owns none of the rest of it.
+     *
+     * A FOLLOWER MUST NOT SHOW WHAT IT DOES NOT HAVE. Insulin on board, carbs
+     * on board, the basal rate, the reservoir and the pump battery are not in
+     * the shared record at all — §4 excludes loop telemetry — so on a follower
+     * they are not "unknown yet", they are somebody else's and absent for good.
+     * Rendering them as "--" invites a reader to wait for a number that is
+     * never coming, and rendering a stale one would be worse. The loop pill and
+     * the Carbs/Bolus bar go for a stronger reason: this app cannot dose, and a
+     * control that looks like it might is the most dangerous thing on a screen.
+     *
+     * Set from `config.AAPSCLIENT`, which in this fork means the diaswarm
+     * follower — see `AppModule.asFollower`.
+     */
+    val follower: Boolean = false,
+
     // Loop
     val loopStateLabel: String = "",
     val loopSubLabel: String = "",         // e.g. "· looping" / countdown
