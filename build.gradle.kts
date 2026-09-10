@@ -33,7 +33,14 @@ allprojects {
     repositories {
         mavenCentral()
         google()
-        maven("https://jitpack.io")
+        // NO JITPACK. It builds arbitrary source at an arbitrary commit, so
+        // nothing resolved from it is reproducible — and F-Droid will not build
+        // an app that uses it. Checked 2026-09-11: the only artifact that came
+        // from here was QRGen, declared by `plugins:main` and imported by no
+        // file in the tree, left over from the removed SmsCommunicator. The
+        // other two jitpack-looking entries in the version catalog
+        // (pingplacepicker, kulid) are declared and never used, so they were
+        // never resolved at all.
     }
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions {

@@ -43,7 +43,6 @@ dependencies {
 
     //SmsCommunicator
     api(libs.com.eatthepath.java.otp)
-    api(libs.com.github.kenglxn.qrgen.android)
 
     api(libs.kotlinx.datetime)
 
