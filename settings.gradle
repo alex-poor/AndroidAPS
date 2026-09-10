@@ -35,6 +35,25 @@ include ':workflow'
 include ':libre3'
 
 // diaswarm add-on. THIS BRANCH ONLY — `main` builds the loop and does not
-// contain any of this. See /home/alex/projects/diaswarm/plugin/README.md
+// contain any of this. See the diaswarm repository's plugin/README.md
+//
+// The add-on lives in its own repository, so this has to point out of the tree.
+// AN ABSOLUTE PATH IS NOT BUILDABLE ANYWHERE BUT ONE LAPTOP, which is fine for
+// a worktree on that laptop and useless to CI or to anybody else who clones
+// this. DIASWARM_PLUGIN_DIR overrides it; the default is the layout on the
+// machine this was written on, so nothing local breaks.
 include ':plugins:sync:swarm'
-project(':plugins:sync:swarm').projectDir = new File('/home/alex/projects/diaswarm/plugin')
+def diaswarmCandidates = [
+    System.getenv('DIASWARM_PLUGIN_DIR'),        // CI, and anyone whose layout differs
+    new File(rootDir, '../diaswarm/plugin').path, // the two repositories side by side
+    '/home/alex/projects/diaswarm/plugin',        // the machine this was written on
+].findAll { it != null }
+def diaswarmPlugin = diaswarmCandidates.find { new File(it, 'build.gradle.kts').exists() }
+if (diaswarmPlugin == null) {
+    throw new GradleException(
+        "The diaswarm add-on was not found. Looked in:\n  " + diaswarmCandidates.join("\n  ") +
+        "\n\nClone https://github.com/alex-poor/diaswarm and either put it beside this checkout " +
+        "or set DIASWARM_PLUGIN_DIR to its plugin/ directory."
+    )
+}
+project(':plugins:sync:swarm').projectDir = new File(diaswarmPlugin)
