@@ -263,12 +263,7 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                 startActivity(Intent(this, SetupWizardActivity::class.java).setAction("info.nightscout.androidaps.MainActivity"))
             })
         }
-        // Storage is for log files and settings export — neither of which a
-        // follower has (its Maintenance plugin is gone, see AppModule.asFollower),
-        // so the card would ask for a permission that buys nothing. Battery
-        // optimisation stays: a follower polls every two minutes and being put
-        // to sleep is the difference between a live reading and a stale one.
-        if (!config.AAPSCLIENT) androidPermission.notifyForStoragePermission(this)
+        androidPermission.notifyForStoragePermission(this)
         androidPermission.notifyForBatteryOptimizationPermission(this)
         if (!config.AAPSCLIENT) androidPermission.notifyForLocationPermissions(this)
         if (config.PUMPDRIVERS) {
@@ -277,17 +272,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         }
         passwordResetCheck(this)
         exportPasswordResetCheck(this)
-
-        // NOTHING TO SET UP ON A FOLLOWER, SO NOTHING TO NAG ABOUT. The
-        // aapsclient build in this fork exists to show somebody else's glucose
-        // (see AppModule.asFollower). An identification, a master password and
-        // an AAPS export directory are all things a LOOP needs; here they are
-        // three permanent cards above the only thing the person came to look
-        // at, each offering to open a screen that has been removed.
-        //
-        // A guard rather than an early return, so that whatever gets added to
-        // the end of this method later is not silently skipped on a follower.
-        if (!config.AAPSCLIENT) {
 
         // check if identification is set
         if (config.isDev() && preferences.get(StringKey.MaintenanceIdentification).isBlank())
@@ -325,17 +309,10 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                 action = { maintenancePlugin.selectAapsDirectory(this) },
                 validityCheck = { preferences.getIfExists(StringKey.AapsDirectoryUri).isNullOrEmpty() }
             )
-        }
     }
 
-    /**
-     * Never on a follower: the wizard walks somebody through choosing a CGM, a
-     * pump and a profile, and a follower has none of the three — every plugin
-     * it would offer has been removed (see `AppModule.asFollower`). Following
-     * somebody is one scanned code, and that is the only setup there is.
-     */
     private fun startWizard(): Boolean =
-        !config.AAPSCLIENT && !preferences.get(BooleanKey.GeneralSetupWizardProcessed)
+        !preferences.get(BooleanKey.GeneralSetupWizardProcessed)
 
     override fun onPostCreate(savedInstanceState: Bundle?, persistentState: PersistableBundle?) {
         super.onPostCreate(savedInstanceState, persistentState)
@@ -452,16 +429,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
             binding.mainDrawerLayout.closeDrawers()
         }
         val result = super.onMenuOpened(featureId, menu)
-        // A FOLLOWER'S MENU IS PREFERENCES AND NOTHING ELSE. Treatments, the
-        // setup wizard, statistics and the default-profile helper all belong to
-        // running a loop; the plugin-preferences row names whichever plugin the
-        // current tab belongs to, and there is only ever one tab. Preferences
-        // stays because that is where the swarm's invite and scan live.
-        if (config.AAPSCLIENT) {
-            for (id in intArrayOf(R.id.nav_treatments, R.id.nav_setupwizard, R.id.nav_stats, R.id.nav_defaultprofile, R.id.nav_plugin_preferences))
-                menu.findItem(id)?.isVisible = false
-            return result
-        }
         menu.findItem(R.id.nav_treatments)?.isEnabled = profileFunction.getProfile() != null
         if (binding.mainPager.currentItem >= 0) {
             val plugin = (binding.mainPager.adapter as TabPageAdapter?)?.getPluginAt(binding.mainPager.currentItem) ?: return result

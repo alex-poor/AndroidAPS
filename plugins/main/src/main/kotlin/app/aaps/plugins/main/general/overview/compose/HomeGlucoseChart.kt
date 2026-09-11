@@ -212,13 +212,7 @@ private fun DrawScope.drawChart(
     }
     // Panel label sits INSIDE the panel on its own ground: in the rail band above, it collided with
     // whichever treatment happened to fall near the left edge.
-    //
-    // NOT DRAWN WHEN THERE IS NO INSULIN TO DRAW. A follower is sent glucose,
-    // not delivery — so the panel would be an empty axis under a label naming a
-    // quantity nobody sent, and the "sched" line would come from the profile
-    // rather than from anything the pump did. An empty frame reads as "zero
-    // insulin", which is a clinical statement this app is in no position to make.
-    if (d.basal.size > 1 || d.scheduledBasal > 0) run {
+    run {
         val laid = measurer.measure("INSULIN U/HR", axisStyle)
         drawRoundRect(
             colors.surface.copy(alpha = 0.85f),
