@@ -83,18 +83,12 @@ fun HomeScreen(
             ) {
                 if (state.notifications.isNotEmpty()) AlertsCard(state.notifications, actions.onDismissAlert)
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
-                // Supplies are the pump's: reservoir, battery, cannula, sensor.
-                // A follower has no pump and is told none of them.
-                if (!state.follower && state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
+                if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
-                // The details sheet is status, sensitivity and loop graphs —
-                // all of it about a loop this app is not running.
-                if (!state.follower) DetailsHandle { showDetails = true }
+                DetailsHandle { showDetails = true }
                 Box(Modifier.padding(bottom = 4.dp))
             }
-            // NO CARBS AND NO BOLUS. This app cannot reach a pump and must
-            // never look as though it can.
-            if (!state.follower) ActionBar(actions)
+            ActionBar(actions)
         }
         if (showDetails) DetailsSheet(state, onClose = { showDetails = false })
         if (showCarbs) CarbsUndoSheet(state.recentCarbs, actions.onDeleteCarb, onClose = { showCarbs = false })
@@ -152,13 +146,9 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
     val bgColor = state.bgTone?.color() ?: colors.textPrimary
     AapsCard(shape = AapsTheme.shape.hero) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // row 1 — loop pill (tap → Loop mode chooser) + time.
-            // A follower keeps the time — the AGE OF THE READING IS THE ONE
-            // THING IT MUST NEVER DROP (§12.3: the dangerous failure is a
-            // number that looks current and is nine hours old) — and loses the
-            // pill, which would report the state of a loop it is not running.
+            // row 1 — loop pill (tap → Loop mode chooser) + time
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!state.follower) StatusPill(
+                StatusPill(
                     label = buildString {
                         append(state.loopStateLabel.ifBlank { "Loop" })
                         if (state.loopSubLabel.isNotBlank()) append("  ${state.loopSubLabel}")
@@ -170,19 +160,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                 )
                 Text(state.timeAgo, style = AapsTheme.type.caption, color = colors.textTertiary, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
             }
-            // NOTHING YET, AND SAY SO. A follower that has not been granted
-            // anything renders an empty hero: a blank rounded box, which tells
-            // a person neither that the app is working nor what to do next.
-            // The one action there is belongs here.
-            if (state.follower && state.bg.isBlank() || state.follower && state.bg == "--")
-                Text(
-                    "No readings yet.\n\nOpen the menu → Preferences → Swarm sharing to scan or paste " +
-                        "an invite, and ask them to share with you.",
-                    style = AapsTheme.type.body,
-                    color = colors.textSecondary
-                )
             // row 2 — BG + inline trend (left) · eventual (right)
-            if (!(state.follower && (state.bg.isBlank() || state.bg == "--")))
             Row(verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(state.bg, style = AapsTheme.type.bigValue.copy(fontSize = 56.sp, lineHeight = 56.sp), color = bgColor)
@@ -194,8 +172,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                             modifier = Modifier.padding(bottom = 10.dp)
                         )
                 }
-                // Eventual BG is the loop's own prediction. There is no loop here.
-                if (!state.follower && state.eventualBg.isNotBlank())
+                if (state.eventualBg.isNotBlank())
                     Column(horizontalAlignment = Alignment.End) {
                         Text(state.eventualBg, style = AapsTheme.type.title, color = colors.textPrimary)
                         Text("EVENTUAL", style = AapsTheme.type.label, color = colors.textTertiary)
@@ -208,10 +185,7 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                     if (state.targetRange.isNotBlank())
                         Text(" · ${state.targetRange}", style = AapsTheme.type.caption.copy(fontWeight = FontWeight.Bold), color = colors.textSecondary)
                 }
-            // divider + stat row (IOB / COB / Basal) — none of which is shared
-            // (§4 excludes loop telemetry), so a follower shows neither the
-            // numbers nor the rule above them.
-            if (!state.follower) {
+            // divider + stat row (IOB / COB / Basal)
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -225,7 +199,6 @@ private fun HeroCard(state: HomeUiState, actions: HomeActions, onCobClick: () ->
                 HeroStat("IOB", state.iob.ifBlank { "--" }, Modifier.weight(1f), onClick = onIobClick)
                 HeroStat("COB", state.cob.ifBlank { "--" }, Modifier.weight(1f), onClick = onCobClick)
                 HeroStat("BASAL", state.basal.ifBlank { "--" }, Modifier.weight(1f), valueColor = colors.accent, sub = state.basalSub, onClick = actions.onBasal)
-            }
             }
         }
     }

@@ -595,9 +595,6 @@ class OverviewFragment : DaggerFragment() {
         }
 
         homeState.value = HomeUiState(
-            // In this fork the aapsclient flavour is the diaswarm follower and
-            // nothing else — see AppModule.asFollower.
-            follower = config.AAPSCLIENT,
             loopStateLabel = loopLabel,
             loopSubLabel = loopSub,
             loopTone = loopTone,
@@ -679,21 +676,14 @@ class OverviewFragment : DaggerFragment() {
 
         // Temp basals overlap and supersede one another, so sample the EFFECTIVE rate on a grid
         // rather than drawing one step per record — a per-record path doubles back on itself.
-        //
-        // A FOLLOWER SAMPLES NOTHING. It was sent glucose, not delivery, and the
-        // profile it holds is the subject's — so this grid would draw that
-        // profile's scheduled rate and present it as what the pump did. 240
-        // iterations of getBasalData for a line that would be a lie.
         val samples = 240
         val stepMs = ((to - from) / samples).coerceAtLeast(60_000L)
         val basal = ArrayList<BasalStep>(samples + 1)
-        if (!config.AAPSCLIENT) {
-            var t = from
-            while (t <= to) {
-                val bd = iobCobCalculator.getBasalData(profile, t)
-                basal.add(BasalStep(t, if (bd.isTempBasalRunning) bd.tempBasalAbsolute else bd.basal))
-                t += stepMs
-            }
+        var t = from
+        while (t <= to) {
+            val bd = iobCobCalculator.getBasalData(profile, t)
+            basal.add(BasalStep(t, if (bd.isTempBasalRunning) bd.tempBasalAbsolute else bd.basal))
+            t += stepMs
         }
 
         val treatments = ArrayList<ChartTreatment>()
@@ -715,7 +705,7 @@ class OverviewFragment : DaggerFragment() {
             readings = readings,
             bucketed = bucketed,
             basal = basal,
-            scheduledBasal = if (config.AAPSCLIENT) 0.0 else profile.getBasal(dateUtil.now()),
+            scheduledBasal = profile.getBasal(dateUtil.now()),
             treatments = treatments,
             // The SAME thresholds that colour the hero BG, so band and headline can never disagree.
             // UnitDoubleKey values are stored in the user's DISPLAY units already — converting them
