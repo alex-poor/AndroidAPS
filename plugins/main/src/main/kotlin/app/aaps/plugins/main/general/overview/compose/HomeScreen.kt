@@ -4,6 +4,7 @@ import app.aaps.core.compose.icons.AapsIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -236,27 +237,42 @@ private fun HeroStat(
     }
 }
 
+/**
+ * Supplies, on the SAME column grid as the hero's IOB / COB / BASAL row directly above.
+ *
+ * They used to be free-floating pills spread across the full screen width while the hero stats sit
+ * inside the hero card's padding — two three-column grids whose content boxes differed by exactly
+ * [AapsSpacing.cardPad] at each end, so no supply ever lined up with the stat above it. Giving them a
+ * card of their own gives them that same content box, and reusing [HeroStatInset] puts the columns on
+ * the same starts, so the values sit directly under IOB / COB / BASAL.
+ *
+ * Vertical padding is trimmed to `cardPadSmall`; the HORIZONTAL padding must stay [AapsSpacing.cardPad]
+ * or the grid stops matching.
+ */
 @Composable
 private fun SuppliesStrip(supplies: List<HomeUiState.Supply>) {
-    // Each pill is a 2-line tile (dot/ring + label on top, value below) so all of them — up to 4 after a
-    // cannula change (Cannula + Sensor + Reservoir + Battery) — fit on ONE row without squashing.
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        supplies.forEach { s -> SupplyCell(s, Modifier.weight(1f)) }
+    AapsCard(contentPadding = PaddingValues(horizontal = AapsSpacing.cardPad, vertical = AapsSpacing.cardPadSmall)) {
+        Row(Modifier.fillMaxWidth().offset(x = -HeroStatInset)) {
+            supplies.forEach { s -> SupplyCell(s, Modifier.weight(1f)) }
+        }
     }
 }
 
 /**
- * A supply as a compact 2-line tile: line 1 = indicator (a depleting COUNTDOWN ring when the supply
- * carries a life [HomeUiState.Supply.fraction], e.g. the sensor; else a plain dot) + label; line 2 =
- * value. Equal-width (weight) so 3–4 supplies share the row cleanly.
+ * A supply as a 2-line column: line 1 = indicator (a depleting COUNTDOWN ring when the supply carries
+ * a life [HomeUiState.Supply.fraction], e.g. the sensor; else a plain dot) + label; line 2 = value.
+ *
+ * Deliberately the same shape as [HeroStat] — start-aligned, equal weight, same inset — so 3 supplies
+ * land under the 3 hero stats. A 4th (Battery, on a pump that reports a percentage) simply makes it a
+ * four-column row; the columns no longer pair off, which is the honest result of there being one more
+ * supply than there are stats.
  */
 @Composable
 private fun SupplyCell(s: HomeUiState.Supply, modifier: Modifier) {
     val colors = AapsTheme.colors
     Column(
-        modifier.clip(AapsTheme.shape.cardSmall).background(colors.controlFill).padding(horizontal = 8.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        modifier.padding(horizontal = HeroStatInset),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             val dot = s.dotTone.color()
