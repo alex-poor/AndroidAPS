@@ -202,8 +202,14 @@ Pure‑JVM, no device:
 
 - ✅ Authorization, 1‑minute streaming, backfill, reconnect — **live on hardware**.
 - ✅ Dense‑aware bucketing, lifecycle UI, source plugin wired end‑to‑end.
-- ⏳ **Starting a sensor from AAPS via NFC** — the activation command is written
-  (`Libre3Nfc`/`Libre3ScanFlow`), but the NFC *response* parser (`nfc2` struct) is not, so a fresh
-  sensor is still activated with Juggluco and its credentials imported. This is deferred to the next
-  sensor change (the response can only be captured live). Full plan lives in the private RE
+- ✅ **Sensor start from AAPS over NFC — built end to end.** `Libre3NfcActivation` (the read +
+  activate exchange) over `Libre3NfcV` (reader‑mode NfcV I/O), the `Libre3Nfc2` response parser, a
+  credentials write, and the existing BLE fresh‑pairing that mints the kAuth. Reader‑mode is armed
+  from the sensor screen behind a confirmation; `readInfo` (safe) and `activate` (the irreversible
+  `02 A0` write) are separate methods.
+- ⏳ **One live validation outstanding.** Activating a fresh sensor is irreversible, so the NFC path
+  is so far proven only off‑device — unit tests against a real 2026‑09‑22 capture (`nfc2` MAC and
+  activation time parse byte‑exact) and against the transcribed Juggluco command sequence. The first
+  real activation, and pinning the account id (`LIBRE3_ACCOUNT_ID`), wait for the next sensor change.
+  Until then the Juggluco import path stays as the fallback. Full plan lives in the private RE
   workspace, `report/libre3-native-plan.md` (not committed here).

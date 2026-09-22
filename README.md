@@ -509,10 +509,14 @@ with its GPL headers intact; every wire-format decoder transcribes formats Juggl
 Full provenance is in the [module README](libre3/README.md) and
 [`libre3/src/main/cpp/VENDOR.md`](libre3/src/main/cpp/VENDOR.md).
 
-**Not yet:** starting a fresh sensor from AAPS over NFC. The activation command is written, but the NFC
-response parser is not, so a new sensor is still activated with Juggluco and its per-sensor credentials
-imported. This is a **private single-device build** — per-sensor credentials never leave the device, and
-no APK built from it should be distributed.
+**Native start — built, pending one live test.** Starting a fresh sensor from AAPS over NFC is now
+implemented end to end: reader-mode NfcV I/O sends the activate command and reads the response, the
+`nfc2` parser turns it into the sensor's MAC / PIN / start time, credentials are written, and the
+existing BLE fresh-pairing mints the kAuth — no Juggluco. It has **not been validated against a
+physical sensor**: a fresh activation is irreversible, so the first real one waits for the next sensor
+change (which also pins the one unconfirmed constant, the account id). Until then the Juggluco import
+path stays as the fallback. This is a **private single-device build** — per-sensor credentials never
+leave the device, and no APK built from it should be distributed.
 
 ---
 
