@@ -23,6 +23,8 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.libre3.Libre3BleClient
 import app.aaps.libre3.Libre3GlucoseRecord
 import app.aaps.libre3.Libre3History
+import app.aaps.libre3.Libre3NfcActivation
+import app.aaps.libre3.Libre3NfcV
 import app.aaps.libre3.Libre3PatchStatus
 import app.aaps.libre3.Libre3SecuritySession
 import app.aaps.plugins.source.compose.Libre3SensorState
@@ -294,6 +296,11 @@ class Libre3SourcePlugin @Inject constructor(
             aapsLogger.warn(LTag.BGSOURCE, "Libre3: no credentials stored — nothing to connect to")
             return
         }
+        connect(creds)
+    }
+
+    /** Open the BLE link for [creds]; resume when a kAuth is stored, pair when it is not. */
+    private fun connect(creds: Libre3CredentialStore.Credentials) {
         val adapter: BluetoothAdapter? =
             (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         if (adapter == null || !adapter.isEnabled) {
@@ -305,6 +312,49 @@ class Libre3SourcePlugin @Inject constructor(
         client = c
         runCatching { c.connect(adapter.getRemoteDevice(creds.mac)) }
             .onFailure { aapsLogger.error(LTag.BGSOURCE, "Libre3: connect failed", it) }
+    }
+
+    /**
+     * Read the scanned tag's patch info — a pure NFC read, safe to run so the UI can show the user
+     * exactly what a scan will do (fresh sensor → activate, running sensor → take over) before they
+     * commit. Runs on the caller's (background) thread; NFC I/O must not touch the main thread.
+     */
+    fun readSensorInfo(tag: android.nfc.Tag): Libre3NfcActivation.SensorInfo? =
+        Libre3NfcActivation(Libre3NfcV.transceiver(tag)).readInfo()
+
+    /**
+     * Activate (or take over) the scanned sensor and switch AAPS onto it. **IRREVERSIBLE for a fresh
+     * sensor** — only call from behind the Libre3ScanFlow confirmation. On success it writes a fresh
+     * credentials file (kAuth null, so the first BLE connection pairs) and connects; the first
+     * pairing's `onAuthorized` then persists the kAuth. Runs on a background thread.
+     */
+    fun activateSensor(tag: android.nfc.Tag): Libre3NfcActivation.Result {
+        val nowSec = dateUtil.now() / 1000L
+        val result = Libre3NfcActivation(Libre3NfcV.transceiver(tag)).activate(nowSec, LIBRE3_ACCOUNT_ID)
+        if (result is Libre3NfcActivation.Result.Activated) {
+            client?.disconnect(); client = null
+            lastLifeCount = -1; lastHistoryLifeCount = 0; backfilled = 0; sensorStartRecorded = null
+            credentials.save(
+                Libre3CredentialStore.Credentials(
+                    serial = result.serialNumber,
+                    mac = result.mac,
+                    blePin = result.blePin,
+                    kAuth = null,                                   // first BLE connect pairs and mints it
+                    startedEpochMs = result.activationTimeSec * 1000L,
+                    warmupMinutes = result.warmupMinutes,
+                    lifeDays = if (result.isPlus) 15 else 14
+                )
+            )
+            update {
+                it.copy(
+                    serial = result.serialNumber, mac = result.mac,
+                    lifecycle = lifecycleNow(), connection = Libre3SensorState.Connection.Connecting
+                )
+            }
+            credentials.load()?.let { connect(it) }
+            aapsLogger.info(LTag.BGSOURCE, "Libre3: activated ${result.serialNumber} (${result.mac}); pairing")
+        }
+        return result
     }
 
     /**
@@ -332,5 +382,20 @@ class Libre3SourcePlugin @Inject constructor(
         lastLifeCount = -1
         update { Libre3SensorState() }
         super.onStop()
+    }
+
+    companion object {
+        /**
+         * The Libre account id baked into the activation payload (`startTime ‖ accountId ‖ CRC16`).
+         * There is no keyed MAC here: the sensor stores the id as the owner and validates only the
+         * CRC, so any non-zero value activates a fresh sensor — but 0 is a known-bad path (Juggluco
+         * reports it as 0xF8). A fixed non-zero id is fine for a fresh AAPS activation; only TAKEOVER
+         * of a sensor started elsewhere needs to match that app's id.
+         *
+         * ⚠️ This has NOT been exercised against a real sensor from AAPS. Before the first live
+         * activation, confirm the value (e.g. set it to the id Juggluco used, captured by hooking
+         * `getlibreAccountIDnumber`) — a rejected activation costs a physical sensor.
+         */
+        const val LIBRE3_ACCOUNT_ID: Long = 0x41415053L // "AAPS"
     }
 }

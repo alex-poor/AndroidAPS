@@ -63,6 +63,27 @@ class Libre3CredentialStore @Inject constructor(
         }.getOrNull()
     }
 
+    /**
+     * Write a fresh credential set — used straight after an NFC activation. [Credentials.kAuth] is
+     * normally null here: the sensor has no saved authorization yet, so the first BLE connection does
+     * a full pairing (`Libre3BleClient` falls back to `startPairing()` when `storedKAuth == null`) and
+     * [updateKAuth] persists the minted kAuth. Replaces any existing file wholesale — one sensor at a
+     * time.
+     */
+    fun save(c: Credentials) {
+        runCatching {
+            val j = JSONObject()
+            j.put("serial", c.serial)
+            j.put("mac", c.mac)
+            j.put("blePin", c.blePin.hex())
+            c.kAuth?.let { j.put("kAuth", it.hex()) }
+            j.put("startedEpochMs", c.startedEpochMs)
+            j.put("warmupMinutes", c.warmupMinutes)
+            j.put("lifeDays", c.lifeDays)
+            file.writeText(j.toString(2))
+        }.onFailure { aapsLogger.error(LTag.BGSOURCE, "Libre3: could not save credentials", it) }
+    }
+
     /** Rewrite only the kAuth, preserving everything else. Called after each authorisation. */
     fun updateKAuth(kAuth: ByteArray) {
         runCatching {
