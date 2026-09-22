@@ -594,20 +594,34 @@ class OverviewFragment : DaggerFragment() {
             }
         }
 
+        // A stale reading must never render as if live: during warm-up (or any signal gap) the hero
+        // shows no value and says why, instead of the last number from hours ago. Warm-up is detected
+        // from the sensor-start event + the warm-up preference — the same source as the Sensor pill.
+        val warmupLeftMin = persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.SENSOR_CHANGE)?.let { te ->
+            val warmupMs = TimeUnit.MINUTES.toMillis(preferences.get(IntKey.OverviewSensorWarmupMinutes).toLong())
+            val elapsed = now - te.timestamp
+            if (warmupMs > 0 && elapsed in 0 until warmupMs)
+                TimeUnit.MILLISECONDS.toMinutes(warmupMs - elapsed) + 1 else null
+        }
+
         homeState.value = HomeUiState(
             loopStateLabel = loopLabel,
             loopSubLabel = loopSub,
             loopTone = loopTone,
             looping = loopActive,
-            bg = profileUtil.fromMgdlToStringInUnits(lastBg?.recalculated),
-            bgTone = bgTone,
+            bg = if (isActual) profileUtil.fromMgdlToStringInUnits(lastBg?.recalculated) else "--",
+            bgTone = if (isActual) bgTone else null,
             bgStale = !isActual,
             units = unitsStr,
-            trendArrow = trendSymbol(trendCalculator.getTrendArrow(iobCobCalculator.ads)),
-            delta = gs?.let { profileUtil.fromMgdlToSignedStringInUnits(it.delta) } ?: "",
+            trendArrow = if (isActual) trendSymbol(trendCalculator.getTrendArrow(iobCobCalculator.ads)) else "",
+            delta = if (isActual) (gs?.let { profileUtil.fromMgdlToSignedStringInUnits(it.delta) } ?: "") else "",
             timeAgo = dateUtil.minOrSecAgo(rh, lastBg?.timestamp),
-            eventualBg = eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "",
-            stateLine = stateLine,
+            eventualBg = if (isActual) (eventualMgdl?.let { profileUtil.fromMgdlToStringInUnits(it) } ?: "") else "",
+            stateLine = when {
+                isActual              -> stateLine
+                warmupLeftMin != null -> "Warming up · ${warmupLeftMin}m left"
+                else                  -> "No recent reading"
+            },
             targetRange = targetRange,
             iob = iobText(),
             iobSub = rh.gs(app.aaps.core.ui.R.string.bolus) + " + " + rh.gs(app.aaps.core.ui.R.string.basal),

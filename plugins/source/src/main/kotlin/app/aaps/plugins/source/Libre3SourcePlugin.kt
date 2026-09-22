@@ -4,10 +4,15 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import app.aaps.core.data.model.GV
+import app.aaps.core.data.model.GlucoseUnit
+import app.aaps.core.data.model.IDs
 import app.aaps.core.data.model.SourceSensor
+import app.aaps.core.data.model.TE
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.plugin.PluginType
+import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
+import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
@@ -79,6 +84,9 @@ class Libre3SourcePlugin @Inject constructor(
     /** One history request per connection; patch status arrives repeatedly. */
     private var historyRequested = false
 
+    /** Sensor start already recorded as a SENSOR_CHANGE, so warm-up/expiry show and we don't re-insert. */
+    private var sensorStartRecorded: Long? = null
+
     /** Latest sensor lifecycle state, for the UI to show warm-up/expiry honestly. */
     var patchStatus: Libre3PatchStatus? = null
         private set
@@ -92,6 +100,28 @@ class Libre3SourcePlugin @Inject constructor(
 
     private fun update(block: (Libre3SensorState) -> Libre3SensorState) {
         _sensorState.value = block(_sensorState.value)
+    }
+
+    /**
+     * Record the sensor's activation as a SENSOR_CHANGE once, so the overview shows warm-up and a
+     * real expiry countdown instead of treating a warming-up sensor's last stale reading as current.
+     * No glucose is inserted during warm-up (readings are out-of-range sentinels dropped before the
+     * DB), so this cannot ride along on insertCgmSourceData's sensor-start argument — it must be an
+     * explicit therapy event. Deduped in the DB by timestamp and by [sensorStartRecorded] per session.
+     */
+    private fun recordSensorStart() {
+        val startedMs = credentials.load()?.startedEpochMs ?: return
+        if (sensorStartRecorded == startedMs) return
+        sensorStartRecorded = startedMs
+        persistenceLayer.insertPumpTherapyEventIfNewByTimestamp(
+            therapyEvent = TE(
+                timestamp = startedMs, type = TE.Type.SENSOR_CHANGE, duration = 0,
+                note = null, enteredBy = "AndroidAPS-Libre3",
+                glucose = null, glucoseType = null, glucoseUnit = GlucoseUnit.MGDL, ids = IDs()
+            ),
+            timestamp = startedMs, action = Action.CAREPORTAL, source = Sources.Libre3, note = null,
+            listValues = listOf(ValueWithUnit.Timestamp(startedMs), ValueWithUnit.TEType(TE.Type.SENSOR_CHANGE))
+        ).subscribe({ }, { aapsLogger.error(LTag.BGSOURCE, "Libre3: sensor-start record failed", it) })
     }
 
     /**
@@ -192,6 +222,7 @@ class Libre3SourcePlugin @Inject constructor(
         override fun onPatchStatus(status: Libre3PatchStatus) {
             patchStatus = status
             aapsLogger.debug(LTag.BGSOURCE, "Libre3: patch state=${status.patchState} life=${status.currentLifeCount}")
+            recordSensorStart()
             // The data channel is demonstrably live now, so the control write will be accepted.
             // Only ask once per connection — patch status repeats.
             if (!historyRequested) {
