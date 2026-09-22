@@ -15,8 +15,8 @@ exposes sensor lifecycle (warm‑up / active / expiring / failed) in the UI.
 **None of this would exist without [Juggluco](https://github.com/j-kaltes/Juggluco) by
 Jaap Korthals Altes (`j-kaltes`), GPL‑3.0‑or‑later.**
 
-Juggluco is the reference implementation of the Libre 3 BLE protocol and the sensor authorization
-engine. Two distinct debts:
+Juggluco is the reference implementation of the Libre 3 BLE protocol, the NFC activation and the
+sensor authorization engine. Three distinct debts:
 
 1. **Vendored native core** — the entire sensor‑authorization / challenge‑cipher core in
    [`src/main/cpp/libre3/process/`](src/main/cpp/libre3/process/) and
@@ -27,9 +27,16 @@ engine. Two distinct debts:
 
 2. **Protocol knowledge** — every Kotlin file in this module that decodes a wire format
    (`Libre3Framing`, `Libre3GlucoseRecord`, `Libre3History`, `Libre3PatchInfo`, `Libre3Nfc`,
-   `Libre3SecuritySession`, `Libre3Gatt`) transcribes struct layouts, GATT UUIDs, framing rules and
-   CRC parameters that Juggluco worked out first. Where a format was taken from Juggluco the source
-   file says so in its header. These are clean‑room Kotlin, but the *knowledge* is Juggluco's.
+   `Libre3Nfc2`, `Libre3SecuritySession`, `Libre3Gatt`) transcribes struct layouts, GATT UUIDs,
+   framing rules and CRC parameters that Juggluco worked out first.
+
+3. **The activation sequence** — the NFC sensor‑start (`Libre3NfcActivation`, `Libre3NfcV`,
+   `Libre3Nfc`, `Libre3Nfc2`) transcribes not just formats but Juggluco's *logic*: the read/activate
+   command order, the NfcV transceive/retry loop and the `nfc2` interpretation, from Juggluco's
+   `Libre3.java`, `libre3/NFC.java`, `AlgNfcV.java` and `cpp/libre3/nfc.cpp`.
+
+Where a format or sequence was taken from Juggluco the source file says so in its header. The Kotlin
+is clean‑room, but the *knowledge* is Juggluco's.
 
 AAPS is AGPL‑3.0; GPL‑3.0 combines upward into it. If you build on this, keep the GPL headers and
 credit Juggluco.

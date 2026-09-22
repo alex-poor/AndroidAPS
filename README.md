@@ -505,9 +505,9 @@ apps: AAPS performs the sensor authorization handshake and talks to the patch di
 
 **This stands on [Juggluco](https://github.com/j-kaltes/Juggluco) by Jaap Korthals Altes (`j-kaltes`),
 GPL-3.0.** The sensor-authorization / challenge-cipher native core is Juggluco's C, vendored verbatim
-with its GPL headers intact; every wire-format decoder transcribes formats Juggluco worked out first.
-Full provenance is in the [module README](libre3/README.md) and
-[`libre3/src/main/cpp/VENDOR.md`](libre3/src/main/cpp/VENDOR.md).
+with its GPL headers intact; every wire-format decoder, and the NFC activation sequence itself,
+transcribes formats and logic Juggluco worked out first. Full provenance and a per-debt breakdown are
+in the [module README](libre3/README.md) and [`libre3/src/main/cpp/VENDOR.md`](libre3/src/main/cpp/VENDOR.md).
 
 **Native start — built, pending one live test.** Starting a fresh sensor from AAPS over NFC is now
 implemented end to end: reader-mode NfcV I/O sends the activate command and reads the response, the
