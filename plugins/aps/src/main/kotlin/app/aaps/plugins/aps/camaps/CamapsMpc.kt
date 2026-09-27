@@ -40,11 +40,14 @@ import kotlin.math.pow
  *    piecewise-constant, minimising tracking error against the reference plus an effort term; the FIRST
  *    step is commanded, as GetBIRpump does.
  *
- *  - §4 OUTPUT LAW `MPC::GetBIR(mode)`. `max(hourlyRate, 0.7 * mean(horizon vector))`. Note carefully
- *    what this floors against: 70% of what the controller ITSELF PLANNED, not 70% of profile basal. A
- *    plan that intends to suspend still suspends. Flooring on nominal instead holds basal on through
- *    falls the controller had decided to back away from — a mistake that, when made in the replay
- *    harness, inflated this arm by 69% and cut its suspend rate from 33% to 5%.
+ *  - §4 OUTPUT LAW. The first planned step is commanded, bounded above by [maximumPersonalRange].
+ *    There is NO floor: `MPC::GetBIR(int)` (0x429bc) returns
+ *    `mode == 1 ? max(0.48*tdd/24, 0.7*mean(48 half-hourly basals)) : 0.48*tdd/24` -- a reference basal
+ *    rate, the same `base` term `MaximumPersonalRange` uses, with no horizon vector anywhere in it.
+ *    An earlier version of this file floored the command at `0.7 * mean(PLANNED horizon)` on the
+ *    reasoning that flooring against the plan rather than against profile basal would let a plan that
+ *    intends to suspend still suspend. Both readings were wrong, and the floor forced insulin in
+ *    whenever the plan meant to suspend now and resume later.
  *
  * NOT YET REPLICATED — AND IT SHOWS
  *
@@ -94,8 +97,23 @@ class CamapsMpc(
      * estimate. Replaces the old `refTauMin`; the trajectory is no longer an exponential to target.
      */
     private val predictLeadMin: Double = 0.0,
-    /** GetBIR floor as a fraction of the PLANNED horizon mean (decoded 0.7). */
-    private val birFloorFrac: Double = 0.7,
+    /**
+     * REMOVED, because it was never in the binary. `MPC::GetBIR(int)` (0x429bc) decodes to
+     * ```
+     *   s0 = BIRasFractionOfTDD * tdd / 24
+     *   if (mode != 1) return s0
+     *   return max(s0, 0.7 * mean(48 half-hourly basals))
+     * ```
+     * i.e. a REFERENCE BASAL RATE -- the same expression `maximumPersonalRange` uses for its `base` --
+     * and not a floor on the controller's plan. There is no horizon vector in it. The 0.7 is 70% of the
+     * PROFILE basal mean, not 70% of anything the controller planned.
+     *
+     * The replica had `finalU = max(seq[0], 0.7 * mean(planned horizon))`, which forced insulin in
+     * whenever the plan intended to suspend now and resume later: it commanded 0.455 x basal at glucose
+     * 5.0 falling 1.5 mmol/L/h, where the real controller returns 0.000. Kept as a named constant only
+     * so the mistake is not silently reintroduced.
+     */
+    private val unusedBirFloorFrac: Double = 0.7,
     /**
      * Ceiling on the command, in mu/min. DECODED from `MPC::MaximumPersonalRange` (vaddr 0x46b08) and
      * computed by the caller -- see [maximumPersonalRange]. Pass 0 or less to fall back to
@@ -364,7 +382,7 @@ class CamapsMpc(
 
         // --- §4 GetBIR: floor the command at 70% of the PLANNED horizon mean ---
         val horizonMean = seq.average()
-        var finalU = min(hi, max(seq[0], birFloorFrac * horizonMean))
+        var finalU = min(hi, seq[0])                                // GetBIR is not a floor; see above
 
         // §5 MPC::ModifyRateGlucoseRate -- the trend stage, on the optimiser's OUTPUT, before the
         // ceiling and the deadband, which is the order the binary uses. Two mutually exclusive paths.
@@ -386,7 +404,7 @@ class CamapsMpc(
             "BIR[%s] mean %.2f | floor %.2f | → %.2f U/hr").format(
             g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)], maxFallMmolPerH(g0),
             seq.joinToString(",") { "%.2f".format(it * 60 / 1000) }, horizonMean * 60 / 1000,
-            birFloorFrac * horizonMean * 60 / 1000, finalU * 60 / 1000) +
+            unusedBirFloorFrac * horizonMean * 60 / 1000, finalU * 60 / 1000) +
             " att=%.0f%%@%.1fmmol/L/h".format(attenuation, observedSlopeMmolPerH)
         return Decision(finalU * 60.0 / 1000.0, reason, horizonMean * 60.0 / 1000.0, model.glucoseMmol(es))
     }
