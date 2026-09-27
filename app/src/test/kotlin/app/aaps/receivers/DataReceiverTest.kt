@@ -35,6 +35,7 @@ class DataReceiverTest : TestBase() {
     @Mock private lateinit var fabricPrivacy: FabricPrivacy
     @Mock private lateinit var context: Context
     @Mock private lateinit var bundle: Bundle
+    @Mock private lateinit var xdripSourcePlugin: XdripSourcePlugin
 
     private val workRequestCaptor = argumentCaptor<OneTimeWorkRequest>()
 
@@ -46,7 +47,9 @@ class DataReceiverTest : TestBase() {
             it.aapsLogger = aapsLogger
             it.dataWorkerStorage = dataWorkerStorage
             it.fabricPrivacy = fabricPrivacy
+            it.xdripSourcePlugin = xdripSourcePlugin
         }
+        whenever(xdripSourcePlugin.isEnabled()).thenReturn(true)
     }
 
     private fun createIntent(action: String): Intent {
@@ -73,6 +76,18 @@ class DataReceiverTest : TestBase() {
 
         // Assert
         assertWorkerEnqueued(XdripSourcePlugin.XdripSourceWorker::class)
+    }
+
+    @Test
+    fun `processIntent drops xDrip BG while xDrip is not the BG source`() {
+        whenever(xdripSourcePlugin.isEnabled()).thenReturn(false)
+        val intent = createIntent(Intents.ACTION_NEW_BG_ESTIMATE)
+
+        dataReceiver.processIntent(context, intent)
+
+        // Nothing stored (the old leak) and nothing enqueued.
+        verify(dataWorkerStorage, never()).storeInputData(any(), any())
+        verify(dataWorkerStorage, never()).enqueue(any())
     }
 
     @Test

@@ -19,6 +19,7 @@ open class DataReceiver : DaggerBroadcastReceiver() {
     @Inject lateinit var aapsLogger: AAPSLogger
     @Inject lateinit var dataWorkerStorage: DataWorkerStorage
     @Inject lateinit var fabricPrivacy: FabricPrivacy
+    @Inject lateinit var xdripSourcePlugin: XdripSourcePlugin
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
@@ -28,6 +29,10 @@ open class DataReceiver : DaggerBroadcastReceiver() {
     @VisibleForTesting
     fun processIntent(context: Context, intent: Intent) {
         val bundle = intent.extras ?: return
+        // This receiver is exported and cannot authenticate its sender, so while xDrip is not the selected
+        // BG source there is nothing to accept. Checked HERE, not only in the worker: the bundle was stored
+        // before the worker's check and never picked up, so every broadcast leaked into DataWorkerStorage.
+        if (intent.action == Intents.ACTION_NEW_BG_ESTIMATE && !xdripSourcePlugin.isEnabled()) return
         aapsLogger.debug(LTag.CORE, "onReceive ${intent.action} ${BundleLogger.log(bundle)}")
         when (intent.action) {
             Intents.ACTION_NEW_BG_ESTIMATE ->

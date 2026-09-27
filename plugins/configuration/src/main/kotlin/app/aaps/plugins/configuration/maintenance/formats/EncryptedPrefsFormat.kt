@@ -116,8 +116,9 @@ class EncryptedPrefsFormat @Inject constructor(
                     security.put("salt", salt.toHex())
                     security.put("content_hash", cryptoUtil.sha256(rawContent))
                 } else {
-                    // fallback when encryption does not work
-                    encrypted = false
+                    // Refuse rather than fall back: the user asked for an encrypted export, and the file holds
+                    // the NS token and every setting. A silent plaintext file is worse than a failed export.
+                    throw PrefIOError(file.name ?: "UNKNOWN")
                 }
             }
 
