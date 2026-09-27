@@ -91,7 +91,12 @@ internal object NetworkStackBuilder {
     ): OkHttpClient {
         if (logging) {
             addNetworkInterceptor(
-                HttpLoggingInterceptor(logger).also { it.level = HttpLoggingInterceptor.Level.BODY }
+                // Never write the NS access token (Bearer JWT) to the log, whatever the level.
+                // ...nor the long-lived access token the refresh call carries in its URL path.
+                HttpLoggingInterceptor { msg -> logger.log(msg.replace(TOKEN_IN_PATH, "$1***")) }.also {
+                    it.level = HttpLoggingInterceptor.Level.BODY
+                    it.redactHeader("Authorization")
+                }
             )
         }
         cache(Cache(context.cacheDir, OK_HTTP_CACHE_SIZE))
@@ -112,3 +117,5 @@ internal object NetworkStackBuilder {
     private const val OK_HTTP_READ_TIMEOUT = 60L * 1000
     private const val OK_HTTP_WRITE_TIMEOUT = 60L * 1000
 }
+
+private val TOKEN_IN_PATH = Regex("(/authorization/request/)[^\\s/?]+")

@@ -650,7 +650,9 @@ class GoogleDriveManager @Inject constructor(
             stopLocalServer()
             
             // Create new server
-            localServer = ServerSocket(REDIRECT_PORT)
+            // Loopback only: the redirect comes from the browser on this phone, and binding every interface
+            // exposed the listener (and the auth code it logs) to the LAN / tailnet during sign-in.
+            localServer = ServerSocket(REDIRECT_PORT, 1, java.net.InetAddress.getLoopbackAddress())
             localServer?.soTimeout = 1000  // Set timeout to avoid permanent blocking
             
             // Start server to handle requests
@@ -713,7 +715,7 @@ class GoogleDriveManager @Inject constructor(
                 return
             }
             
-            aapsLogger.debug(LTag.CORE, "$LOG_PREFIX HTTP Request: $requestLine")
+            aapsLogger.debug(LTag.CORE, "$LOG_PREFIX HTTP Request: ${requestLine?.substringBefore('?')}")
             
             // Parse request path
             val parts = requestLine.split(" ")
