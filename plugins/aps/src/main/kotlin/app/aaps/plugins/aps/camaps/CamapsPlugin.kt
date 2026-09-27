@@ -157,11 +157,17 @@ class CamapsPlugin @Inject constructor(
             meanBasal = meanProfileBasalUhr(profile),
             basalNow = profile.getBasal(now)
         )
+        // §5 MPC::ModifyRateGlucoseRate keys on GetSlope over two windows, taking the more NEGATIVE.
+        // shortAvgDelta/longAvgDelta are the nearest equivalents AAPS already computes; both are
+        // mg/dL per 5 min, so x12 for per-hour and /18 for mmol/L.
+        val slopeMmolPerH = min(glucoseStatus.shortAvgDelta, glucoseStatus.longAvgDelta) *
+            12.0 / MGDL_PER_MMOL
         val decision = CamapsMpc(
             rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalMuMin,
             maxBasalMuPerMin = maxBasalUhr * 1000.0 / 60.0,
-            maxRateMuPerMin = maxRateUhr * 1000.0 / 60.0
+            maxRateMuPerMin = maxRateUhr * 1000.0 / 60.0,
+            observedSlopeMmolPerH = slopeMmolPerH
         ).decide(est.x)
 
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))

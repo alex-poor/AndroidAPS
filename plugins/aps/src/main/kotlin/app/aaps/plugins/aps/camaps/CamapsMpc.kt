@@ -110,6 +110,13 @@ class CamapsMpc(
      * showed no such layer, which was a gap in the RE, not a design decision -- so this is now a
      * replicated behaviour rather than the bolted-on backstop it started as.
      */
+    /**
+     * Observed glucose slope in mmol/L per HOUR, for [modifyRateGlucoseRate]. The real controller uses
+     * `MPC::GetSlope` over two windows (base span + 70 and + 40 min), takes the more NEGATIVE, then
+     * takes the more negative again against the model's own 2-minute prediction scaled x30. Pass 0 to
+     * disable the attenuation stage.
+     */
+    private val observedSlopeMmolPerH: Double = 0.0,
     private val hypoSuspendMmol: Double = 4.5,
     private val deadbandFrac: Double = 0.1
 ) {
@@ -161,6 +168,42 @@ class CamapsMpc(
 
         /** What MaximumPersonalRange assumes when GetCGMapproximate fails (immediate 5.5). */
         const val CGM_FALLBACK_MMOL = 5.5
+
+        /**
+         * `MPC::ModifyRateGlucoseRate` (0x46f10), the glucose-slope attenuation — the real controller's
+         * ENTIRE trend response, and it sits OUTSIDE the optimiser, on its output. Returns a percentage
+         * in [0, 100] to cut the commanded rate by; 100 is a suspend.
+         *
+         * Two indices, both the same closed form with different half-lives (the immediates are 3.2 and
+         * 4.5, divided into the `ln2` symbol, hence the powers of two):
+         * ```
+         *   A9  = 2^(-1/3.2)             B9 = 2^(-(slope + 2.2)/3.2)
+         *   raw9  = 10*(B9 - A9)/(1 - A9)      idx9 = clamp(raw9, 0, 50)
+         *                                      idx10 = clamp(raw9 * 0.5, 0, 100)
+         *   A3  = 2^(-7.5/4.5)           B3 = 2^(-(cgm - 4.5)/4.5)
+         *   raw3  = 10*(B3 - A3)/(1 - A3)      idx12 = clamp(raw3, 0, 10)
+         *   att = clamp(max(idx9 * idx12, idx10), 0, 100)
+         * ```
+         * `raw9` crosses zero at slope = -1.2 mmol/L/h, so nothing is withheld until glucose is falling
+         * faster than that. `idx12` is glucose-only: 10 at 4.5 mmol/L, 0 at 12 — so the product term is
+         * inert above 12 and only `idx10` acts there.
+         *
+         * NOT YET DECODED: the chain of rules the binary runs when glucose < 8.0 (0x472b8..0x474f0),
+         * which can only ever REDUCE the rate further. This implements the >= 8.0 path only, so it is
+         * expected to be less conservative than the real controller at low glucose.
+         */
+        fun attenuationPercent(slopeMmolPerH: Double, cgmMmol: Double): Double {
+            val a9 = 2.0.pow(-1.0 / 3.2)
+            val b9 = 2.0.pow(-(slopeMmolPerH + 2.2) / 3.2)
+            val raw9 = 10.0 * (b9 - a9) / (1.0 - a9)
+            val idx9 = raw9.coerceIn(0.0, 50.0)
+            val idx10 = (raw9 * 0.5).coerceIn(0.0, 100.0)
+            val a3 = 2.0.pow(-7.5 / 4.5)
+            val b3 = 2.0.pow(-(cgmMmol - 4.5) / 4.5)
+            val raw3 = 10.0 * (b3 - a3) / (1.0 - a3)
+            val idx12 = raw3.coerceIn(0.0, 10.0)
+            return max(idx9 * idx12, idx10).coerceIn(0.0, 100.0)
+        }
     }
 
     data class Decision(
@@ -299,6 +342,11 @@ class CamapsMpc(
         val horizonMean = seq.average()
         var finalU = min(hi, max(seq[0], birFloorFrac * horizonMean))
 
+        // §5 MPC::ModifyRateGlucoseRate -- the trend stage, applied to the optimiser's OUTPUT, before
+        // the ceiling and before the deadband, which is the order the binary uses.
+        val attenuation = if (observedSlopeMmolPerH != 0.0) attenuationPercent(observedSlopeMmolPerH, g0) else 0.0
+        finalU *= (100.0 - attenuation) / 100.0
+
         if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
         if (g0 <= hypoSuspendMmol) finalU = 0.0                             // kept backstop, see class doc
@@ -312,7 +360,8 @@ class CamapsMpc(
             "BIR[%s] mean %.2f | floor %.2f | → %.2f U/hr").format(
             g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)], maxFallMmolPerH(g0),
             seq.joinToString(",") { "%.2f".format(it * 60 / 1000) }, horizonMean * 60 / 1000,
-            birFloorFrac * horizonMean * 60 / 1000, finalU * 60 / 1000)
+            birFloorFrac * horizonMean * 60 / 1000, finalU * 60 / 1000) +
+            " att=%.0f%%@%.1fmmol/L/h".format(attenuation, observedSlopeMmolPerH)
         return Decision(finalU * 60.0 / 1000.0, reason, horizonMean * 60.0 / 1000.0, model.glucoseMmol(es))
     }
 }
