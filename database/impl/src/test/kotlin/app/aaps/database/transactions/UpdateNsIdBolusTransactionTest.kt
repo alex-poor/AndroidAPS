@@ -41,7 +41,7 @@ class UpdateNsIdBolusTransactionTest {
         assertThat(result.updatedNsId).hasSize(1)
         assertThat(result.updatedNsId[0]).isEqualTo(currentBolus)
 
-        verify(bolusDao).updateExistingEntry(currentBolus)
+        verify(bolusDao).update(currentBolus)
     }
 
     @Test
@@ -58,7 +58,7 @@ class UpdateNsIdBolusTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(bolusDao, never()).updateExistingEntry(any())
+        verify(bolusDao, never()).update(any())
     }
 
     @Test
@@ -73,7 +73,7 @@ class UpdateNsIdBolusTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(bolusDao, never()).updateExistingEntry(any())
+        verify(bolusDao, never()).update(any())
     }
 
     @Test
@@ -94,8 +94,8 @@ class UpdateNsIdBolusTransactionTest {
         assertThat(bolus1.interfaceIDs.nightscoutId).isEqualTo("new-1")
         assertThat(bolus2.interfaceIDs.nightscoutId).isEqualTo("new-2")
 
-        verify(bolusDao).updateExistingEntry(bolus1)
-        verify(bolusDao).updateExistingEntry(bolus2)
+        verify(bolusDao).update(bolus1)
+        verify(bolusDao).update(bolus2)
     }
 
     @Test
@@ -123,7 +123,7 @@ class UpdateNsIdBolusTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(bolusDao, never()).updateExistingEntry(any())
+        verify(bolusDao, never()).update(any())
     }
 
     @Test
@@ -165,7 +165,7 @@ class UpdateNsIdBolusTransactionTest {
         assertThat(currentBolus.interfaceIDs.nightscoutId).isEqualTo("new-ns-id")
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(bolusDao).updateExistingEntry(currentBolus)
+        verify(bolusDao).update(currentBolus)
     }
 
     @Test
@@ -182,7 +182,7 @@ class UpdateNsIdBolusTransactionTest {
         assertThat(currentBolus.interfaceIDs.nightscoutId).isNull()
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(bolusDao).updateExistingEntry(currentBolus)
+        verify(bolusDao).update(currentBolus)
     }
 
     @Test

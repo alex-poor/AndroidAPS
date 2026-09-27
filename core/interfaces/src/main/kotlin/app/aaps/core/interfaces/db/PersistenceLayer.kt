@@ -47,6 +47,16 @@ interface PersistenceLayer {
      */
     fun cleanupDatabase(keepDays: Long, deleteTrackedChanges: Boolean): String
 
+    /**
+     * Delete history copies of records whose current version is unchanged for [keepDays]. Safe for
+     * NS sync, unlike cleanupDatabase(deleteTrackedChanges = true), which deletes every copy.
+     * @return a short summary of what was removed
+     */
+    fun pruneTrackedChanges(keepDays: Long): String
+
+    /** Reclaim the file space freed by deletes (SQLite VACUUM). Slow; call rarely, off the main thread. */
+    fun vacuumDatabase()
+
     // BS
     /**
      * Get last bolus

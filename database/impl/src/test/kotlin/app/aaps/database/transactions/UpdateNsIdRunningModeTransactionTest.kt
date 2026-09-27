@@ -40,7 +40,7 @@ class UpdateNsIdRunningModeTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(runningModeDao).updateExistingEntry(current)
+        verify(runningModeDao).update(current)
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpdateNsIdRunningModeTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(runningModeDao, never()).updateExistingEntry(any())
+        verify(runningModeDao, never()).update(any())
     }
 
     @Test
@@ -72,7 +72,7 @@ class UpdateNsIdRunningModeTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(runningModeDao, never()).updateExistingEntry(any())
+        verify(runningModeDao, never()).update(any())
     }
 
     private fun createRunningMode(

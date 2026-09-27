@@ -22,6 +22,9 @@ internal interface EffectiveProfileSwitchDao : TraceableDao<EffectiveProfileSwit
     @Query("DELETE FROM $TABLE_EFFECTIVE_PROFILE_SWITCHES WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_EFFECTIVE_PROFILE_SWITCHES WHERE referenceId IN (SELECT id FROM $TABLE_EFFECTIVE_PROFILE_SWITCHES WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT id FROM $TABLE_EFFECTIVE_PROFILE_SWITCHES ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 

@@ -40,7 +40,7 @@ class UpdateNsIdBolusCalculatorResultTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(bolusCalculatorResultDao).updateExistingEntry(current)
+        verify(bolusCalculatorResultDao).update(current)
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpdateNsIdBolusCalculatorResultTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(bolusCalculatorResultDao, never()).updateExistingEntry(any())
+        verify(bolusCalculatorResultDao, never()).update(any())
     }
 
     @Test
@@ -72,7 +72,7 @@ class UpdateNsIdBolusCalculatorResultTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(bolusCalculatorResultDao, never()).updateExistingEntry(any())
+        verify(bolusCalculatorResultDao, never()).update(any())
     }
 
     private fun createBolusCalculatorResult(

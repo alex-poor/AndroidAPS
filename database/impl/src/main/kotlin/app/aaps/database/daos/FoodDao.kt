@@ -22,6 +22,9 @@ internal interface FoodDao : TraceableDao<Food> {
     @Query("DELETE FROM $TABLE_FOODS WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_FOODS WHERE referenceId IN (SELECT id FROM $TABLE_FOODS WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT id FROM $TABLE_FOODS ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 

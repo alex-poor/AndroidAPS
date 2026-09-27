@@ -42,7 +42,7 @@ class UpdateNsIdEffectiveProfileSwitchTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(effectiveProfileSwitchDao).updateExistingEntry(current)
+        verify(effectiveProfileSwitchDao).update(current)
     }
 
     @Test
@@ -59,7 +59,7 @@ class UpdateNsIdEffectiveProfileSwitchTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(effectiveProfileSwitchDao, never()).updateExistingEntry(any())
+        verify(effectiveProfileSwitchDao, never()).update(any())
     }
 
     @Test
@@ -74,7 +74,7 @@ class UpdateNsIdEffectiveProfileSwitchTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(effectiveProfileSwitchDao, never()).updateExistingEntry(any())
+        verify(effectiveProfileSwitchDao, never()).update(any())
     }
 
     private fun createEffectiveProfileSwitch(

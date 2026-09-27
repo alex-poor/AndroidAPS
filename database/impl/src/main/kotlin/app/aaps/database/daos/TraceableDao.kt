@@ -14,6 +14,16 @@ internal interface TraceableDao<T : TraceableDBEntry> : TraceableDaoWorkaround<T
     fun deleteOlderThan(than: Long): Int
     fun deleteTrackedChanges(): Int
 
+    /**
+     * Delete the history copies of records whose CURRENT version has not changed since [than].
+     *
+     * Keyed on the current row's dateCreated because that is refreshed on every edit, whereas a history
+     * copy keeps the dateCreated of the version it preserves — so "copies older than X" would delete a
+     * fresh edit's copy. NS sync finds edits by walking those copies' ids, so a copy must survive until
+     * its edit has been uploaded; a record untouched for days has long been uploaded.
+     */
+    fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Insert
     fun insert(entry: T): Long
 

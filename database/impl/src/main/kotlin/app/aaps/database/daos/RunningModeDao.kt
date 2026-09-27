@@ -22,6 +22,9 @@ internal interface RunningModeDao : TraceableDao<RunningMode> {
     @Query("DELETE FROM $TABLE_RUNNING_MODE WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_RUNNING_MODE WHERE referenceId IN (SELECT id FROM $TABLE_RUNNING_MODE WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT id FROM $TABLE_RUNNING_MODE ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 

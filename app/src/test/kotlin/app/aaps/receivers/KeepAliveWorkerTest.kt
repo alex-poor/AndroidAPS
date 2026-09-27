@@ -139,6 +139,34 @@ class KeepAliveWorkerTest : TestBaseWithProfile() {
     }
 
     @Test
+    fun `due cleanup prunes week-old tracked changes and vacuums weekly`() = runBlocking {
+        worker = createWorker()
+        whenever(preferences.get(LongNonKey.LastCleanupRun)).thenReturn(now - T.days(2).msecs())
+        whenever(preferences.get(LongNonKey.LastVacuumRun)).thenReturn(now - T.days(8).msecs())
+        whenever(persistenceLayer.cleanupDatabase(any(), any())).thenReturn("")
+        whenever(persistenceLayer.pruneTrackedChanges(any())).thenReturn("")
+
+        worker.databaseCleanup()
+
+        verify(persistenceLayer).pruneTrackedChanges(7L)
+        verify(persistenceLayer).vacuumDatabase()
+    }
+
+    @Test
+    fun `vacuum is not repeated within a week`() = runBlocking {
+        worker = createWorker()
+        whenever(preferences.get(LongNonKey.LastCleanupRun)).thenReturn(now - T.days(2).msecs())
+        whenever(preferences.get(LongNonKey.LastVacuumRun)).thenReturn(now - T.days(3).msecs())
+        whenever(persistenceLayer.cleanupDatabase(any(), any())).thenReturn("")
+        whenever(persistenceLayer.pruneTrackedChanges(any())).thenReturn("")
+
+        worker.databaseCleanup()
+
+        verify(persistenceLayer).pruneTrackedChanges(7L)
+        verify(persistenceLayer, never()).vacuumDatabase()
+    }
+
+    @Test
     fun `databaseCleanup does NOT run if it was run less than a day ago`() = runBlocking {
         // Arrange
         worker = createWorker()

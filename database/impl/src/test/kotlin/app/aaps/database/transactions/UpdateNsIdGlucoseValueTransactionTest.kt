@@ -40,7 +40,7 @@ class UpdateNsIdGlucoseValueTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(glucoseValueDao).updateExistingEntry(current)
+        verify(glucoseValueDao).update(current)
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpdateNsIdGlucoseValueTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(glucoseValueDao, never()).updateExistingEntry(any())
+        verify(glucoseValueDao, never()).update(any())
     }
 
     @Test
@@ -72,7 +72,7 @@ class UpdateNsIdGlucoseValueTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(glucoseValueDao, never()).updateExistingEntry(any())
+        verify(glucoseValueDao, never()).update(any())
     }
 
     private fun createGlucoseValue(

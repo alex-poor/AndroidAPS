@@ -22,6 +22,9 @@ internal interface StepsCountDao : TraceableDao<StepsCount> {
     @Query("DELETE FROM $TABLE_STEPS_COUNT WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_STEPS_COUNT WHERE referenceId IN (SELECT id FROM $TABLE_STEPS_COUNT WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT * FROM $TABLE_STEPS_COUNT WHERE timestamp >= :timestamp ORDER BY timestamp")
     fun getFromTime(timestamp: Long): Single<List<StepsCount>>
 

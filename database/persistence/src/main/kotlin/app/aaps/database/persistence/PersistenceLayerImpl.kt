@@ -145,6 +145,8 @@ class PersistenceLayerImpl @Inject constructor(
     override fun clearDatabases() = repository.clearDatabases()
     override fun clearApsResults() = repository.clearApsResults()
     override fun cleanupDatabase(keepDays: Long, deleteTrackedChanges: Boolean): String = repository.cleanupDatabase(keepDays, deleteTrackedChanges)
+    override fun pruneTrackedChanges(keepDays: Long): String = repository.pruneTrackedChanges(keepDays)
+    override fun vacuumDatabase() = repository.vacuum()
 
     // BS
     override fun getNewestBolus(): BS? = repository.getNewestBolus().blockingGet()?.fromDb()

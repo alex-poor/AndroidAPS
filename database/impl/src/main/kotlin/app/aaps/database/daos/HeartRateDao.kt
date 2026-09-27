@@ -21,6 +21,9 @@ internal interface HeartRateDao : TraceableDao<HeartRate> {
     @Query("DELETE FROM $TABLE_HEART_RATE WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_HEART_RATE WHERE referenceId IN (SELECT id FROM $TABLE_HEART_RATE WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT * FROM $TABLE_HEART_RATE WHERE timestamp >= :timestamp ORDER BY timestamp")
     fun getFromTime(timestamp: Long): Single<List<HeartRate>>
 

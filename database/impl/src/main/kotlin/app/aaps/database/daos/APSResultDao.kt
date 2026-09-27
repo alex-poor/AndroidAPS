@@ -22,6 +22,9 @@ internal interface APSResultDao : TraceableDao<APSResult> {
     @Query("DELETE FROM $TABLE_APS_RESULTS WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_APS_RESULTS WHERE referenceId IN (SELECT id FROM $TABLE_APS_RESULTS WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT * FROM $TABLE_APS_RESULTS WHERE dateCreated > :since AND dateCreated <= :until LIMIT :limit OFFSET :offset")
     fun getNewEntriesSince(since: Long, until: Long, limit: Int, offset: Int): List<APSResult>
 

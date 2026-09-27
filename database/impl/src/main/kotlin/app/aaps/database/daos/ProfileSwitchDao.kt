@@ -24,6 +24,9 @@ internal interface ProfileSwitchDao : ProfileSwitchDaoWorkaround {
     @Query("DELETE FROM $TABLE_PROFILE_SWITCHES WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_PROFILE_SWITCHES WHERE referenceId IN (SELECT id FROM $TABLE_PROFILE_SWITCHES WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT id FROM $TABLE_PROFILE_SWITCHES ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 

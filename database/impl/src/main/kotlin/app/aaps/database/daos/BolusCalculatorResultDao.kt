@@ -23,6 +23,9 @@ internal interface BolusCalculatorResultDao : TraceableDao<BolusCalculatorResult
     @Query("DELETE FROM $TABLE_BOLUS_CALCULATOR_RESULTS WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_BOLUS_CALCULATOR_RESULTS WHERE referenceId IN (SELECT id FROM $TABLE_BOLUS_CALCULATOR_RESULTS WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT id FROM $TABLE_BOLUS_CALCULATOR_RESULTS ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 
