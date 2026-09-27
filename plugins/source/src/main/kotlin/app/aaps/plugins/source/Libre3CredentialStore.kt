@@ -80,7 +80,7 @@ class Libre3CredentialStore @Inject constructor(
             j.put("startedEpochMs", c.startedEpochMs)
             j.put("warmupMinutes", c.warmupMinutes)
             j.put("lifeDays", c.lifeDays)
-            file.writeText(j.toString(2))
+            writeAtomically(j.toString(2))
         }.onFailure { aapsLogger.error(LTag.BGSOURCE, "Libre3: could not save credentials", it) }
     }
 
@@ -88,8 +88,10 @@ class Libre3CredentialStore @Inject constructor(
     fun updateKAuth(kAuth: ByteArray) {
         runCatching {
             val j = if (file.exists()) JSONObject(file.readText()) else JSONObject()
+            // Called on every authorisation; the kAuth usually has not changed, so usually nothing to write.
+            if (j.optString("kAuth") == kAuth.hex()) return@runCatching
             j.put("kAuth", kAuth.hex())
-            file.writeText(j.toString(2))
+            writeAtomically(j.toString(2))
         }.onFailure { aapsLogger.error(LTag.BGSOURCE, "Libre3: could not persist kAuth", it) }
     }
 
@@ -97,6 +99,20 @@ class Libre3CredentialStore @Inject constructor(
     fun clear() {
         runCatching { if (file.exists()) file.delete() }
             .onFailure { aapsLogger.error(LTag.BGSOURCE, "Libre3: could not clear credentials", it) }
+    }
+
+    /**
+     * Write via a temp file and rename. A plain writeText truncates first, so a kill mid-write (this runs
+     * several times a day on every authorisation) left invalid JSON — and [load] then fails closed,
+     * disabling the CGM source until the sensor is re-scanned.
+     */
+    private fun writeAtomically(text: String) {
+        val tmp = File(file.parentFile, "$FILE_NAME.tmp")
+        tmp.writeText(text)
+        if (!tmp.renameTo(file)) {
+            tmp.delete()
+            throw java.io.IOException("could not replace $FILE_NAME")
+        }
     }
 
     private fun String.hex(): ByteArray {
