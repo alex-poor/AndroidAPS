@@ -938,8 +938,15 @@ class MedtrumService : DaggerService(), BLECommCallback {
 
         fun onSendMessageError(reason: String, isRetryAble: Boolean) {
             aapsLogger.warn(LTag.PUMPCOMM, "onSendMessageError: " + this.toString() + "reason: $reason")
+            // Never blindly resend a BOLUS after a write that went out and came back with an error status:
+            // the patch may have received it (only the acknowledgement was lost), and a resend would then be
+            // a second bolus. Fail it instead; setBolus() queues a status read and pump history records what
+            // was really delivered. A write Android never queued ("Failed to write characteristic") is still
+            // safe to retry, because nothing reached the patch.
+            val ambiguousBolusWrite = mPacket is SetBolusPacket && reason == BLEComm.WRITE_STATUS_FAILURE
+            if (ambiguousBolusWrite) aapsLogger.warn(LTag.PUMPCOMM, "Bolus write status unknown; not resending")
             // Retry 3 times
-            if (sendRetryCounter < 3 && isRetryAble) {
+            if (sendRetryCounter < 3 && isRetryAble && !ambiguousBolusWrite) {
                 sendRetryCounter++
                 mPacket?.getRequest()?.let { bleComm.sendMessage(it) }
             } else {
