@@ -5,6 +5,7 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 
 /**
  * Clean-room replication of the CamAPS FX control law, as decoded in report/algorithm-spec.md §4-5.
@@ -19,14 +20,21 @@ import kotlin.math.min
  *
  * WHAT IS REPLICATED
  *
- *  - §5 REFERENCE TRAJECTORY. setpoint(t) = T + (G0-T)*exp(-t/tau), with the decoded per-minute zone
- *    slopes acting as a CEILING on the demanded rate of fall:
- *        glucose > 13      -> 1/24    mmol/L/min = 2.5 mmol/L/h
- *        10 < glucose <= 13 -> 0.02833 mmol/L/min = 1.7 mmol/L/h
- *        glucose <= 10      -> 1/60    mmol/L/min = 1.0 mmol/L/h
- *    This is the property the fork dropped. Unbounded, the exponential demands (G0-target)/tau*60 — at
- *    15.9 mmol/L that is 8.9 mmol/L/h, 3.6x what CamAPS would ask for, and it is what every containment
- *    guard was subsequently built to undo.
+ *  - §5 REFERENCE TRAJECTORY, transcribed from `MPC::DetermineSetPoint` (0x48b84). NOT an exponential
+ *    to target: the set-point is CLAMPED to 12.0 and then walks down by a per-minute zone slope that is
+ *    re-evaluated each step on the evolving set-point.
+ *        sp > 13       -> -1/24    mmol/L/min = -2.5 mmol/L/h    (0xBD2AAAAB)
+ *        10 < sp <= 13 -> -0.02833 mmol/L/min = -1.7 mmol/L/h    (0xBCE81B4F)
+ *        sp <= 10      -> exponential to target, half-life 60 min down / 15 min up, with a
+ *                         [target, target+2] dead zone where it holds
+ *    The 12.0 clamp is the load-bearing part. At glucose 20 the set-point starts at 12, so there is an
+ *    8 mmol/L tracking error from the first step and the optimiser saturates — which is why the real
+ *    controller needs [maximumPersonalRange] to bound it at all.
+ *
+ *    An earlier version of this file used `T + (G0-T)*exp(-t/tau)` with the zone slopes as a ceiling on
+ *    the fall. That reading started the reference AT current glucose, so it never produced a large
+ *    error, and the replica commanded 1.00 x basal at glucose 18 where the real controller commands
+ *    2.53 x. Fixing the trajectory cut the measured level-response error from 0.537 to 0.183 x basal.
  *
  *  - §4 OPTIMISER. A basal sequence over a 180-minute horizon (the decoded 180-step BIR vector),
  *    piecewise-constant, minimising tracking error against the reference plus an effort term; the FIRST
@@ -37,6 +45,20 @@ import kotlin.math.min
  *    plan that intends to suspend still suspends. Flooring on nominal instead holds basal on through
  *    falls the controller had decided to back away from — a mistake that, when made in the replay
  *    harness, inflated this arm by 69% and cut its suspend rate from 33% to 5%.
+ *
+ * NOT YET REPLICATED — AND IT SHOWS
+ *
+ *  - `MPC::ModifyRateGlucoseRate` (0x46f10, 1664 bytes). A post-processing stage applied to the
+ *    optimiser's output, keyed to the observed glucose slope: it takes `GetSlope` over TWO windows
+ *    (base span + 70 min and + 40 min) and uses the more negative, substitutes 5.5 mmol/L if the
+ *    previous CGM is over ~90 min stale, branches on glucose >= 8.0, and below 8.0 runs a chain of
+ *    rules that can only REDUCE the commanded rate. `MPC::RuleUsed(n)` records which fired — that is
+ *    the Diagnostics field in the output. The arithmetic is only partly decoded.
+ *
+ *    This is the whole trend response, and it lives OUTSIDE the MPC. Without it the measured error on
+ *    the trend probe is 0.646 x basal and does not improve when the trajectory or the ceiling are
+ *    fixed: at -3.6 mmol/L/h the real controller SUSPENDS and this replica still commands 1.32 x
+ *    basal. Do not run this on a person until that is implemented.
  *
  * WHAT IS DELIBERATELY NOT REPLICATED
  *
@@ -62,8 +84,12 @@ class CamapsMpc(
     private val nSegments: Int = 6,
     private val sweeps: Int = 2,
     private val effortWeight: Double = 0.02,
-    /** τ of the exponential approach (min). The zone ceiling below is what actually bounds it. */
-    private val refTauMin: Double = 120.0,
+    /**
+     * Minutes the real controller projects the CGM forward before clamping the initial set-point
+     * (`predictLead`, a runtime CTimeSpanMy whose value is not recovered). 0 = seed from the current
+     * estimate. Replaces the old `refTauMin`; the trajectory is no longer an exponential to target.
+     */
+    private val predictLeadMin: Double = 0.0,
     /** GetBIR floor as a fraction of the PLANNED horizon mean (decoded 0.7). */
     private val birFloorFrac: Double = 0.7,
     /**
@@ -124,6 +150,15 @@ class CamapsMpc(
         /** Binary constant `BIRasFractionOfTDD`, vaddr 0x22d88. */
         const val BIR_AS_FRACTION_OF_TDD = 0.48
 
+        /** `MPC::DetermineSetPoint` immediates. Slopes are mmol/L per MINUTE. */
+        const val SLOPE_ABOVE_13 = -1.0 / 24.0          // 0xBD2AAAAB, -2.5 mmol/L/h
+        const val SLOPE_10_TO_13 = -0.028333334252238274 // 0xBCE81B4F, -1.7 mmol/L/h
+        const val SLOPE_BELOW_10 = -1.0 / 60.0          // 0xBC888889, -1.0 mmol/L/h (exp path below 10)
+        const val SETPOINT_CLAMP_MMOL = 12.0            // fmov s9, #12.0 ; fcsel .., gt
+        /** Symbols `DownSlopeHalfTime` (0x22d2c) and `UpSlopeHalfTime` (0x22d30), minutes. */
+        const val DOWN_SLOPE_HALF_MIN = 60.0
+        const val UP_SLOPE_HALF_MIN = 15.0
+
         /** What MaximumPersonalRange assumes when GetCGMapproximate fails (immediate 5.5). */
         const val CGM_FALLBACK_MMOL = 5.5
     }
@@ -147,16 +182,56 @@ class CamapsMpc(
      * never exceeds the zone ceiling. The clamp only ever RAISES the setpoint — it can ask for less
      * insulin than the exponential would, never more.
      */
+    /**
+     * `MPC::DetermineSetPoint`, vaddr 0x48b84, transcribed. This replaced an exponential approach to
+     * target with a zone-bounded ceiling on the fall, which was a plausible reading of the decoded
+     * slopes and was wrong in the one way that mattered most.
+     *
+     * ```
+     *   sp = min(setpoint0, 12.0)                       // <- the clamp; `fmov s9,#12.0; fcsel ..,gt`
+     *   each step, re-evaluated on the EVOLVING sp:
+     *     sp > 13      ->  sp += dt * -1/24             // 0xBD2AAAAB, -2.5 mmol/L/h
+     *     sp > 10      ->  sp += dt * -0.0283333        // 0xBCE81B4F, -1.7 mmol/L/h
+     *     target <= sp <= target+2 -> hold              // dead zone
+     *     otherwise    ->  exponential to target, half-life 60 min coming down / 15 min going up
+     * ```
+     *
+     * The slopes are per MINUTE, which settles the 2x ambiguity in the decoded constants: -1/24 is an
+     * absolute 2.5 mmol/L/h, not a decay constant.
+     *
+     * **The clamp is the point.** At glucose 20 the setpoint starts at 12.0, so the controller carries
+     * an 8 mmol/L tracking error from the first step and saturates — which is why the real controller
+     * needs an external ceiling at all ([maximumPersonalRange]). The old version started the reference
+     * AT current glucose and descended from there, so it never saw a large error and never asked for
+     * much insulin. That, not the cost weights, is why the replica commanded 1.00 x basal at glucose 18
+     * where the real controller commands 2.53 x.
+     *
+     * Not replicated: the real one seeds `setpoint0` by projecting the CGM forward over `predictLead`
+     * (a runtime span, the sensor-lag lead) before clamping. [predictLeadMin] defaults to 0, i.e. seed
+     * from the current estimate, because the span's runtime value is not recovered.
+     */
     private fun referenceTrajectory(g0: Double): DoubleArray {
         val steps = horizonMin / stepMin
         val ref = DoubleArray(steps + 1)
-        ref[0] = g0
+        var sp = min(advanceSetPoint(g0, predictLeadMin), SETPOINT_CLAMP_MMOL)
+        ref[0] = sp
         for (i in 1..steps) {
-            val ideal = targetMmol + (g0 - targetMmol) * exp(-(i * stepMin).toDouble() / refTauMin)
-            val ceiling = ref[i - 1] - maxFallMmolPerH(ref[i - 1]) * stepMin / 60.0
-            ref[i] = max(ideal, min(ref[i - 1], ceiling))
+            sp = advanceSetPoint(sp, stepMin.toDouble())
+            ref[i] = sp
         }
         return ref
+    }
+
+    /** One step of the set-point recursion above. `dtMin` of 0 is a no-op, as in the binary. */
+    private fun advanceSetPoint(sp: Double, dtMin: Double): Double = when {
+        dtMin <= 0.0                              -> sp
+        sp > 13.0                                 -> sp + dtMin * SLOPE_ABOVE_13
+        sp > 10.0                                 -> sp + dtMin * SLOPE_10_TO_13
+        sp >= targetMmol && sp <= targetMmol + 2.0 -> sp          // dead zone: hold
+        else                                      -> {
+            val half = if (sp < targetMmol) UP_SLOPE_HALF_MIN else DOWN_SLOPE_HALF_MIN
+            targetMmol + (sp - targetMmol) * 2.0.pow(-dtMin / half)
+        }
     }
 
     /**
