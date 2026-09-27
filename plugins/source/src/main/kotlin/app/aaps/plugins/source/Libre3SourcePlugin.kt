@@ -42,7 +42,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.roundToInt
 
 /**
  * Native Libre 3 / 3+ BG source — AAPS talking to the sensor directly, with no Juggluco and no
@@ -296,21 +295,15 @@ class Libre3SourcePlugin @Inject constructor(
     }
 
     /**
-     * Map the sensor's own trend to AAPS's arrows. `trend == 0` means the sensor is not
-     * reporting one — that is NONE, not flat, and the two must not be conflated.
+     * Map the sensor's own trend state to AAPS's arrows, state by state.
+     *
+     * The sensor reports five states (1 falling quickly … 3 stable … 5 rising quickly), shown by Abbott as
+     * five arrows — straight down, 45° down, flat, 45° up, straight up. There is no "double" arrow. The
+     * previous rate-based mapping sent the two extreme states to DOUBLE_DOWN / DOUBLE_UP, overstating the
+     * fastest movement one step, and let the undefined 6/7 through as a double-up. 0 means the sensor is
+     * not reporting a trend — NONE, not flat.
      */
-    private fun trendOf(record: Libre3GlucoseRecord): TrendArrow {
-        val rate = record.trendMgDlPerMin ?: return TrendArrow.NONE
-        return when (rate.roundToInt()) {
-            in Int.MIN_VALUE..-3 -> TrendArrow.DOUBLE_DOWN
-            -2                   -> TrendArrow.SINGLE_DOWN
-            -1                   -> TrendArrow.FORTY_FIVE_DOWN
-            0                    -> TrendArrow.FLAT
-            1                    -> TrendArrow.FORTY_FIVE_UP
-            2                    -> TrendArrow.SINGLE_UP
-            else                 -> TrendArrow.DOUBLE_UP
-        }
-    }
+    private fun trendOf(record: Libre3GlucoseRecord): TrendArrow = libre3TrendArrow(record.trend)
 
     override fun onStart() {
         super.onStart()
@@ -495,4 +488,14 @@ class Libre3SourcePlugin @Inject constructor(
          */
         const val LIBRE3_ACCOUNT_ID: Long = 0x41415053L // "AAPS"
     }
+}
+
+/** See [Libre3SourcePlugin.trendOf]: the sensor's five trend states, one arrow each; anything else is NONE. */
+internal fun libre3TrendArrow(trend: Int): TrendArrow = when (trend) {
+    1    -> TrendArrow.SINGLE_DOWN
+    2    -> TrendArrow.FORTY_FIVE_DOWN
+    3    -> TrendArrow.FLAT
+    4    -> TrendArrow.FORTY_FIVE_UP
+    5    -> TrendArrow.SINGLE_UP
+    else -> TrendArrow.NONE
 }
