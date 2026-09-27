@@ -14,11 +14,14 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.PluginBase
 import app.aaps.core.interfaces.plugin.PluginDescription
+import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.rx.events.EventAPSCalculationFinished
+import app.aaps.core.interfaces.stats.TddCalculator
 import app.aaps.core.interfaces.utils.DateUtil
+import app.aaps.core.interfaces.utils.MidnightTime
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.target
@@ -77,6 +80,7 @@ class CamapsPlugin @Inject constructor(
     private val iobCobCalculator: IobCobCalculator,
     private val dateUtil: DateUtil,
     private val preferences: Preferences,
+    private val tddCalculator: TddCalculator,
     private val apsResultProvider: Provider<APSResult>
 ) : PluginBase(
     PluginDescription()
@@ -98,6 +102,18 @@ class CamapsPlugin @Inject constructor(
     override fun configuration(): JSONObject = JSONObject()
     override fun applyConfiguration(configuration: JSONObject) {}
     override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {}
+
+    /**
+     * Mean of the 48 half-hourly basal rates, i.e. the same array `MPC::MaximumPersonalRange` averages
+     * (`this+0x18`, 48 floats, divided by 48.0). Sampled on the half hour from the profile rather than
+     * read from a stored array, which is equivalent for a step profile.
+     */
+    private fun meanProfileBasalUhr(profile: Profile): Double {
+        val midnight = MidnightTime.calc(dateUtil.now())
+        var sum = 0.0
+        for (i in 0 until 48) sum += profile.getBasal(midnight + i * 30 * 60_000L)
+        return sum / 48.0
+    }
 
     private var cachedModel: HovorkaModel? = null
     private var cachedKey = ""
@@ -130,10 +146,22 @@ class CamapsPlugin @Inject constructor(
 
         val est = estimateState(model, nominalMuMin, now)
         val rolloutModel = est.rolloutModel() ?: model            // IMM: roll out with the winning submodel
+        // §5 MPC::MaximumPersonalRange -- the controller's own ceiling. Decoded, not fitted; see
+        // CamapsMpc.maximumPersonalRange. Needs TDD, the 24h MEAN basal and the CURRENT block, which
+        // differ on any profile with real dawn variation, so all three are passed rather than folded.
+        val tddU = tddCalculator.calculateDaily(-24, 0)?.let { if (it.totalAmount > 0.0) it.totalAmount else it.basalAmount + it.bolusAmount }
+            ?: (meanProfileBasalUhr(profile) * 24.0)          // no history yet: basal-only fallback
+        val maxRateUhr = CamapsMpc.maximumPersonalRange(
+            cgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL,
+            tddU = tddU,
+            meanBasal = meanProfileBasalUhr(profile),
+            basalNow = profile.getBasal(now)
+        )
         val decision = CamapsMpc(
             rolloutModel, targetMmol = controlTargetMmol,
             nominalBasalMuPerMin = nominalMuMin,
-            maxBasalMuPerMin = maxBasalUhr * 1000.0 / 60.0
+            maxBasalMuPerMin = maxBasalUhr * 1000.0 / 60.0,
+            maxRateMuPerMin = maxRateUhr * 1000.0 / 60.0
         ).decide(est.x)
 
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))

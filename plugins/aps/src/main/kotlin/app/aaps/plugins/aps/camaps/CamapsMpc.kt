@@ -67,13 +67,16 @@ class CamapsMpc(
     /** GetBIR floor as a fraction of the PLANNED horizon mean (decoded 0.7). */
     private val birFloorFrac: Double = 0.7,
     /**
-     * Ceiling on the command as a multiple of the profile basal. MEASURED off the real controller,
-     * not decoded: driving it at BG 20 rising hard over profile basals 0.20-3.20 U/h returns
-     * 2.500, 2.500, 2.556, 2.583, 2.529, 2.542, 2.562, 2.542, 2.547 x basal -- every one consistent
-     * with 2.55 after the pump's 0.05 U/h rounding. It never asks for more, at any glucose level.
-     * See report/camaps-measured-response.md §2.
+     * Ceiling on the command, in mu/min. DECODED from `MPC::MaximumPersonalRange` (vaddr 0x46b08) and
+     * computed by the caller -- see [maximumPersonalRange]. Pass 0 or less to fall back to
+     * [maxBasalMuPerMin] alone.
+     *
+     * This replaced a flat `2.55 x profile basal`, which was fitted to flat-profile probes and was an
+     * artefact of them: with a flat profile the real rule's 24h-mean and current-block terms coincide
+     * and it collapses to `mult x 0.85 x basal`, which at mult=3.0 is 2.55. The real rule is tiered on
+     * glucose and keyed to TDD, so on any profile with real dawn variation it is nothing like 2.55x.
      */
-    private val maxGainOverBasal: Double = 2.55,
+    private val maxRateMuPerMin: Double = 0.0,
     /**
      * Hard suspend threshold. MEASURED at 4.5: on flat glucose the real controller returns exactly
      * 0.00 U/h up to BG 4.500 and 0.79 x basal at 4.625, bang-bang with no ramp, and the threshold
@@ -84,6 +87,46 @@ class CamapsMpc(
     private val hypoSuspendMmol: Double = 4.5,
     private val deadbandFrac: Double = 0.1
 ) {
+
+    companion object {
+
+        /**
+         * `MPC::MaximumPersonalRange(float&, CTimeMy const&)`, vaddr 0x46b08, transcribed:
+         *
+         * ```
+         *   mult = cgm > 12 ? 3.0 : cgm > 8 ? 2.5 : 2.0     // cgm defaults to 5.5 when unavailable
+         *   base = max(BIRasFractionOfTDD * tdd / 24, 0.7 * mean(48 half-hourly basals))
+         *   a = mult * base ;  b = mult * basalNow
+         *   return a < b ? (a + b) / 2 : a
+         * ```
+         *
+         * `BIRasFractionOfTDD` is a binary constant, 0.48 (symbol at vaddr 0x22d88). The three
+         * multiplier tiers and the 0.7 are immediates in the function. Verified against all nine
+         * measured ceiling points (profile basal 0.20-3.20 U/h): every one reproduces exactly after
+         * the pump's 0.05 U/h rounding -- see report/camaps-measured-response.md §2.
+         *
+         * All rates in the same unit; the result comes back in that unit.
+         */
+        fun maximumPersonalRange(cgmMmol: Double, tddU: Double, meanBasal: Double,
+                                 basalNow: Double): Double {
+            val cgm = if (cgmMmol > 0.0) cgmMmol else CGM_FALLBACK_MMOL
+            val mult = when {
+                cgm > 12.0 -> 3.0
+                cgm > 8.0  -> 2.5
+                else       -> 2.0
+            }
+            val base = max(BIR_AS_FRACTION_OF_TDD * tddU / 24.0, 0.7 * meanBasal)
+            val a = mult * base
+            val b = mult * basalNow
+            return if (a < b) 0.5 * (a + b) else a
+        }
+
+        /** Binary constant `BIRasFractionOfTDD`, vaddr 0x22d88. */
+        const val BIR_AS_FRACTION_OF_TDD = 0.48
+
+        /** What MaximumPersonalRange assumes when GetCGMapproximate fails (immediate 5.5). */
+        const val CGM_FALLBACK_MMOL = 5.5
+    }
 
     data class Decision(
         val basalUPerHr: Double,
@@ -152,8 +195,8 @@ class CamapsMpc(
         val ref = referenceTrajectory(g0)
         val steps = ref.size - 1
         val segLen = max(1, steps / nSegments)
-        // AAPS's own maxBasal still applies, but the controller's own ceiling is the binding one
-        val hi = min(maxBasalMuPerMin, maxGainOverBasal * nominalBasalMuPerMin)
+        // AAPS's own maxBasal still applies; the controller's own ceiling is usually the binding one
+        val hi = if (maxRateMuPerMin > 0.0) min(maxBasalMuPerMin, maxRateMuPerMin) else maxBasalMuPerMin
         val seq = DoubleArray(nSegments) { nominalBasalMuPerMin }
         val grid = max(0.05 * 1000.0 / 60.0, hi / 40.0)
         repeat(sweeps) {
