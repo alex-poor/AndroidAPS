@@ -810,7 +810,24 @@ class MedtrumService : DaggerService(), BLECommCallback {
 
     override fun onIndication(indication: ByteArray) {
         aapsLogger.debug(LTag.PUMPCOMM, "<<<<< onIndication" + indication.contentToString())
-        currentState.onIndication(indication)
+        try {
+            currentState.onIndication(indication)
+        } catch (e: Exception) {
+            // A response the parser cannot read (short record, unknown enum value) used to throw into the
+            // GATT callback, which drops it silently: the command then sat out its full timeout (60-120 s),
+            // disconnected, and a history sync asked for the same record again next time — forever.
+            // Fail the command now, the same way each state handles a packet that reports failure.
+            aapsLogger.error(LTag.PUMPCOMM, "Malformed response in $currentState: ${indication.contentToString()}", e)
+            mPacket?.failed = true
+            val state = currentState
+            state.responseHandled = true
+            state.responseSuccess = false
+            if (state is CommandState) toState(ReadyState())
+            else {
+                disconnect("Malformed response")
+                toState(IdleState())
+            }
+        }
     }
 
     override fun onSendMessageError(reason: String, isRetryAble: Boolean) {

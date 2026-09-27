@@ -26,6 +26,7 @@ import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.pump.medtrum.comm.ManufacturerData
+import app.aaps.pump.medtrum.comm.enums.CommandType
 import app.aaps.pump.medtrum.comm.ReadDataPacket
 import app.aaps.pump.medtrum.comm.WriteCommandPackets
 import app.aaps.pump.medtrum.extension.toInt
@@ -206,9 +207,11 @@ class BLEComm @Inject internal constructor(
             aapsLogger.debug(LTag.PUMPBTCOMM, "OnScanResult!" + result)
             super.onScanResult(callbackType, result)
 
+            // Any nearby device can advertise this manufacturer ID; a short record used to throw here, on
+            // the main looper, crashing the app on every scan.
             val manufacturerData =
                 result.scanRecord?.getManufacturerSpecificData(MANUFACTURER_ID)
-                    ?.let { ManufacturerData(it) }
+                    ?.let { ManufacturerData.parse(it) }
 
             aapsLogger.debug(LTag.PUMPBTCOMM, "Found deviceSN: " + manufacturerData?.getDeviceSN())
 
@@ -395,9 +398,20 @@ class BLEComm @Inject internal constructor(
         }
     }
 
+    /**
+     * True while the message being written is the authorisation request. Its payload is the session
+     * token plus the key derived from the pump serial — enough to authenticate to the patch — and
+     * PUMPBTCOMM is on by default and lands in a log that is kept for months and sent on request.
+     */
+    @Volatile private var redactWrites = false
+
+    private fun loggable(bytes: ByteArray?): String =
+        if (redactWrites) "[AUTH_REQ, ${bytes?.size ?: 0} bytes redacted]" else bytes.contentToString()
+
     @Synchronized
     fun sendMessage(message: ByteArray) {
-        aapsLogger.debug(LTag.PUMPBTCOMM, "sendMessage message = " + message.contentToString())
+        redactWrites = message.isNotEmpty() && message[0] == CommandType.AUTH_REQ.code
+        aapsLogger.debug(LTag.PUMPBTCOMM, "sendMessage message = " + loggable(message))
         if (mWritePackets?.allPacketsConsumed() == false) {
             aapsLogger.error(LTag.PUMPBTCOMM, "sendMessage not all packets consumed!! unable to sent message!")
             return
@@ -432,7 +446,7 @@ class BLEComm @Inject internal constructor(
                                 } else {
                                     characteristic.value = data
                                     characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                                    aapsLogger.debug(LTag.PUMPBTCOMM, "writeCharacteristic: ${data.contentToString()}")
+                                    aapsLogger.debug(LTag.PUMPBTCOMM, "writeCharacteristic: ${loggable(data)}")
                                     val success = mBluetoothGatt?.writeCharacteristic(characteristic)
                                     if (success != true) {
                                         mCallback?.onSendMessageError("Failed to write characteristic", true)
