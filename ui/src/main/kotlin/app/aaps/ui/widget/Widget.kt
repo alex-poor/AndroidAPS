@@ -82,8 +82,11 @@ class Widget : AppWidgetProvider() {
         private var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
 
         fun updateWidget(context: Context, from: String) {
+            val ids = AppWidgetManager.getInstance(context)?.getAppWidgetIds(ComponentName(context, Widget::class.java))
+            // No widget placed: nothing to draw, so no broadcast through system_server and no injection.
+            if (ids == null || ids.isEmpty()) return
             context.sendBroadcast(Intent().also {
-                it.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, AppWidgetManager.getInstance(context)?.getAppWidgetIds(ComponentName(context, Widget::class.java)))
+                it.putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
                 it.putExtra("from", from)
                 it.action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
             })
