@@ -20,7 +20,12 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers
 import org.mockito.Mock
+import app.aaps.core.interfaces.pump.PumpEnactResult
+import app.aaps.core.interfaces.queue.Callback
+import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.doThrow
+import org.mockito.kotlin.spy
 import org.mockito.kotlin.whenever
 import kotlin.test.assertIs
 import kotlin.time.Duration.Companion.seconds
@@ -41,6 +46,7 @@ class QueueWorkerTest : TestBaseWithProfile() {
                 it.aapsLogger = aapsLogger
                 it.activePlugin = activePlugin
                 it.rh = rh
+                it.pumpEnactResultProvider = pumpEnactResultProvider
             }
             if (it is QueueWorker) {
                 it.aapsLogger = aapsLogger
@@ -94,5 +100,25 @@ class QueueWorkerTest : TestBaseWithProfile() {
         val result = sut.doWorkAndLog()
         assertIs<ListenableWorker.Result.Success>(result)
         assertThat(commandQueue.size()).isEqualTo(0)
+    }
+
+    @Test
+    fun `a command that throws is failed back to its caller and does not wedge the queue`() = runTest(timeout = 30.seconds) {
+        val pump = spy(testPumpPlugin)
+        doThrow(IllegalStateException("driver blew up")).whenever(pump).setTempBasalAbsolute(any(), any(), any(), any(), any())
+        whenever(activePlugin.activePump).thenReturn(pump)
+        whenever(rh.gs(app.aaps.core.ui.R.string.connectiontimedout)).thenReturn("Connection timed out")
+        var reported: PumpEnactResult? = null
+        val callback = object : Callback() {
+            override fun run() { reported = result }
+        }
+
+        commandQueue.tempBasalAbsolute(2.0, 60, true, validProfile, PumpSync.TemporaryBasalType.NORMAL, callback)
+        val result = sut.doWorkAndLog()
+
+        assertIs<ListenableWorker.Result.Success>(result)
+        assertThat(commandQueue.performing()).isNull()
+        assertThat(commandQueue.size()).isEqualTo(0)
+        assertThat(reported?.success).isFalse()
     }
 }

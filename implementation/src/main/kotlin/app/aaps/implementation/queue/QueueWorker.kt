@@ -140,8 +140,23 @@ class QueueWorker internal constructor(
                             aapsLogger.debug(LTag.PUMPQUEUE, "performing " + it.log())
                             rxBus.send(EventQueueChanged())
                             rxBus.send(EventPumpStatusChanged(it.status()))
-                            it.execute()
-                            queue.resetPerforming()
+                            try {
+                                it.execute()
+                            } catch (e: Exception) {
+                                // Without this an exception from a driver, a DB write (PumpSync's
+                                // blockingGet) or a callback skipped resetPerforming(): the command
+                                // stayed "performing" for good, this loop busy-spun holding the
+                                // wakelock, and every non-enforced TBR/bolus was refused as "already
+                                // executing" until the connection timed out.
+                                aapsLogger.error(LTag.PUMPQUEUE, "Command threw: ${it.log()}", e)
+                                // Tell the caller it failed. If the exception came from the callback
+                                // itself this reports a second time — a spurious failure beats a
+                                // caller that never hears back.
+                                runCatching { it.cancel() }
+                                    .onFailure { e2 -> aapsLogger.error(LTag.PUMPQUEUE, "Command cancel threw too", e2) }
+                            } finally {
+                                queue.resetPerforming()
+                            }
                             rxBus.send(EventQueueChanged())
                             lastCommandTime = System.currentTimeMillis()
                             SystemClock.sleep(100)
@@ -156,6 +171,14 @@ class QueueWorker internal constructor(
                     val secondsFromLastCommand = (System.currentTimeMillis() - lastCommandTime) / 1000
                     if (secondsFromLastCommand >= pump.waitForDisconnectionInSeconds()) {
                         queue.waitingForDisconnect = true
+                        // A command added between the empty check above and the flag being set saw
+                        // "work already running" and did not start new work; exiting now would
+                        // strand it until the next command arrives (up to a loop cycle). Once the
+                        // flag is set, later adds wait for this work to finish and start their own.
+                        if (queue.size() > 0) {
+                            queue.waitingForDisconnect = false
+                            continue
+                        }
                         aapsLogger.debug(LTag.PUMPQUEUE, "queue empty. disconnect")
                         rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTING))
                         pump.disconnect("Queue empty")
