@@ -228,7 +228,21 @@ class Libre3SourcePlugin @Inject constructor(
             val startedMs = credentials.load()?.startedEpochMs ?: return
             val fresh = entries.filter { it.lifeCount > lastHistoryLifeCount }
             if (fresh.isEmpty()) return
-            val gvs = fresh.map { e ->
+            lastHistoryLifeCount = fresh.maxOf { it.lifeCount }
+            // Only minutes with no reading yet. Live readings are stamped on arrival and history on the
+            // sensor clock, so the two never collide exactly and the DB's timestamp dedup cannot catch
+            // them: without this, every reconnect interleaved the sensor's lagged 5-min history values
+            // with live 1-min readings over periods already covered, and the loop saw the jitter as
+            // real movement.
+            val now = dateUtil.now()
+            val from = startedMs + fresh.minOf { it.lifeCount } * 60_000L - LIBRE3_GAP_TOLERANCE_MS
+            val existing = persistenceLayer.getBgReadingsDataFromTimeToTime(from, now, true).map { it.timestamp }
+            val toStore = libre3GapFill(fresh, startedMs, now, existing)
+            if (toStore.isEmpty()) {
+                aapsLogger.debug(LTag.BGSOURCE, "Libre3: history covered by live readings, nothing to backfill")
+                return
+            }
+            val gvs = toStore.map { e ->
                 GV(
                     timestamp = startedMs + e.lifeCount * 60_000L,
                     value = e.mgDl.toDouble(),
@@ -238,7 +252,6 @@ class Libre3SourcePlugin @Inject constructor(
                     sourceSensor = SourceSensor.LIBRE_3
                 )
             }
-            lastHistoryLifeCount = fresh.maxOf { it.lifeCount }
             backfilled += gvs.size
             update { it.copy(backfilledCount = backfilled) }
             aapsLogger.debug(LTag.BGSOURCE, "Libre3: backfilling ${gvs.size} readings")
@@ -256,6 +269,13 @@ class Libre3SourcePlugin @Inject constructor(
             // Only ask once per connection — patch status repeats.
             if (!historyRequested) {
                 historyRequested = true
+                // After a process restart the in-memory mark is 0, which asked the sensor for its whole
+                // life (up to ~4,300 readings) on every app start. Start from the newest stored reading instead.
+                if (lastHistoryLifeCount == 0) {
+                    val startedMs = credentials.load()?.startedEpochMs
+                    val newest = persistenceLayer.getLastGlucoseValue()?.timestamp
+                    if (startedMs != null) lastHistoryLifeCount = libre3HistoryFrom(startedMs, newest)
+                }
                 aapsLogger.debug(LTag.BGSOURCE, "Libre3: requesting history from $lastHistoryLifeCount")
                 client?.requestHistory(lastHistoryLifeCount)
             }
@@ -498,4 +518,34 @@ internal fun libre3TrendArrow(trend: Int): TrendArrow = when (trend) {
     4    -> TrendArrow.FORTY_FIVE_UP
     5    -> TrendArrow.SINGLE_UP
     else -> TrendArrow.NONE
+}
+
+/** A history reading within this of an existing reading is already covered (live readings are ~1 min apart). */
+internal const val LIBRE3_GAP_TOLERANCE_MS = 150_000L
+
+/**
+ * The history entries worth storing: inside the sensor's life, not in the future, and in a genuine gap —
+ * no existing reading within [LIBRE3_GAP_TOLERANCE_MS] of the entry's time.
+ */
+internal fun libre3GapFill(
+    entries: List<Libre3History.Entry>, startedMs: Long, now: Long, existingTimestamps: List<Long>
+): List<Libre3History.Entry> {
+    val existing = existingTimestamps.sorted()
+    return entries.filter { e ->
+        val ts = startedMs + e.lifeCount * 60_000L
+        if (e.lifeCount < 0 || ts > now + 60_000L) return@filter false
+        // nearest existing reading, by binary search over the sorted timestamps
+        val i = existing.binarySearch(ts).let { if (it >= 0) it else -it - 1 }
+        val near = listOfNotNull(existing.getOrNull(i - 1), existing.getOrNull(i)).minOfOrNull { kotlin.math.abs(it - ts) }
+        near == null || near > LIBRE3_GAP_TOLERANCE_MS
+    }
+}
+
+/**
+ * Where to start a history request when nothing is known in memory: ten minutes before the newest stored
+ * reading, or from the start of the sensor's life if there is none (or it predates this sensor).
+ */
+internal fun libre3HistoryFrom(startedMs: Long, newestReadingMs: Long?): Int {
+    if (newestReadingMs == null || newestReadingMs < startedMs) return 0
+    return (((newestReadingMs - startedMs) / 60_000L) - 10L).coerceAtLeast(0L).toInt()
 }
