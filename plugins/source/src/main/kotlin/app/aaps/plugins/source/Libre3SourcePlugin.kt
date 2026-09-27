@@ -23,6 +23,7 @@ import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.libre3.Libre3BleClient
 import app.aaps.libre3.Libre3GlucoseRecord
 import app.aaps.libre3.Libre3History
+import app.aaps.libre3.Libre3LagOverride
 import app.aaps.libre3.Libre3NfcActivation
 import app.aaps.libre3.Libre3NfcV
 import app.aaps.libre3.Libre3PatchStatus
@@ -88,6 +89,9 @@ class Libre3SourcePlugin @Inject constructor(
 
     /** Sensor start already recorded as a SENSOR_CHANGE, so warm-up/expiry show and we don't re-insert. */
     private var sensorStartRecorded: Long? = null
+
+    /** Manual-BG lag override: a finger-prick during a fast rise corrects the lagging sensor stream. */
+    private val lagOverride = Libre3LagOverride()
 
     /** Latest sensor lifecycle state, for the UI to show warm-up/expiry honestly. */
     var patchStatus: Libre3PatchStatus? = null
@@ -167,7 +171,13 @@ class Libre3SourcePlugin @Inject constructor(
             }
             if (record.lifeCount == lastLifeCount) return      // repeat of the same minute
             lastLifeCount = record.lifeCount
-            lastReadingAt = dateUtil.now()
+            val now = dateUtil.now()
+            lastReadingAt = now
+            // Feed the raw reading to the lag override; the value stored is corrected only while an
+            // override is active (raw otherwise). The override keeps its slope on the RAW stream.
+            val stored = lagOverride.onReading(now, record.readingMgDl)
+            if (stored != record.readingMgDl)
+                aapsLogger.info(LTag.BGSOURCE, "Libre3: lag override ${record.readingMgDl} -> $stored mg/dL")
             update {
                 it.copy(
                     connection = Libre3SensorState.Connection.Connected,
@@ -178,8 +188,8 @@ class Libre3SourcePlugin @Inject constructor(
             }
 
             val gv = GV(
-                timestamp = dateUtil.now(),
-                value = record.readingMgDl.toDouble(),
+                timestamp = now,
+                value = stored.toDouble(),
                 raw = null,
                 noise = null,
                 trendArrow = trendOf(record),
@@ -250,6 +260,9 @@ class Libre3SourcePlugin @Inject constructor(
             // status 147 (GATT_CONNECTION_TIMEOUT) is ROUTINE on this sensor — it drops and
             // returns by itself. Surfacing it as an error would cry wolf several times a day.
             historyRequested = false          // ask again on the next connection
+            // Drop any active lag override across the gap (a stale correction is unsafe); keep the
+            // reading window so it can re-arm without waiting for a full refill on the same sensor.
+            lagOverride.cancel()
             update {
                 it.copy(
                     connection = Libre3SensorState.Connection.Connecting,
@@ -315,6 +328,40 @@ class Libre3SourcePlugin @Inject constructor(
     }
 
     /**
+     * Feed a finger-prick BG (mg/dL) as ground truth. On a fast rise the lagging sensor reads low and
+     * the loop under-doses; this arms the lag override — the finger-prick is inserted immediately as
+     * the current BG, and a decaying correction is carried onto subsequent sensor readings until the
+     * rise resolves (see [Libre3LagOverride]). Returns the arm result so the UI can explain what
+     * happened (armed, or why not). If it doesn't arm, nothing is inserted here — log it as a normal
+     * BG check instead.
+     */
+    fun applyManualBg(manualMgdl: Int, timeMs: Long = dateUtil.now()): Libre3LagOverride.ArmResult {
+        val arm = lagOverride.armFromManualBg(timeMs, manualMgdl)
+        if (arm is Libre3LagOverride.ArmResult.Armed) {
+            val gv = GV(
+                timestamp = timeMs,
+                value = manualMgdl.toDouble(),
+                raw = null,
+                noise = null,
+                trendArrow = TrendArrow.NONE,
+                sourceSensor = SourceSensor.LIBRE_3
+            )
+            persistenceLayer.insertCgmSourceData(Sources.Libre3, listOf(gv), emptyList(), null)
+                .subscribe({ }, { aapsLogger.error(LTag.BGSOURCE, "Libre3: manual BG insert failed", it) })
+            aapsLogger.info(
+                LTag.BGSOURCE,
+                "Libre3: lag override armed, gap=${arm.gapMgdl} mg/dL${if (arm.clamped) " (clamped)" else ""}"
+            )
+        } else {
+            aapsLogger.debug(
+                LTag.BGSOURCE,
+                "Libre3: manual BG not armed: ${(arm as Libre3LagOverride.ArmResult.Rejected).reason}"
+            )
+        }
+        return arm
+    }
+
+    /**
      * Read the scanned tag's patch info — a pure NFC read, safe to run so the UI can show the user
      * exactly what a scan will do (fresh sensor → activate, running sensor → take over) before they
      * commit. Runs on the caller's (background) thread; NFC I/O must not touch the main thread.
@@ -334,6 +381,7 @@ class Libre3SourcePlugin @Inject constructor(
         if (result is Libre3NfcActivation.Result.Activated) {
             client?.disconnect(); client = null
             lastLifeCount = -1; lastHistoryLifeCount = 0; backfilled = 0; sensorStartRecorded = null
+            lagOverride.reset()                              // new sensor — old readings/override void
             credentials.save(
                 Libre3CredentialStore.Credentials(
                     serial = result.serialNumber,
@@ -369,6 +417,7 @@ class Libre3SourcePlugin @Inject constructor(
         lastLifeCount = -1
         lastHistoryLifeCount = 0
         backfilled = 0
+        lagOverride.reset()
         update { Libre3SensorState() }
         aapsLogger.debug(LTag.BGSOURCE, "Libre3: sensor stopped by user")
     }
@@ -380,6 +429,7 @@ class Libre3SourcePlugin @Inject constructor(
         client?.disconnect()
         client = null
         lastLifeCount = -1
+        lagOverride.reset()
         update { Libre3SensorState() }
         super.onStop()
     }

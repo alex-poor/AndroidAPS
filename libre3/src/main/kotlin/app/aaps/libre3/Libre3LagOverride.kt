@@ -116,7 +116,12 @@ class Libre3LagOverride(val cfg: Config = Config()) {
         return ArmResult.Armed(effGap, clamped)
     }
 
-    /** Drop any active override — e.g. on sensor change or disconnect. */
+    /** Drop an active override but keep the reading window — for a disconnect on the same sensor. */
+    fun cancel() {
+        active = null
+    }
+
+    /** Drop the override and clear the window — for a sensor change. */
     fun reset() {
         active = null
         window.clear()
