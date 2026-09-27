@@ -106,7 +106,7 @@ class CommandQueueImplementation @Inject constructor(
     internal var handler = Handler(HandlerThread(this::class.simpleName + "Handler").also { it.start() }.looper)
 
     private val queue = LinkedList<Command>()
-    override var waitingForDisconnect = false
+    @Volatile override var waitingForDisconnect = false
 
     @Volatile var performing: Command? = null
 
