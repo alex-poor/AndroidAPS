@@ -65,3 +65,38 @@ class AttenuationTest {
             }
     }
 }
+
+/**
+ * CONTRACT for the glucose < 8.0 branch of `MPC::ModifyRateGlucoseRate` (0x472b8..0x474f0): a cap at
+ * 0.2 x profile basal that REPLACES the attenuation rather than adding to it.
+ *
+ * The replacement is the part worth pinning. It is natural to assume a low-glucose rule can only make
+ * the controller more cautious, and here it does the opposite: the binary returns straight after
+ * capping, so it skips an attenuation that at low glucose falling fast would have reached 100% and
+ * suspended outright. A replica that attenuates everywhere is MORE conservative than the real
+ * controller in exactly this corner.
+ */
+class SustainedFallCapTest {
+
+    @org.junit.jupiter.api.Test
+    fun `the cap is 20 percent of profile basal and the attenuation would have been harsher`() {
+        // at BG 7 falling 3.0 mmol/L/h the attenuation is a full suspend ...
+        assertEquals(100.0, CamapsMpc.attenuationPercent(-3.0, 7.0), 1e-9)
+        // ... so capping at 0.2 x basal instead leaves MORE insulin, not less
+        assertTrue(CamapsMpc.SUSTAINED_FALL_CAP_FRAC > 0.0,
+            "the cap must leave insulin running, otherwise it is indistinguishable from a suspend")
+        assertEquals(0.2, CamapsMpc.SUSTAINED_FALL_CAP_FRAC, 1e-9)
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `thresholds match the binary immediates`() {
+        assertEquals(8.0, CamapsMpc.SUSTAINED_FALL_GLUCOSE_MMOL, 1e-9)   // fmov s0, #8.0
+        assertEquals(-1.2, CamapsMpc.SUSTAINED_FALL_SLOPE, 1e-9)         // 0xBF99999A
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `the onset slope is the same constant the attenuation turns on at`() {
+        // both the sub-8 chain and raw9's zero crossing sit at -1.2 mmol/L/h
+        assertEquals(0.0, CamapsMpc.attenuationPercent(CamapsMpc.SUSTAINED_FALL_SLOPE, 10.0), 1e-9)
+    }
+}

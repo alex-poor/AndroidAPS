@@ -51,14 +51,18 @@ import kotlin.math.pow
  *  - `MPC::ModifyRateGlucoseRate` (0x46f10, 1664 bytes). A post-processing stage applied to the
  *    optimiser's output, keyed to the observed glucose slope: it takes `GetSlope` over TWO windows
  *    (base span + 70 min and + 40 min) and uses the more negative, substitutes 5.5 mmol/L if the
- *    previous CGM is over ~90 min stale, branches on glucose >= 8.0, and below 8.0 runs a chain of
- *    rules that can only REDUCE the commanded rate. `MPC::RuleUsed(n)` records which fired — that is
- *    the Diagnostics field in the output. The arithmetic is only partly decoded.
+ *    previous CGM is over ~90 min stale. Both of its paths are now implemented — see
+ *    [attenuationPercent] and [SUSTAINED_FALL_CAP_FRAC]. `MPC::RuleUsed(n)` records which rule fired;
+ *    that is the Diagnostics field in the output.
  *
- *    This is the whole trend response, and it lives OUTSIDE the MPC. Without it the measured error on
- *    the trend probe is 0.646 x basal and does not improve when the trajectory or the ceiling are
- *    fixed: at -3.6 mmol/L/h the real controller SUSPENDS and this replica still commands 1.32 x
- *    basal. Do not run this on a person until that is implemented.
+ *    This is the whole trend response and it lives OUTSIDE the MPC, on its output. Adding it took the
+ *    measured trend error from 0.646 to 0.522 x basal. What remains there is the RISING arm, where this
+ *    replica is flat (1.38-1.45 x basal) against the real controller's 1.88-2.12: attenuation can only
+ *    reduce, so that residual is the plant difference, not this stage.
+ *
+ *    STILL A BAR TO RUNNING THIS ON A PERSON: the sub-8 path is approximated with a single slope
+ *    estimate where the binary requires the fall to have persisted across four windows, and the plant
+ *    difference above is unaddressed.
  *
  * WHAT IS DELIBERATELY NOT REPLICATED
  *
@@ -162,6 +166,27 @@ class CamapsMpc(
         const val SLOPE_10_TO_13 = -0.028333334252238274 // 0xBCE81B4F, -1.7 mmol/L/h
         const val SLOPE_BELOW_10 = -1.0 / 60.0          // 0xBC888889, -1.0 mmol/L/h (exp path below 10)
         const val SETPOINT_CLAMP_MMOL = 12.0            // fmov s9, #12.0 ; fcsel .., gt
+        /**
+         * The glucose < 8.0 branch of `MPC::ModifyRateGlucoseRate` (0x472b8..0x474f0). The binary tests
+         * `GetSlope` over FOUR successive look-back windows, each x60 into mmol/L/h, each against
+         * -1.2 (immediate 0xBF99999A); only if all four are below it does it cap the command at
+         * 0.2 x `GetBIRpump(now)` (immediate 0x3E4CCCCD), downward only, and then RETURN -- skipping
+         * the attenuation entirely.
+         *
+         * That last detail matters and is easy to get backwards: where this fires, the real controller
+         * ends up with MORE insulin than [attenuationPercent] would leave, since at low glucose falling
+         * fast the attenuation reaches 100%. So this path makes the replica LESS conservative than a
+         * blanket attenuation would, not more.
+         *
+         * APPROXIMATION: we have one slope estimate, not four windows, so "sustained" is not actually
+         * tested -- a single fast-falling sample triggers it where the binary would require the fall to
+         * have persisted. That is the conservative direction for the cap but the wrong direction for
+         * skipping the attenuation, so it is a real deviation, not a harmless one.
+         */
+        const val SUSTAINED_FALL_GLUCOSE_MMOL = 8.0
+        const val SUSTAINED_FALL_SLOPE = -1.2
+        const val SUSTAINED_FALL_CAP_FRAC = 0.2
+
         /** Symbols `DownSlopeHalfTime` (0x22d2c) and `UpSlopeHalfTime` (0x22d30), minutes. */
         const val DOWN_SLOPE_HALF_MIN = 60.0
         const val UP_SLOPE_HALF_MIN = 15.0
@@ -342,10 +367,17 @@ class CamapsMpc(
         val horizonMean = seq.average()
         var finalU = min(hi, max(seq[0], birFloorFrac * horizonMean))
 
-        // §5 MPC::ModifyRateGlucoseRate -- the trend stage, applied to the optimiser's OUTPUT, before
-        // the ceiling and before the deadband, which is the order the binary uses.
-        val attenuation = if (observedSlopeMmolPerH != 0.0) attenuationPercent(observedSlopeMmolPerH, g0) else 0.0
-        finalU *= (100.0 - attenuation) / 100.0
+        // §5 MPC::ModifyRateGlucoseRate -- the trend stage, on the optimiser's OUTPUT, before the
+        // ceiling and the deadband, which is the order the binary uses. Two mutually exclusive paths.
+        var attenuation = 0.0
+        if (g0 < SUSTAINED_FALL_GLUCOSE_MMOL && observedSlopeMmolPerH < SUSTAINED_FALL_SLOPE) {
+            // low AND sustained fall -> cap at 20% of profile basal, and the binary RETURNS here
+            // without attenuating. Downward only.
+            finalU = min(finalU, SUSTAINED_FALL_CAP_FRAC * nominalBasalMuPerMin)
+        } else if (observedSlopeMmolPerH != 0.0) {
+            attenuation = attenuationPercent(observedSlopeMmolPerH, g0)
+            finalU *= (100.0 - attenuation) / 100.0
+        }
 
         if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
