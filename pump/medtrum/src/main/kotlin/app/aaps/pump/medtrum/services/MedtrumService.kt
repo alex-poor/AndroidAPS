@@ -110,7 +110,16 @@ class MedtrumService : DaggerService(), BLECommCallback {
     private val disposable = CompositeDisposable()
     private val mBinder: IBinder = LocalBinder()
 
-    private var currentState: State = IdleState()
+    // Written by the BLE callback thread, read by the queue / stopBolus / activation threads.
+    @Volatile private var currentState: State = IdleState()
+
+    /**
+     * Serialises send-and-wait. Three threads can issue commands — the command queue, stopBolus (its own
+     * thread) and activation (a coroutine) — and "check ReadyState, then enter CommandState" was not atomic:
+     * two could pass the check, the second overwrote mPacket, and BLEComm dropped its message silently, so
+     * that caller sat out the full timeout and disconnected. BLE callbacks never take this lock.
+     */
+    private val sendLock = Any()
     private var mPacket: MedtrumPacket? = null
 
     private val scope = CoroutineScope(Dispatchers.Default)
@@ -868,7 +877,7 @@ class MedtrumService : DaggerService(), BLECommCallback {
         currentState.onEnter()
     }
 
-    private fun sendPacketAndGetResponse(packet: MedtrumPacket, timeout: Long = COMMAND_DEFAULT_TIMEOUT_SEC): Boolean {
+    private fun sendPacketAndGetResponse(packet: MedtrumPacket, timeout: Long = COMMAND_DEFAULT_TIMEOUT_SEC): Boolean = synchronized(sendLock) {
         var result = false
         if (currentState is ReadyState) {
             toState(CommandState())
@@ -879,14 +888,14 @@ class MedtrumService : DaggerService(), BLECommCallback {
         } else {
             aapsLogger.error(LTag.PUMPCOMM, "Send packet attempt when in state: $currentState")
         }
-        return result
+        result
     }
 
     // State class
     private abstract inner class State {
 
-        var responseHandled = false
-        var responseSuccess = false
+        @Volatile var responseHandled = false
+        @Volatile var responseSuccess = false
         var sendRetryCounter = 0
 
         open fun onEnter() {
