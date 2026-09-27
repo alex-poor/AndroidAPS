@@ -112,6 +112,17 @@ class NSClientV3Service : DaggerService() {
         alarmSocket = null
     }
 
+    /**
+     * The library default reconnects every 1-5 s forever. This Nightscout sits behind a Tailscale mesh,
+     * so while the mesh is down that was a DNS lookup and connect attempt every few seconds, all day.
+     * Back off to two minutes instead; the REST path has its own 30 s -> 30 min backoff.
+     */
+    private fun wsOptions(): IO.Options = IO.Options.builder()
+        .setReconnectionDelay(5_000)
+        .setReconnectionDelayMax(120_000)
+        .setRandomizationFactor(0.5)
+        .build()
+
     @Suppress("SameParameterValue")
     fun initializeWebSockets(reason: String) {
         if (preferences.get(StringKey.NsClientUrl).isEmpty()) return
@@ -124,7 +135,7 @@ class NSClientV3Service : DaggerService() {
         } else {
             try {
                 // java io.client doesn't support multiplexing. create 2 sockets
-                storageSocket = IO.socket(urlStorage).also { socket ->
+                storageSocket = IO.socket(urlStorage, wsOptions()).also { socket ->
                     socket.on(Socket.EVENT_CONNECT, onConnectStorage)
                     socket.on(Socket.EVENT_DISCONNECT, onDisconnectStorage)
                     rxBus.send(EventNSClientNewLog("► WS", "do connect storage $reason"))
@@ -136,7 +147,7 @@ class NSClientV3Service : DaggerService() {
                 if (preferences.get(BooleanKey.NsClientNotificationsFromAnnouncements) ||
                     preferences.get(BooleanKey.NsClientNotificationsFromAlarms)
                 )
-                    alarmSocket = IO.socket(urlAlarm).also { socket ->
+                    alarmSocket = IO.socket(urlAlarm, wsOptions()).also { socket ->
                         socket.on(Socket.EVENT_CONNECT, onConnectAlarms)
                         socket.on(Socket.EVENT_DISCONNECT, onDisconnectAlarm)
                         rxBus.send(EventNSClientNewLog("► WS", "do connect alarm $reason"))

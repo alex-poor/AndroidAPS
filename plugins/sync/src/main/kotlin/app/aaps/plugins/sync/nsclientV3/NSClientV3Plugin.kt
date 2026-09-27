@@ -189,6 +189,12 @@ class NSClientV3Plugin @Inject constructor(
      * workers, which otherwise each logged a full stack per attempt.
      */
     fun noteSyncFailure(e: Exception) {
+        // One sync pass walks ~13 collections, and with the server down each of them fails. Count the pass
+        // once: without this the backoff exponent jumped by the number of pending collections per run.
+        if (uploadBackoffActive()) {
+            aapsLogger.debug(LTag.NSCLIENT, "Sync failure inside the current backoff window: ${e.javaClass.simpleName}")
+            return
+        }
         uploadFailures++
         // 30 s doubling to a 30 min ceiling
         val delay = (UPLOAD_BACKOFF_BASE_MS shl (uploadFailures - 1).coerceAtMost(6)).coerceAtMost(UPLOAD_BACKOFF_MAX_MS)
