@@ -277,6 +277,8 @@ class MedtrumPump @Inject constructor(
 
     var bolusProgressLastTimeStamp: Long = 0 // timestamp of last bolus progress message
     var bolusStopped = false // bolus stopped by user
+    /** True only when the pump ACKNOWLEDGED the cancel; a stop that never reached it must not zero the bolus. */
+    @Volatile var bolusCancelAcked = false
     var bolusDone = true // Bolus completed or stopped on pump, initialize as true as to don't show bolus on init
     var bolusErrorReason: String? = null
 
