@@ -5,6 +5,14 @@ import kotlin.experimental.and
 
 class ManufacturerData(manufacturerDataBytes: ByteArray) {
 
+    companion object {
+
+        const val MIN_SIZE = 6
+
+        /** Null for a record too short to hold the serial, type and version (anything can advertise). */
+        fun parse(bytes: ByteArray): ManufacturerData? = if (bytes.size >= MIN_SIZE) ManufacturerData(bytes) else null
+    }
+
     private var deviceID: Long = 0
     private var deviceType = 0
     private var version = 0

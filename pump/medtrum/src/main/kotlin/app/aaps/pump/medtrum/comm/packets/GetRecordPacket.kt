@@ -156,7 +156,10 @@ class GetRecordPacket(injector: HasAndroidInjector, private val recordIndex: Int
         val bolusIOB = data.copyOfRange(RESP_RECORD_DATA_START + 22, RESP_RECORD_DATA_START + 24).toInt()
         val unknown1 = data.copyOfRange(RESP_RECORD_DATA_START + 24, RESP_RECORD_DATA_START + 26).toInt()
         val unknown2 = data.copyOfRange(RESP_RECORD_DATA_START + 26, RESP_RECORD_DATA_START + 28).toInt()
-        val bolusType = enumValues<BolusType>()[typeAndWizard and 0x0F]
+        // Unknown type: fail the record loudly (MedtrumService.onIndication turns this into a failed command
+        // and the sync reports it) rather than skip it — a silently dropped bolus record under-counts IOB.
+        val bolusType = enumValues<BolusType>().getOrNull(typeAndWizard and 0x0F)
+            ?: throw IllegalStateException("GetRecordPacket: unknown bolus type ${typeAndWizard and 0x0F}")
         val bolusWizard = (typeAndWizard and 0xF0) != 0
         aapsLogger.debug(
             LTag.PUMPCOMM,
@@ -267,7 +270,9 @@ class GetRecordPacket(injector: HasAndroidInjector, private val recordIndex: Int
 
         val basalStartTime = medtrumTimeUtil.convertPumpTimeToSystemTimeMillis(data.copyOfRange(RESP_RECORD_DATA_START, RESP_RECORD_DATA_START + 4).toLong())
         val basalEndTime = medtrumTimeUtil.convertPumpTimeToSystemTimeMillis(data.copyOfRange(RESP_RECORD_DATA_START + 4, RESP_RECORD_DATA_START + 8).toLong())
-        val basalType = enumValues<BasalType>()[data.copyOfRange(RESP_RECORD_DATA_START + 8, RESP_RECORD_DATA_START + 9).toInt()]
+        val basalTypeInt = data.copyOfRange(RESP_RECORD_DATA_START + 8, RESP_RECORD_DATA_START + 9).toInt()
+        val basalType = enumValues<BasalType>().getOrNull(basalTypeInt)
+            ?: throw IllegalStateException("GetRecordPacket: unknown basal type $basalTypeInt")
         val basalEndReasonInt = data.copyOfRange(RESP_RECORD_DATA_START + 9, RESP_RECORD_DATA_START + 10).toInt()
         val basalEndReason = enumValues<BasalEndReason>().getOrNull(basalEndReasonInt)
         val basalRate = data.copyOfRange(RESP_RECORD_DATA_START + 10, RESP_RECORD_DATA_START + 12).toInt() * 0.05
