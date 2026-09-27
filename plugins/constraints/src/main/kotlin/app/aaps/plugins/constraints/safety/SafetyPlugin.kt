@@ -40,6 +40,7 @@ import app.aaps.plugins.constraints.R
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.max
 
 @Singleton
 class SafetyPlugin @Inject constructor(
@@ -102,6 +103,12 @@ class SafetyPlugin @Inject constructor(
     override fun applyBasalConstraints(absoluteRate: Constraint<Double>, profile: Profile): Constraint<Double> {
         absoluteRate.setIfGreater(0.0, rh.gs(app.aaps.core.ui.R.string.limitingbasalratio, 0.0, rh.gs(app.aaps.core.ui.R.string.itmustbepositivevalue)), this)
         absoluteRate.setIfSmaller(hardLimits.maxBasal(), rh.gs(app.aaps.core.ui.R.string.limitingbasalratio, hardLimits.maxBasal(), rh.gs(R.string.hardlimit)), this)
+        // The user's max-basal setting, enforced here as well as inside the algorithm. It was only ever
+        // applied by the OpenAPS-SMB plugin, which is disabled whenever another APS (HovorkaMPC) runs,
+        // leaving the algorithm's own clamp as the sole user-level limit — not independent of the code it
+        // is meant to bound. Same rule as OpenAPS: never below the profile's own max daily basal.
+        val userMaxBasal = max(preferences.get(DoubleKey.ApsMaxBasal), profile.getMaxDailyBasal())
+        absoluteRate.setIfSmaller(userMaxBasal, rh.gs(app.aaps.core.ui.R.string.limitingbasalratio, userMaxBasal, rh.gs(R.string.maxvalueinpreferences)), this)
         val pump = activePlugin.activePump
         // check for pump max
         if (pump.pumpDescription.tempBasalStyle == PumpDescription.ABSOLUTE) {
