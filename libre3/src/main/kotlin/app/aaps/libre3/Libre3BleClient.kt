@@ -112,12 +112,43 @@ class Libre3BleClient(
         if (!authorized) {
             // Still not up after the grace period — tear the attempt down and try again rather
             // than waiting for a callback that may never arrive.
-            scheduleReconnect()
+            reconnectAfterFault()
         }
     }
 
     /** Set once the handshake completes; cleared on disconnect. Drives the watchdog. */
     private var authorized = false
+
+    /**
+     * Once authorised, the sensor sends a glucose record every minute. A link that stays up but
+     * stops delivering — a CCCD that did not take, a glucose stream that lost its frame
+     * alignment — produces no callback at all, so without this the CGM feed would end silently
+     * while the connection looked healthy.
+     */
+    private fun armDataWatchdog() {
+        handler.removeCallbacks(dataWatchdog)
+        handler.postDelayed(dataWatchdog, DATA_WATCHDOG_MS)
+    }
+
+    private val dataWatchdog = Runnable {
+        if (stopping || !authorized) return@Runnable
+        listener.onError("no data for ${DATA_WATCHDOG_MS / 60_000} min on a live link — reconnecting")
+        reconnectAfterFault()
+    }
+
+    /**
+     * Tear down and retry after a fault WE detected (watchdog, protocol failure, failed CCCD).
+     *
+     * Closing the gatt ourselves means no STATE_DISCONNECTED callback will follow, so the listener
+     * is told here — otherwise it keeps believing the link is up (history flag, lag override).
+     * Never [disconnect]: that means "the user asked us to stop" and disables reconnection for good.
+     */
+    private fun reconnectAfterFault() {
+        if (stopping) return
+        val wasOpen = gatt != null
+        scheduleReconnect()
+        if (wasOpen) listener.onDisconnected(STATUS_LOCAL_FAULT)
+    }
 
     fun disconnect() {
         stopping = true
@@ -140,7 +171,12 @@ class Libre3BleClient(
     private fun scheduleReconnect() {
         if (stopping) return
         handler.removeCallbacks(watchdog)
+        handler.removeCallbacks(dataWatchdog)
         authorized = false
+        opQueue.clear()
+        opInFlight.set(false)
+        glucoseFilled = 0
+        reassembler = null
         gatt?.disconnect()
         gatt?.close()
         gatt = null
@@ -235,6 +271,13 @@ class Libre3BleClient(
     override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
         val wasLast = d.characteristic.uuid == Libre3Gatt.SEC_CHAR_CERT_DATA
         opDone()
+        if (status != BluetoothGatt.GATT_SUCCESS) {
+            // A notification that did not enable is a channel we will never hear on: a stalled
+            // handshake if it is a security one, a silent data stream if it is a data one.
+            listener.onError("enabling notifications on ${d.characteristic.uuid} failed: $status")
+            reconnectAfterFault()
+            return
+        }
         if (wasLast) beginHandshake()
     }
 
@@ -268,11 +311,18 @@ class Libre3BleClient(
                 enableNotifications(Libre3Gatt.CHAR_PATCH_STATUS)
                 authorized = true
                 handler.removeCallbacks(watchdog)
+                armDataWatchdog()
+                // Resume with this kAuth next time. The owner only sets storedKAuth when it builds
+                // the client, so after a fresh pairing every later reconnect would otherwise pair
+                // from scratch again — which a sensor may refuse.
+                storedKAuth = step.kAuth
                 listener.onAuthorized(step.kAuth)
             }
             is Libre3SecuritySession.Step.Failed     -> {
+                // Retry, never disconnect(): one dropped security notification or echo mismatch
+                // must not end the CGM feed until the app is restarted.
                 listener.onError(step.reason)
-                disconnect()
+                reconnectAfterFault()
             }
         }
     }
@@ -380,7 +430,7 @@ class Libre3BleClient(
         when (val result = r.offer(value)) {
             is Libre3Framing.Reassembler.Result.NeedMore -> Unit
             is Libre3Framing.Reassembler.Result.Error    -> {
-                listener.onError("reassembly: ${result.reason}"); disconnect()
+                listener.onError("reassembly: ${result.reason}"); reconnectAfterFault()
             }
             is Libre3Framing.Reassembler.Result.Complete -> {
                 reassembler = null
@@ -406,7 +456,13 @@ class Libre3BleClient(
     }
 
     private fun onGlucoseFrame(value: ByteArray) {
-        if (glucoseFilled + value.size > GLUCOSE_FRAME_SIZE) glucoseFilled = 0   // resync
+        // The record is split at the ATT payload size, so its FIRST notification is always the
+        // full-size one (20 bytes at the default MTU, all 35 with a larger one). Anchoring on that
+        // keeps a lost notification from shifting every later record by one chunk — 15 + 20 is
+        // also 35 bytes, and would fail authentication every minute on a link that stays up.
+        if (value.size >= MIN_FIRST_GLUCOSE_CHUNK) glucoseFilled = 0
+        else if (glucoseFilled == 0) return                                        // stray tail
+        if (glucoseFilled + value.size > GLUCOSE_FRAME_SIZE) { glucoseFilled = 0; return }
         value.copyInto(glucoseFrame, glucoseFilled)
         glucoseFilled += value.size
         if (glucoseFilled < GLUCOSE_FRAME_SIZE) return
@@ -416,6 +472,7 @@ class Libre3BleClient(
             listener.onError("glucose frame failed authentication")
             return
         }
+        armDataWatchdog()
         listener.onGlucoseRecord(plain)
         // Cheap, and only meaningful right after a packet — piggyback as Juggluco does.
         gatt?.readRemoteRssi()
@@ -449,12 +506,14 @@ class Libre3BleClient(
         val plain = session.decrypt(Libre3Gatt.Channel.HISTORIC, value)
         if (plain == null) { listener.onError("history frame failed authentication"); return }
         val entries = Libre3History.parseHistory(plain)
+        armDataWatchdog()
         if (entries.isNotEmpty()) listener.onHistory(entries)
     }
 
     private fun onPatchStatusFrame(value: ByteArray) {
         val plain = session.decrypt(Libre3Gatt.Channel.PATCH_STATUS, value)
         if (plain == null) { listener.onError("patch status frame failed authentication"); return }
+        armDataWatchdog()
         Libre3PatchStatus.parse(plain)?.let(listener::onPatchStatus)
     }
 
@@ -467,6 +526,19 @@ class Libre3BleClient(
         private const val CONNECT_WATCHDOG_MS = 45_000L
         private const val RECONNECT_BASE_DELAY_MS = 2_000L
         private const val RECONNECT_MAX_DELAY_MS = 60_000L
+
+        /**
+         * Ten minutes with no authenticated data frame of any kind on a link that is up is a stall,
+         * not a quiet sensor. Deliberately generous: whether a sensor in warm-up still sends a frame
+         * every minute is unverified, and a false trip only costs one reconnect.
+         */
+        private const val DATA_WATCHDOG_MS = 10 * 60_000L
+
+        /** Smallest notification that can start a glucose record: a full ATT payload at the default MTU. */
+        private const val MIN_FIRST_GLUCOSE_CHUNK = 20
+
+        /** Reported to [Listener.onDisconnected] when we closed the link ourselves after a fault. */
+        const val STATUS_LOCAL_FAULT = -1
 
         /**
          * Wire size of one 1-minute glucose record: 29 bytes of plaintext plus the session
