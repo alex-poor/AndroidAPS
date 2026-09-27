@@ -138,8 +138,11 @@ class CamapsPlugin @Inject constructor(
         // model identified from the titrated profile, anchored so nominal basal holds the profile target
         val key = "%.1f/%.1f/%.2f/%.4f/%.2f".format(weightKg, isfMgdl, icGPerU, nominalUhr, profileTargetMmol)
         if (key != cachedKey) {
-            cachedModel = HovorkaModel(HovorkaParams.personalize(
-                weightKg, isfMgdl, icGPerU, nominalUhr, profileTargetMmol, tMaxGmin = TMAXG_MIN))
+            cachedModel = CamapsModel(
+                HovorkaParams.personalize(
+                    weightKg, isfMgdl, icGPerU, nominalUhr, profileTargetMmol, tMaxGmin = TMAXG_MIN),
+                basalUPerHr = nominalUhr, isfMmolPerU = isfMgdl / MGDL_PER_MMOL,
+                targetMmol = profileTargetMmol, egpHalfMuPerL = EGP_HALF_MU_PER_L)
             cachedKey = key
         }
         val model = cachedModel ?: return
@@ -242,9 +245,9 @@ class CamapsPlugin @Inject constructor(
         val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
         val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
         val profile = profileFunction.getProfile()!!
-        val fluxModel = EgpFluxModel(model.p)
+        // the SAME model class the rollout uses, so estimator and controller cannot disagree
         val est: GlucoseEstimator = HovorkaEkf(
-            fluxModel, fluxModel.steadyState(nominalMuMin),
+            model, model.steadyState(nominalMuMin),
             unclampedState = EgpFluxModel.DIST,
             distInitVar = DIST_INIT_VAR, distProcessNoiseVar = DIST_PROCESS_VAR)
         fun minOf(ts: Long) = ((ts - start) / 60000L).toInt()
@@ -276,7 +279,14 @@ class CamapsPlugin @Inject constructor(
         /** Prior variance on the unmodelled-flux state: sd 0.1 mmol/min. */
         const val DIST_INIT_VAR = 0.01
 
-        /** Random-walk process variance for the flux state. See [estimateState] for the sweep. */
-        const val DIST_PROCESS_VAR = 0.10
+        /**
+         * Random-walk process variance for the flux state. 1.0 is the lowest value at which no measured
+         * point has the real controller suspending while this one does not, given [EGP_HALF_MU_PER_L].
+         * See report/camaps-measured-response.md §20 for the sweep.
+         */
+        const val DIST_PROCESS_VAR = 1.0
+
+        /** [CamapsModel]'s undecoded EGP half-effect concentration, mU/L. Fitted; see that class. */
+        const val EGP_HALF_MU_PER_L = 7.0
     }
 }

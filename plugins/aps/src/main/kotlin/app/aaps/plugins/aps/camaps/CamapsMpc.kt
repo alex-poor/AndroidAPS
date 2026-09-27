@@ -89,6 +89,22 @@ class CamapsMpc(
     private val stepMin: Int = 5,
     private val nSegments: Int = 6,
     private val sweeps: Int = 2,
+    /**
+     * Weight on insulin effort in the cost. The binary's own weights are named globals, not immediates
+     * inside `Model::Optimise` — which is why the spec called them undecodable:
+     * ```
+     *   lambdaBase         = 1.6     (0x92804, from lambdaBaseOrig 0x22d34)
+     *   lambdaBaseMeal     = 1.2     (0x92808, from lambdaBaseMealOrig 0x22d38)
+     *   lambdaBaseBolus    = 1.0     (0x22d40)
+     *   lambdaMealDuration = 240 min (0x22d3c)
+     * ```
+     * The ABSOLUTE value cannot be transplanted, since it depends on how the binary normalises glucose
+     * error against insulin in its cost and that is not recovered. The RATIO can, and it is the part that
+     * matters: for [LAMBDA_MEAL_DURATION_MIN] after a meal the weight drops to
+     * `lambdaBaseMeal / lambdaBase` = 0.75, so the controller is deliberately allowed to push harder
+     * post-meal. That is exactly the window where this replica was suspending and the real one was
+     * commanding 2.1 x basal.
+     */
     private val effortWeight: Double = 0.02,
     /**
      * Minutes the real controller projects the CGM forward before clamping the initial set-point
@@ -136,6 +152,8 @@ class CamapsMpc(
      * [hypoSuspendThreshold].
      */
     private val mealWithinLastHour: Boolean = false,
+    /** Minutes since the last meal, or null if none within [LAMBDA_MEAL_DURATION_MIN]. */
+    private val minutesSinceMeal: Double? = null,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -205,6 +223,18 @@ class CamapsMpc(
 
         /** Symbol `finalTargetGlucose`, vaddr 0x92800. The binary's default target. */
         const val FINAL_TARGET_GLUCOSE_MMOL = 5.8
+
+        /**
+         * `lambdaBaseMeal / lambdaBase` for [LAMBDA_MEAL_DURATION_MIN] after a meal, else 1. Decoded from
+         * the named globals listed on [CamapsMpc.effortWeight]; see report/camaps-parameter-table.md.
+         */
+        fun lambdaFactor(minutesSinceMeal: Double?): Double =
+            if (minutesSinceMeal != null && minutesSinceMeal in 0.0..LAMBDA_MEAL_DURATION_MIN)
+                LAMBDA_BASE_MEAL / LAMBDA_BASE else 1.0
+
+        const val LAMBDA_BASE = 1.6                  // lambdaBaseOrig, 0x22d34
+        const val LAMBDA_BASE_MEAL = 1.2             // lambdaBaseMealOrig, 0x22d38
+        const val LAMBDA_MEAL_DURATION_MIN = 240.0   // lambdaMealDuration, 0x22d3c
 
         /** `MPC::DetermineSetPoint` immediates. Slopes are mmol/L per MINUTE. */
         const val SLOPE_ABOVE_13 = -1.0 / 24.0          // 0xBD2AAAAB, -2.5 mmol/L/h
@@ -372,7 +402,8 @@ class CamapsMpc(
             val u = seq[min(seq.size - 1, i / segLen)]
             repeat(stepMin) { s = model.step(s, u, 1.0) }
         }
-        for (u in seq) { val du = u - nominalBasalMuPerMin; if (du > 0.0) cost += effortWeight * du * du * segLen }
+        val lambda = effortWeight * lambdaFactor(minutesSinceMeal)
+        for (u in seq) { val du = u - nominalBasalMuPerMin; if (du > 0.0) cost += lambda * du * du * segLen }
         return cost
     }
 

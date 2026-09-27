@@ -18,7 +18,7 @@ import kotlin.math.max
  * Paired with `HovorkaEkf(unclampedState = DIST, distInitVar, distProcessNoiseVar)`, which is what makes
  * the state a true random walk that may go negative.
  */
-class EgpFluxModel(p: HovorkaParams) : HovorkaModel(p) {
+open class EgpFluxModel(p: HovorkaParams) : HovorkaModel(p) {
 
     override val nStates = 11
 
