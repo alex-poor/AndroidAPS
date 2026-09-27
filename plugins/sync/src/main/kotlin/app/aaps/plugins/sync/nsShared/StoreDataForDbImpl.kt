@@ -563,6 +563,15 @@ class StoreDataForDbImpl @Inject constructor(
 
     override fun updateDeletedGlucoseValuesInDb() {
         synchronized(deleteGlucoseValue) {
+            // Same gate as accepting readings from NS. Without it, a delete in Nightscout — an admin
+            // dedup tool, another uploader — invalidated the local CGM readings the loop doses from,
+            // even with NS configured as upload-only and a local sensor as the BG source.
+            if (!nsClientSource.isEnabled() && !preferences.get(BooleanKey.NsClientAcceptCgmData) && !config.AAPSCLIENT) {
+                if (deleteGlucoseValue.isNotEmpty())
+                    aapsLogger.debug(LTag.NSCLIENT, "Ignoring ${deleteGlucoseValue.size} NS BG delete(s): NS is not a BG source here")
+                deleteGlucoseValue.clear()
+                return
+            }
             deleteGlucoseValue.forEach { id ->
                 persistenceLayer.getBgReadingByNSId(id)?.let { gv ->
                     persistenceLayer.invalidateGlucoseValue(id = gv.id, action = Action.BG_REMOVED, source = Sources.NSClient, note = null, listValues = listOf(ValueWithUnit.Timestamp(gv.timestamp))).blockingGet().also { result ->
