@@ -12,7 +12,6 @@ import app.aaps.plugins.insulin.di.InsulinModule
 import app.aaps.plugins.main.di.PluginsModule
 import app.aaps.plugins.source.di.SourceModule
 import app.aaps.plugins.sync.di.SyncModule
-import app.aaps.pump.common.di.PumpCommonModule
 import app.aaps.pump.medtrum.di.MedtrumModule
 import app.aaps.pump.virtual.di.VirtualPumpModule
 import app.aaps.shared.impl.di.LoggerModule
@@ -59,7 +58,6 @@ import javax.inject.Singleton
         WorkflowModule::class,
 
         // pumps
-        PumpCommonModule::class,
         MedtrumModule::class,
         VirtualPumpModule::class
     ]

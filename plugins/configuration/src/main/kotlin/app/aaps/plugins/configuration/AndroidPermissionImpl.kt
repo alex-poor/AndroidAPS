@@ -84,25 +84,6 @@ class AndroidPermissionImpl @Inject constructor(
         return !selfCheck
     }
 
-    @Synchronized
-    override fun notifyForSMSPermissions(activity: FragmentActivity) {
-        if (permissionNotGranted(activity, Manifest.permission.RECEIVE_SMS))
-            uiInteraction.addNotification(
-                id = Notification.PERMISSION_SMS,
-                text = rh.gs(app.aaps.core.ui.R.string.smscommunicator_missingsmspermission),
-                level = Notification.URGENT,
-                actionButtonId = R.string.request,
-                action = {
-                    askForPermission(
-                        activity,
-                        arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.SEND_SMS, Manifest.permission.RECEIVE_MMS)
-                    )
-                },
-                validityCheck = { permissionNotGranted(activity, Manifest.permission.RECEIVE_SMS) }
-            )
-        else uiInteraction.dismissNotification(Notification.PERMISSION_SMS)
-    }
-
     @SuppressLint("MissingPermission")
     @Synchronized
     override fun notifyForBtConnectPermission(activity: FragmentActivity) {

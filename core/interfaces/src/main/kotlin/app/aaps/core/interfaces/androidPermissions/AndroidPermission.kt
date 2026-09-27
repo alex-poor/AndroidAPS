@@ -27,12 +27,6 @@ interface AndroidPermission {
     fun permissionNotGranted(context: Context, permission: String): Boolean
 
     /**
-     * Check for SMS permission. Raise Overview notification if missing.
-     * @param activity context of caller
-     */
-    fun notifyForSMSPermissions(activity: FragmentActivity)
-
-    /**
      * Check for BT permission. Raise Overview notification if missing.
      * @param activity context of caller
      */

@@ -157,7 +157,6 @@ android {
         }
     }
 
-    useLibrary("org.apache.http.legacy")
 
     //Deleting it causes a binding error
     buildFeatures {
@@ -223,7 +222,6 @@ dependencies {
     // equil_ic_pump2.png alone was the single largest file in the APK at 3.7 MB.
     implementation(project(":pump:medtrum"))
     implementation(project(":pump:ypsopump"))
-    implementation(project(":pump:common"))
     implementation(project(":pump:virtual"))
     implementation(project(":workflow"))
 
