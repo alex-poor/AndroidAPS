@@ -136,7 +136,7 @@ class SafetyPluginTest : TestBaseWithProfile() {
 
     @Test
     fun basalRateShouldBeLimited() {
-        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.0)
+        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(5.0) // above the hard limit, so the hard limit is what binds
         whenever(preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier)).thenReturn(4.0)
         whenever(preferences.get(DoubleKey.ApsMaxDailyMultiplier)).thenReturn(3.0)
         whenever(preferences.get(StringKey.SafetyAge)).thenReturn("child")
@@ -146,9 +146,31 @@ class SafetyPluginTest : TestBaseWithProfile() {
         assertThat(c.getReasons()).isEqualTo(
             """
     Safety: Limiting max basal rate to 2.00 U/h because of hard limit
+    Safety: Limiting max basal rate to 5.00 U/h because of max value in preferences
     """.trimIndent()
         )
         assertThat(c.getMostLimitedReasons()).isEqualTo("Safety: Limiting max basal rate to 2.00 U/h because of hard limit")
+    }
+
+    @Test
+    fun `user max basal is enforced by Safety whichever APS is active`() {
+        // Previously only OpenAPS-SMB applied this pref, so with HovorkaMPC active the only user-level
+        // limit was the algorithm's own clamp.
+        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.5)
+        whenever(preferences.get(StringKey.SafetyAge)).thenReturn("adult")
+        val c = ConstraintObject(Double.MAX_VALUE, aapsLogger)
+        safetyPlugin.applyBasalConstraints(c, validProfile)
+        assertThat(c.value()).isWithin(0.01).of(1.5)
+        assertThat(c.getMostLimitedReasons()).contains("max value in preferences")
+    }
+
+    @Test
+    fun `user max basal never limits below the profile's own max daily basal`() {
+        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(0.2)
+        whenever(preferences.get(StringKey.SafetyAge)).thenReturn("adult")
+        val c = ConstraintObject(Double.MAX_VALUE, aapsLogger)
+        safetyPlugin.applyBasalConstraints(c, validProfile)
+        assertThat(c.value()).isWithin(0.01).of(validProfile.getMaxDailyBasal())
     }
 
     @Test
@@ -165,7 +187,7 @@ class SafetyPluginTest : TestBaseWithProfile() {
     @Test
     fun percentBasalRateShouldBeLimited() {
         // No limit by default
-        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.0)
+        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(5.0)
         whenever(preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier)).thenReturn(4.0)
         whenever(preferences.get(DoubleKey.ApsMaxDailyMultiplier)).thenReturn(3.0)
         whenever(preferences.get(StringKey.SafetyAge)).thenReturn("child")
@@ -176,6 +198,7 @@ class SafetyPluginTest : TestBaseWithProfile() {
             """
 Safety: Percent rate 2147483647% recalculated to 21474836.47 U/h with current basal 1.00 U/h
 Safety: Limiting max basal rate to 2.00 U/h because of hard limit
+Safety: Limiting max basal rate to 5.00 U/h because of max value in preferences
 Safety: Limiting max percent rate to 200% because of pump limit
 Safety: Limiting max basal rate to 500.00 U/h because of pump limit
     """.trimIndent()

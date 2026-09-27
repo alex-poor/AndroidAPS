@@ -222,7 +222,7 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
         whenever(activePlugin.activePump).thenReturn(virtualPumpPlugin)
         whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
 
-        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.0)
+        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(5.0) // above the hard limit, so the hard limit is what binds
         whenever(preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier)).thenReturn(4.0)
         whenever(preferences.get(DoubleKey.ApsMaxDailyMultiplier)).thenReturn(3.0)
         whenever(preferences.get(StringKey.SafetyAge)).thenReturn("child")
@@ -240,7 +240,7 @@ class ConstraintsCheckerImplTest : TestBaseWithProfile() {
         whenever(activePlugin.activePump).thenReturn(virtualPumpPlugin)
         whenever(virtualPumpPlugin.pumpDescription).thenReturn(PumpDescription())
 
-        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(1.0)
+        whenever(preferences.get(DoubleKey.ApsMaxBasal)).thenReturn(5.0)
         whenever(preferences.get(DoubleKey.ApsMaxCurrentBasalMultiplier)).thenReturn(4.0)
         whenever(preferences.get(DoubleKey.ApsMaxDailyMultiplier)).thenReturn(3.0)
         whenever(preferences.get(StringKey.SafetyAge)).thenReturn("child")
