@@ -354,6 +354,7 @@ class MedtrumService : DaggerService(), BLECommCallback {
         val insulin = detailedBolusInfo.insulin
         medtrumPump.bolusDone = false
         medtrumPump.bolusStopped = false
+        medtrumPump.bolusCancelAcked = false
         medtrumPump.bolusErrorReason = null
         BolusProgressData.delivered = 0.0
 
@@ -393,7 +394,14 @@ class MedtrumService : DaggerService(), BLECommCallback {
 
         waitForBolusProgress()
 
-        if (medtrumPump.bolusStopped && BolusProgressData.delivered == 0.0) {
+        if (medtrumPump.bolusStopped && BolusProgressData.delivered == 0.0 && !medtrumPump.bolusCancelAcked) {
+            // Stop pressed, but the pump never acknowledged the cancel (not connected, or 30 s of failed
+            // retries) and no progress arrived yet. It may still be delivering. Zeroing the record here would
+            // under-count IOB until history caught up — the one direction the loop cannot recover from. Keep
+            // the requested amount (IOB errs high, as on any comm loss) and let history reconcile it.
+            aapsLogger.warn(LTag.PUMPCOMM, "Bolus stop NOT acknowledged by pump; keeping ${detailedBolusInfo.insulin}U until history sync")
+            commandQueue.readStatus(rh.gs(R.string.bolus_error), null)
+        } else if (medtrumPump.bolusStopped && BolusProgressData.delivered == 0.0) {
             // In this case we don't get a bolus end event, so need to remove all the stuff added previously
             val syncOk = pumpSync.syncBolusWithTempId(
                 timestamp = bolusStart,
@@ -501,8 +509,10 @@ class MedtrumService : DaggerService(), BLECommCallback {
                 SystemClock.sleep(200)
             }
             aapsLogger.debug(LTag.PUMPCOMM, "bolusStop success: $success")
+            medtrumPump.bolusCancelAcked = success
             medtrumPump.bolusStopped = true
         } else {
+            medtrumPump.bolusCancelAcked = false
             medtrumPump.bolusStopped = true
         }
     }
