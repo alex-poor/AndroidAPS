@@ -108,6 +108,13 @@ class CamapsPlugin @Inject constructor(
      * (`this+0x18`, 48 floats, divided by 48.0). Sampled on the half hour from the profile rather than
      * read from a stored array, which is equivalent for a step profile.
      */
+    /** Minutes between the two most recent CGM samples, or NaN with fewer than two (CamapsMpc §6.5). */
+    private fun cgmGapMinutes(now: Long): Double {
+        val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(now - 6 * 3_600_000L, now, true)
+            .sortedByDescending { it.timestamp }
+        return if (bg.size < 2) Double.NaN else (bg[0].timestamp - bg[1].timestamp) / 60_000.0
+    }
+
     private fun meanProfileBasalUhr(profile: Profile): Double {
         val midnight = MidnightTime.calc(dateUtil.now())
         var sum = 0.0
@@ -171,6 +178,9 @@ class CamapsPlugin @Inject constructor(
             maxBasalMuPerMin = maxBasalUhr * 1000.0 / 60.0,
             maxRateMuPerMin = maxRateUhr * 1000.0 / 60.0,
             observedSlopeMmolPerH = slopeMmolPerH,
+            // §6.5: the gap between the two most recent CGM samples
+            cgmGapMin = cgmGapMinutes(now),
+            smoothedBasalMuPerMin = meanProfileBasalUhr(profile) * 1000.0 / 60.0,
             // §5 ModifyRateGlucoseLevel relaxes the suspend threshold by 0.2 mmol/L within an hour of a
             // meal (GetMeal's window is 60 min), on the reasoning that carbs are on the way.
             mealWithinLastHour = persistenceLayer

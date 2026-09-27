@@ -154,6 +154,10 @@ class CamapsMpc(
     private val mealWithinLastHour: Boolean = false,
     /** Minutes since the last meal, or null if none within [LAMBDA_MEAL_DURATION_MIN]. */
     private val minutesSinceMeal: Double? = null,
+    /** Minutes between the two most recent CGM samples, for §6.5. NaN if unknown. */
+    private val cgmGapMin: Double = Double.NaN,
+    /** Smoothed profile-basal reference (mu/min) — `GetBIRStepsSmoothed`'s role in §6.4. */
+    private val smoothedBasalMuPerMin: Double = 0.0,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -235,6 +239,35 @@ class CamapsMpc(
         const val LAMBDA_BASE = 1.6                  // lambdaBaseOrig, 0x22d34
         const val LAMBDA_BASE_MEAL = 1.2             // lambdaBaseMealOrig, 0x22d38
         const val LAMBDA_MEAL_DURATION_MIN = 240.0   // lambdaMealDuration, 0x22d3c
+
+        /**
+         * WHY THERE IS NO POST-HYPO HOLD HERE.
+         *
+         * `MPC::RescueCarbReduction` (0x47a70) appeared to zero the rate when recent minimum glucose was
+         * low — `min30 <= 4.2`, or `min60 <= 4.2 && min18 < 6.0`, against immediates 4.2 (0x40866666) and
+         * 6.0. That was implemented, then tested against the binary, and it is **wrong**: probed with a
+         * dip to 3.6 / 4.0 / 4.2 recovering to 7.0 mmol/L over 30–120 min, the real controller returns
+         * **1.45 U/h** — above basal — in every case. It has no post-hypo hold. The only zeroing at low
+         * glucose is §6.2's level suspend, which keys on glucose *now*, not on a recent minimum
+         * (verified: glucose still at 3.0/3.4/3.8 gives 0.00 U/h with diagnostic 'L').
+         *
+         * So either the branch decoded is not reached under these conditions, or the traced store target
+         * was wrong. Left unimplemented rather than guessed at; an implementation of it would have
+         * suspended after every recovered low.
+         */
+        const val postHypoHoldIsNotReal = true
+
+        /** `MPC::ModifyRateDeltaBIR`'s occlusion test threshold (§6.4). */
+        const val OCCLUSION_GLUCOSE_MMOL = 3.9
+
+        /**
+         * §6.5 CGM-gap threshold, in minutes. **MEASURED, not decoded.** The disassembly reads as a
+         * 20-minute test, but probing shows a 45-minute gap to the previous sample still returns a normal
+         * 1.2 U/h while a 50-minute gap falls back to profile basal with diagnostic '@'. A 20-minute
+         * threshold would revert to profile basal routinely, so the measured edge is used and the
+         * disassembly reading is presumed mis-traced.
+         */
+        const val CGM_GAP_MIN = 50.0
 
         /** `MPC::DetermineSetPoint` immediates. Slopes are mmol/L per MINUTE. */
         const val SLOPE_ABOVE_13 = -1.0 / 24.0          // 0xBD2AAAAB, -2.5 mmol/L/h
@@ -407,6 +440,21 @@ class CamapsMpc(
         return cost
     }
 
+    /**
+     * The minimum glucose the model reaches over the horizon if insulin delivery stopped now — the
+     * replica's stand-in for `MPC::LowestBGIfOcclusion` (0x83f00), which runs the model forward under an
+     * assumed cannula occlusion. Insulin already absorbed keeps acting; only new delivery stops.
+     */
+    private fun lowestGlucoseIfOccluded(state: DoubleArray): Double {
+        var s = state.copyOf()
+        var lo = model.glucoseMmol(s)
+        repeat(horizonMin) {
+            s = model.step(s, 0.0, 1.0)
+            lo = min(lo, model.glucoseMmol(s))
+        }
+        return lo
+    }
+
     /** One control decision. Mirrors MPC::Optimise -> GetBIR -> GetBIRpump. */
     fun decide(stateEstimate: DoubleArray): Decision {
         val g0 = model.glucoseMmol(stateEstimate)
@@ -448,6 +496,22 @@ class CamapsMpc(
         // that constant for the measurement that rules it out. Attenuation is applied at every glucose.
         val attenuation = if (observedSlopeMmolPerH != 0.0) attenuationPercent(observedSlopeMmolPerH, g0) else 0.0
         finalU *= (100.0 - attenuation) / 100.0
+
+        // §6.4 MPC::ModifyRateDeltaBIR -- occlusion-aware cap. LowestBGIfOcclusion is approximated by
+        // free-running the model with NO insulin over the horizon and taking the minimum, which is what
+        // "if this cannula were occluded" means. The binary also requires sm + modelBIR > sm*f; we do not
+        // have its modelBIR, so only the glucose test and the rate test are applied -- strictly a subset
+        // of its conditions, so this can only fire where the binary would.
+        val sm = if (smoothedBasalMuPerMin > 0.0) smoothedBasalMuPerMin else nominalBasalMuPerMin
+        if (finalU > sm && lowestGlucoseIfOccluded(stateEstimate) < OCCLUSION_GLUCOSE_MMOL)
+            finalU = sm
+
+        // §6.5 MPC::ModifyEnoughGlucoseMeasurements -- a long enough gap in CGM data means fall back to
+        // profile basal. The threshold is MEASURED, not taken from the disassembly: see [CGM_GAP_MIN].
+        if (!cgmGapMin.isNaN() && cgmGapMin >= CGM_GAP_MIN) finalU = nominalBasalMuPerMin
+
+        // §6.7 is NOT implemented -- measurement shows the real controller has no post-hypo hold.
+        // See [postHypoHoldIsNotReal].
 
         if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
