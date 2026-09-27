@@ -116,9 +116,23 @@ class CamapsMpc(
         return ref
     }
 
+    /**
+     * The reference trajectory is a ONE-SIDED bound, not a setpoint, and this penalty has to say so.
+     *
+     * It used to be symmetric (`e*e`), which made the bounded reference a line the controller was
+     * rewarded for sitting exactly on -- so when the model's own glucose disposal predicted a fall
+     * FASTER than the bound, the optimiser cut insulin BELOW basal to hold glucose up on the line. The
+     * real controller does not do that: driven at BG 20 it asks for 2.55 x basal, while the replica
+     * asked for 0.67 x. Being lower than the bound is not an error to correct; only being above it is.
+     */
     private fun trackingPenalty(g: Double, refi: Double): Double {
         val e = g - refi
-        return if (g < 4.0) 6.0 * e * e else e * e        // predicted lows penalised hard
+        return when {
+            g < 4.0        -> 6.0 * e * e                 // predicted lows penalised hard
+            e > 0.0        -> e * e                       // ABOVE the bound: the deviation to correct
+            g > targetMmol -> 0.0                         // below the bound but above target: free
+            else           -> (g - targetMmol) * (g - targetMmol)
+        }
     }
 
     private fun rolloutCost(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
