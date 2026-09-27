@@ -210,10 +210,10 @@ class HovorkaMpc(
         // plus any SMB — a genuine forward projection, NOT the current estimate. It drops below current when
         // IOB dominates, and rises above it with carbs on board (announced or meal-detected). This is the
         // MPC's own prediction of where its plan lands glucose.
-        var es = if (smbU > 0.0) stateEstimate.copyOf().also { it[5] += smbU * 1000.0 } else stateEstimate.copyOf()
+        val es = if (smbU > 0.0) stateEstimate.copyOf().also { it[5] += smbU * 1000.0 } else stateEstimate.copyOf()
         for (i in 0 until steps) {
             val u = seq[min(seq.size - 1, i / segLen)]
-            repeat(stepMin) { es = model.step(es, u, 1.0) }
+            repeat(stepMin) { model.stepInPlace(es, u, 1.0) }
         }
         val eventualMmol = model.glucoseMmol(es)
 
@@ -227,8 +227,8 @@ class HovorkaMpc(
 
     /** Predicted glucose (mmol/L) [minutes] ahead at constant basal u, no bolus (SMB trigger test). */
     private fun predictGlucose(s0: DoubleArray, u: Double, minutes: Int): Double {
-        var s = s0.copyOf()
-        repeat(minutes) { s = model.step(s, u, 1.0) }
+        val s = s0.copyOf()
+        repeat(minutes) { model.stepInPlace(s, u, 1.0) }
         return model.glucoseMmol(s)
     }
 
@@ -240,14 +240,14 @@ class HovorkaMpc(
     private fun searchCorrectionBolus(s0: DoubleArray, basalU: Double, ref: DoubleArray): Double {
         val cap = maxSmbU / smbFraction * 3.0            // enough headroom to see the true optimum
         fun cost(b: Double): Double {
-            var s = s0.copyOf(); s[5] += b * 1000.0      // deposit bolus (U -> mU) into SC comp S1
+            val s = s0.copyOf(); s[5] += b * 1000.0      // deposit bolus (U -> mU) into SC comp S1
             var c = 0.0
             for (i in ref.indices) {
                 val g = model.glucoseMmol(s)
                 val e = g - ref[i]
                 val w = if (g < 4.0) 6.0 else 1.0        // penalise predicted lows hard (safety)
                 c += w * e * e
-                repeat(stepMin) { s = model.step(s, basalU, 1.0) }
+                repeat(stepMin) { model.stepInPlace(s, basalU, 1.0) }
             }
             return c
         }
@@ -293,13 +293,13 @@ class HovorkaMpc(
      *    withholding basal is free — the controller can suspend without paying an effort cost.
      */
     private fun rolloutCostSeq(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
-        var s = s0.copyOf()
+        val s = s0.copyOf()
         var cost = 0.0
         for (i in ref.indices) {
             val g = model.glucoseMmol(s)
             cost += trackingPenalty(g, ref[i])
             val u = seq[min(seq.size - 1, i / segLen)]
-            repeat(stepMin) { s = model.step(s, u, 1.0) }
+            repeat(stepMin) { model.stepInPlace(s, u, 1.0) }
         }
         for (u in seq) { val du = u - nominalBasalMuPerMin; if (du > 0.0) cost += effortWeight * du * du * segLen }
         return cost

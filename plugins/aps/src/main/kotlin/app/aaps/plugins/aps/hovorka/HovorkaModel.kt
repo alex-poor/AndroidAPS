@@ -40,7 +40,10 @@ class HovorkaModel(val p: HovorkaParams) {
     fun glucoseMgdl(s: DoubleArray): Double = glucoseMmol(s) * 18.0
 
     /** d(state)/dt for insulin infusion u (mU/min). Returns a fresh derivative array. */
-    fun derivative(s: DoubleArray, u: Double): DoubleArray {
+    fun derivative(s: DoubleArray, u: Double): DoubleArray = DoubleArray(nStates).also { derivativeInto(s, u, it) }
+
+    /** [derivative] written into [out] — the allocation-free form the integrator uses. */
+    private fun derivativeInto(s: DoubleArray, u: Double, out: DoubleArray) {
         val q1 = s[0]; val q2 = s[1]
         val x1 = s[2]; val x2 = s[3]; val x3 = s[4]
         val s1 = s[5]; val s2 = s[6]; val ins = s[7]
@@ -65,20 +68,37 @@ class HovorkaModel(val p: HovorkaParams) {
         val dD1 = -d1 / p.tMaxG                            // meals enter via addMeal() impulse
         val dD2 = (d1 - d2) / p.tMaxG
 
-        return doubleArrayOf(dQ1, dQ2, dx1, dx2, dx3, dS1, dS2, dI, dD1, dD2)
+        out[0] = dQ1; out[1] = dQ2; out[2] = dx1; out[3] = dx2; out[4] = dx3
+        out[5] = dS1; out[6] = dS2; out[7] = dI; out[8] = dD1; out[9] = dD2
     }
 
     /** RK4 step of dt minutes, constant infusion u over the step. Returns a new state. */
-    fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
-        val k1 = derivative(s, u)
-        val k2 = derivative(add(s, k1, dtMin / 2), u)
-        val k3 = derivative(add(s, k2, dtMin / 2), u)
-        val k4 = derivative(add(s, k3, dtMin), u)
-        val out = DoubleArray(nStates)
+    fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray = s.copyOf().also { stepInPlace(it, u, dtMin) }
+
+    /**
+     * [step], overwriting [s] with the result. For the rollout loops, which run ~150k steps per loop tick:
+     * the allocating form created eight short-lived arrays per step (four derivatives, three intermediate
+     * states, the result), about 1.15 M per tick. Arithmetic is identical, operation for operation, so
+     * results are bit-for-bit the same (HovorkaModelStepTest pins this against the original code).
+     * Scratch is per thread, so a model shared between the loop and a UI caller stays safe.
+     */
+    fun stepInPlace(s: DoubleArray, u: Double, dtMin: Double) {
+        val w = scratch.get()!!
+        derivativeInto(s, u, w.k1)
+        addInto(s, w.k1, dtMin / 2, w.tmp); derivativeInto(w.tmp, u, w.k2)
+        addInto(s, w.k2, dtMin / 2, w.tmp); derivativeInto(w.tmp, u, w.k3)
+        addInto(s, w.k3, dtMin, w.tmp); derivativeInto(w.tmp, u, w.k4)
+        val k1 = w.k1; val k2 = w.k2; val k3 = w.k3; val k4 = w.k4
         for (i in 0 until nStates)
-            out[i] = max(0.0, s[i] + dtMin / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]))
-        return out
+            s[i] = max(0.0, s[i] + dtMin / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]))
     }
+
+    private class Scratch(n: Int) {
+        val k1 = DoubleArray(n); val k2 = DoubleArray(n); val k3 = DoubleArray(n); val k4 = DoubleArray(n)
+        val tmp = DoubleArray(n)
+    }
+
+    private val scratch = ThreadLocal.withInitial { Scratch(nStates) }
 
     /** Deposit a meal (grams CHO) as an impulse into the gut compartment D1. */
     fun addMeal(s: DoubleArray, carbsG: Double): DoubleArray {
@@ -115,12 +135,12 @@ class HovorkaModel(val p: HovorkaParams) {
      * usually FASTER, since a typical model settles well inside the ceiling.
      */
     fun steadyState(u: Double, minutes: Int = SS_MAX_MIN): DoubleArray {
-        var s = doubleArrayOf(
+        val s = doubleArrayOf(
             p.vg * 6.0, p.vg * 3.0, 0.0, 0.0, 0.0, u * p.tMaxI, u * p.tMaxI, 0.0, 0.0, 0.0
         )
         var prevG = glucoseMmol(s)
         for (i in 1..minutes) {
-            s = step(s, u, 1.0)
+            stepInPlace(s, u, 1.0)
             if (i % SS_CHECK_MIN == 0) {
                 val g = glucoseMmol(s)
                 if (abs(g - prevG) < SS_TOL_MMOL) return s
@@ -130,10 +150,8 @@ class HovorkaModel(val p: HovorkaParams) {
         return s
     }
 
-    private fun add(s: DoubleArray, d: DoubleArray, h: Double): DoubleArray {
-        val out = DoubleArray(nStates)
+    private fun addInto(s: DoubleArray, d: DoubleArray, h: Double, out: DoubleArray) {
         for (i in 0 until nStates) out[i] = max(0.0, s[i] + h * d[i])
-        return out
     }
 
     companion object {
