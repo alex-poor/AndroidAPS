@@ -140,6 +140,10 @@ data class SkinSpec(
         if (id.isBlank()) throw SkinFormatException("Skin id is empty.")
         if (label.isBlank()) throw SkinFormatException("Skin label is empty.")
         if (id in RESERVED_IDS) throw SkinFormatException("'$id' is a built-in skin id; choose another.")
+        // The id names the directory the skin is unpacked into, so it must be a plain name: "../.."
+        // would otherwise resolve to the app's own data directory, which install() deletes first.
+        if (!ID_PATTERN.matches(id)) throw SkinFormatException("Skin id '$id' may only use a–z, 0–9, '-' and '_' (at most 40).")
+        font?.file?.let { if (it != java.io.File(it).name) throw SkinFormatException("Font '$it' must be a file name, not a path.") }
 
         // A single palette inherits from whichever default ground it resembles, so a pale skin that
         // names only its pinks does not pick up dark surfaces for everything it left out.
@@ -168,6 +172,9 @@ data class SkinSpec(
 
         /** Built-in ids a file may not shadow, or selecting one would become ambiguous. */
         val RESERVED_IDS = setOf("default", "midnight", "system", "light", "dark")
+
+        /** A skin id is also a directory name, so nothing that could walk out of the skins folder. */
+        val ID_PATTERN = Regex("^[a-z0-9][a-z0-9_-]{0,39}$")
 
         val json = Json {
             ignoreUnknownKeys = true      // a newer minor format stays readable

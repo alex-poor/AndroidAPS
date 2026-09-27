@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
+import androidx.lifecycle.lifecycleScope
 import app.aaps.core.compose.theme.AapsAppearances
 import app.aaps.core.compose.theme.AapsSkinState
 import app.aaps.core.compose.theme.AapsSkins
@@ -25,6 +26,9 @@ import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.plugins.main.general.themes.compose.SkinManagerActions
 import app.aaps.plugins.main.general.themes.compose.SkinManagerScreen
 import app.aaps.plugins.main.general.themes.compose.SkinManagerState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -120,41 +124,61 @@ class SkinManagerActivity : TranslatedDaggerAppCompatActivity() {
         val uri = intent.data ?: return
         intent.data = null   // so a configuration change does not re-ask
 
-        val spec = try {
-            contentResolver.openInputStream(uri)?.use { skinStore.peek(it) }
-                ?: throw SkinFormatException("Could not open that file.")
-        } catch (e: SkinFormatException) {
-            state = state.copy(error = e.message)
-            return
-        } catch (e: Exception) {
-            aapsLogger.error(LTag.UI, "Could not read incoming skin", e)
-            state = state.copy(error = e.message ?: "Could not read that file.")
-            return
+        // Read once, off the main thread: the URI belongs to another app, which could stall the read
+        // indefinitely, and a second open for the install could be served different bytes than the
+        // ones named in the confirmation.
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = contentResolver.openInputStream(uri)?.use { skinStore.readBundle(it) }
+                        ?: throw SkinFormatException("Could not open that file.")
+                    bytes to skinStore.peek(bytes.inputStream())
+                }
+            }
+            val (bytes, spec) = result.getOrElse { e ->
+                if (e !is SkinFormatException) aapsLogger.error(LTag.UI, "Could not read incoming skin", e)
+                state = state.copy(error = e.message ?: "Could not read that file.")
+                return@launch
+            }
+            val replacing = AapsSkins.installed.any { it.id == spec.id }
+            val by = spec.author?.let { "by $it" }
+            val note = listOfNotNull(by, spec.description).joinToString("\n").ifBlank { null }
+            OKDialog.showConfirmation(
+                this@SkinManagerActivity,
+                if (replacing) "Replace ${spec.label}?" else "Install ${spec.label}?",
+                note ?: "Add this skin to the theme list.",
+                { installBytes(bytes) }
+            )
         }
-
-        val replacing = AapsSkins.installed.any { it.id == spec.id }
-        val by = spec.author?.let { "by $it" }
-        val note = listOfNotNull(by, spec.description).joinToString("\n").ifBlank { null }
-        OKDialog.showConfirmation(
-            this,
-            if (replacing) "Replace ${spec.label}?" else "Install ${spec.label}?",
-            note ?: "Add this skin to the theme list.",
-            { installFrom(uri) }
-        )
     }
 
     private fun installFrom(uri: android.net.Uri) {
-        try {
-            val skin = contentResolver.openInputStream(uri)?.use { skinStore.install(it) }
-                ?: throw SkinFormatException("Could not open that file.")
-            themeSwitcherPlugin.reloadInstalledSkins()
-            refresh()
-            ToastUtils.okToast(this, "Installed ${skin.label}")
-        } catch (e: SkinFormatException) {
-            state = state.copy(error = e.message)
-        } catch (e: Exception) {
-            aapsLogger.error(LTag.UI, "Skin install failed", e)
-            state = state.copy(error = e.message ?: "Could not read that file.")
+        lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching {
+                    contentResolver.openInputStream(uri)?.use { skinStore.readBundle(it) }
+                        ?: throw SkinFormatException("Could not open that file.")
+                }
+            }.getOrElse { e ->
+                if (e !is SkinFormatException) aapsLogger.error(LTag.UI, "Skin install failed", e)
+                state = state.copy(error = e.message ?: "Could not read that file.")
+                return@launch
+            }
+            installBytes(bytes)
+        }
+    }
+
+    private fun installBytes(bytes: ByteArray) {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { skinStore.install(bytes.inputStream()) } }
+            result.onSuccess { skin ->
+                themeSwitcherPlugin.reloadInstalledSkins()
+                refresh()
+                ToastUtils.okToast(this@SkinManagerActivity, "Installed ${skin.label}")
+            }.onFailure { e ->
+                if (e !is SkinFormatException) aapsLogger.error(LTag.UI, "Skin install failed", e)
+                state = state.copy(error = e.message ?: "Could not read that file.")
+            }
         }
     }
 

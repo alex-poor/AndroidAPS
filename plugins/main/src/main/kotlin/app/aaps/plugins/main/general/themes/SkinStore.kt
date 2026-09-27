@@ -37,7 +37,17 @@ class SkinStore @Inject constructor(
 
     private val root: File get() = File(context.filesDir, "skins").also { it.mkdirs() }
 
-    private fun dirFor(id: String) = File(root, id)
+    /**
+     * The directory for [id], refusing anything that does not sit directly inside [root].
+     *
+     * [SkinSpec.toSkin] already restricts ids to a plain name; this is the second lock, because the
+     * callers go on to delete or overwrite whatever this returns.
+     */
+    private fun dirFor(id: String): File {
+        val dir = File(root, id)
+        if (dir.canonicalFile.parentFile != root.canonicalFile) throw SkinFormatException("'$id' is not a valid skin id.")
+        return dir
+    }
 
     /**
      * Installed skins, worst case an empty list.
@@ -130,7 +140,9 @@ class SkinStore @Inject constructor(
         ZipInputStream(input.buffered()).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
-                if (File(entry.name).name == SkinSpec.MANIFEST_NAME && !entry.isDirectory) {
+                // Root entry only — the same rule unzip() applies — so the confirmation names the
+                // manifest that would actually be installed, not a decoy in a subfolder.
+                if (entry.name == SkinSpec.MANIFEST_NAME && !entry.isDirectory) {
                     // Bounded because this reads an archive from elsewhere: a manifest is a small
                     // JSON file, and anything claiming otherwise is not one.
                     val bytes = zip.readNBytes(MAX_MANIFEST_BYTES + 1)
@@ -143,8 +155,20 @@ class SkinStore @Inject constructor(
         throw SkinFormatException("That file is not a skin bundle — it has no ${SkinSpec.MANIFEST_NAME}.")
     }
 
+    /**
+     * Read a whole bundle into memory, bounded by [MAX_TOTAL_BYTES].
+     *
+     * For a file handed over by another app: the confirmation is shown from these bytes and the
+     * install uses the same bytes, so the source cannot serve something different the second time.
+     */
+    fun readBundle(input: InputStream): ByteArray {
+        val bytes = input.readNBytes(MAX_TOTAL_BYTES.toInt() + 1)
+        if (bytes.size > MAX_TOTAL_BYTES) throw SkinFormatException("Bundle is larger than ${MAX_TOTAL_BYTES / 1024 / 1024} MB.")
+        return bytes
+    }
+
     /** Remove an installed skin. Built-ins are not on disk, so they are unaffected. */
-    fun uninstall(id: String): Boolean = dirFor(id).deleteRecursively()
+    fun uninstall(id: String): Boolean = runCatching { dirFor(id) }.getOrNull()?.deleteRecursively() == true
 
     /** Write an installed skin back out as a `.aapsskin` bundle. */
     fun export(id: String, out: OutputStream) {

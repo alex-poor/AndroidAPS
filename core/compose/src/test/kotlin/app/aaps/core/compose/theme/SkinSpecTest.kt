@@ -83,6 +83,23 @@ class SkinSpecTest {
     }
 
     @Test
+    fun `an id that could walk out of the skins folder is refused`() {
+        // The id becomes the install directory, and install() deletes that directory first — so
+        // "../.." would take the app's database and settings with it.
+        listOf("../..", "..", "../../databases", "a/b", "a\\\\b", ".hidden", "UPPER", "x".repeat(41)).forEach { bad ->
+            val spec = SkinSpec(id = bad, label = "Ocean Blue")
+            assertWithMessage("id '$bad'").that(assertThrows<SkinFormatException> { spec.toSkin() }.message).contains("id")
+        }
+        listOf("gameboy", "kawaii", "my-skin_2").forEach { good -> SkinSpec(id = good, label = "Fine").toSkin() }
+    }
+
+    @Test
+    fun `a font must be named by file, not by path`() {
+        val spec = SkinSpec.parse("""{ "id": "x", "label": "X", "font": { "file": "../../databases/aaps.db" } }""")
+        assertThat(assertThrows<SkinFormatException> { spec.toSkin() }.message).contains("file name")
+    }
+
+    @Test
     fun `empty id or label is refused`() {
         assertThrows<SkinFormatException> { SkinSpec.parse("""{ "id": "", "label": "X" }""").toSkin() }
         assertThrows<SkinFormatException> { SkinSpec.parse("""{ "id": "x", "label": " " }""").toSkin() }
