@@ -26,6 +26,7 @@ class Libre3LagOverrideTest {
         assertThat(arm).isInstanceOf(Libre3LagOverride.ArmResult.Armed::class.java)
         assertThat((arm as Libre3LagOverride.ArmResult.Armed).gapMgdl).isEqualTo(20.0)
         assertThat(arm.clamped).isFalse()
+        assertThat(arm.correctedMgdl).isEqualTo(128)          // sensor 108 + gap 20, not the raw prick
 
         // next reading, still rising at 2/min, 1 min later: offset ≈ gap × timeFactor(1min) ≈ 19
         val corrected = o.onReading(tLast + MIN, 110)
@@ -81,6 +82,19 @@ class Libre3LagOverrideTest {
         val arm = o.armFromManualBg(tLast, 108 + 80) as Libre3LagOverride.ArmResult.Armed
         assertThat(arm.gapMgdl).isEqualTo(30.0)
         assertThat(arm.clamped).isTrue()
+        assertThat(arm.correctedMgdl).isEqualTo(138)          // sensor 108 + capped gap 30, NOT 188
+    }
+
+    @Test
+    fun `an implausible manual value - a mmol units typo - is rejected outright, nothing armed`() {
+        val o = Libre3LagOverride()
+        val tLast = o.ramp(180, 2, 5)                         // rising
+        // "118" entered for 11.8 mmol/L -> 118 × 18 = 2124 mg/dL; must never reach the loop
+        val r = o.armFromManualBg(tLast, 2124)
+        assertThat(r).isInstanceOf(Libre3LagOverride.ArmResult.Rejected::class.java)
+        assertThat(o.isActive()).isFalse()
+        // a below-range value is rejected too
+        assertThat(o.armFromManualBg(tLast, 10)).isInstanceOf(Libre3LagOverride.ArmResult.Rejected::class.java)
     }
 
     @Test
@@ -115,8 +129,8 @@ class Libre3LagOverrideTest {
     fun `corrected value is clamped into the valid range`() {
         val o = Libre3LagOverride()
         val tLast = o.ramp(480, 2, 5)                 // near the top of the range, slope 2
-        o.armFromManualBg(tLast, 488 + 30)            // gap 30
-        val v = o.onReading(tLast + MIN, 495)         // 495 + ~30 would exceed 501
+        o.armFromManualBg(tLast, 500)                 // in range (gap 12); a later reading + offset tops out
+        val v = o.onReading(tLast + MIN, 495)         // 495 + offset would exceed 501
         assertThat(v).isEqualTo(501)
     }
 

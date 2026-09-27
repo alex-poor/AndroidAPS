@@ -55,8 +55,12 @@ class Libre3LagOverride(val cfg: Config = Config()) {
     )
 
     sealed interface ArmResult {
-        /** Armed. [gapMgdl] is the effective (possibly plausibility-clamped) offset applied. */
-        data class Armed(val gapMgdl: Double, val clamped: Boolean) : ArmResult
+        /**
+         * Armed. [gapMgdl] is the effective (possibly plausibility-clamped) offset; [correctedMgdl] is
+         * the value the caller must store NOW — sensor-anchored and clamped, **never the raw prick** —
+         * so an implausible entry cannot spike the stream.
+         */
+        data class Armed(val gapMgdl: Double, val clamped: Boolean, val correctedMgdl: Int) : ArmResult
         data class Rejected(val reason: String) : ArmResult
     }
 
@@ -99,6 +103,11 @@ class Libre3LagOverride(val cfg: Config = Config()) {
      * non-higher prick, or too few readings is rejected (the caller can still log it as a BG check).
      */
     fun armFromManualBg(timeMs: Long, manualMgdl: Int): ArmResult {
+        // Reject an implausible absolute value FIRST — a mmol/L typo ("118" for 11.8) converts to
+        // >2000 mg/dL, and an unbounded value reaching the loop is dangerous. This is the hard gate
+        // that a units slip must hit before anything is stored or armed.
+        if (manualMgdl !in cfg.validRange)
+            return ArmResult.Rejected("implausible BG ($manualMgdl mg/dL) — check the value and units")
         if (window.size < cfg.windowSize) return ArmResult.Rejected("need ${cfg.windowSize} readings first")
         val slopeEntry = slope() ?: return ArmResult.Rejected("cannot determine trend")
         if (slopeEntry < cfg.armThresholdMgdlPerMin)
@@ -112,8 +121,12 @@ class Libre3LagOverride(val cfg: Config = Config()) {
         val clamped = gap > maxPlausible
         val effGap = if (clamped) maxPlausible else gap
 
+        // Store the sensor-anchored, clamped value — never the raw prick — so an over-cap entry can't
+        // put a spike into the stream that the next reading undoes as a false crash. It also equals
+        // what the decaying offset produces for this reading, keeping the series continuous.
+        val correctedMgdl = (sensorNow + effGap).roundToInt().coerceIn(cfg.validRange.first, cfg.validRange.last)
         active = Active(startMs = timeMs, gapMgdl = effGap, slopeEntry = slopeEntry)
-        return ArmResult.Armed(effGap, clamped)
+        return ArmResult.Armed(effGap, clamped, correctedMgdl)
     }
 
     /** Drop an active override but keep the reading window — for a disconnect on the same sensor. */
