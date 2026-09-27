@@ -9,7 +9,6 @@ import app.aaps.core.interfaces.versionChecker.VersionDefinition
 import app.aaps.plugins.constraints.ConstraintsCheckerImpl
 import app.aaps.plugins.constraints.bgQualityCheck.BgQualityCheckPlugin
 import app.aaps.plugins.constraints.objectives.ObjectivesPlugin
-import app.aaps.plugins.constraints.signatureVerifier.SignatureVerifierPlugin
 import app.aaps.plugins.constraints.versionChecker.VersionCheckerUtilsImpl
 import dagger.Binds
 import dagger.Module
@@ -38,5 +37,5 @@ open class PluginsConstraintsModule {
 
     @Provides
     @Singleton
-    fun providesVersionDefinition(context: Context, signatureVerifierPlugin: SignatureVerifierPlugin): VersionDefinition = VersionDefinition { JSONObject(signatureVerifierPlugin.readInputStream(context.assets.open("definition.json"))) }
+    fun providesVersionDefinition(context: Context): VersionDefinition = VersionDefinition { JSONObject(context.assets.open("definition.json").bufferedReader().use { it.readText() }) }
 }
