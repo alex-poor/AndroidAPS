@@ -1,0 +1,182 @@
+package app.aaps.plugins.aps.camaps
+
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+
+/**
+ * One CamAPS submodel, built from the decoded structure rather than adapted from Hovorka.
+ *
+ * Eight states, matching the `Vector<float, 8u>` capacity the binary uses throughout:
+ * ```
+ *   0  Q1    accessible glucose mass            mmol
+ *   1  S1    subcutaneous insulin, compartment 1  mU
+ *   2  S2    subcutaneous insulin, compartment 2  mU
+ *   3  I     plasma insulin concentration        mU/L
+ *   4  D1    gut, compartment 1                  mmol
+ *   5  D2    gut, compartment 2                  mmol
+ *   6  Fx    unmodelled glucose flux (random walk, may be negative)   mmol/min
+ *   7  f     meal bioavailability (random walk, clamped to fLimits)   dimensionless
+ * ```
+ *
+ * GLUCOSE — `SubModel1::EndoBalance` (0x58370). No term in Q1 anywhere:
+ * ```
+ *   dQ1 = EGP0 * 2^(-(I - Iref)/half)  +  Ug  -  F01  -  SI*I  +  Fx
+ * ```
+ *
+ * GUT — the part the earlier reduction got wrong. `Model1::tMaxG1s` and `tMaxG2s` are **two different**
+ * time constants per submodel (21.88/140 for submodel 0, 16.63/76.91 for submodel 4), so absorption is a
+ * two-time-constant cascade, not Hovorka's single `tMaxG` used twice:
+ * ```
+ *   dD1 = -D1/tMaxG1
+ *   dD2 =  D1/tMaxG1 - D2/tMaxG2
+ *   Ug  =  f * D2/tMaxG2
+ * ```
+ * With 21.88 into 140 that is a fast fill and a long slow release — a very different shape from a single
+ * 90-minute constant, and the reason the one-compartment reduction forecast poorly.
+ *
+ * INSULIN — Hovorka's subcutaneous cascade, which the binary's own constants confirm: `PredictStep`
+ * contains 0.14 and 0.12, i.e. `ke` and `vi`, and `Model1::tMaxIs` is 45.
+ *
+ * PARAMETERS. `tMaxG1`/`tMaxG2`/`tMaxI`, `fPrior`, `fLimits` and the IMM constants are all decoded.
+ * `EGP0`, `F01`, `SI`, `Iref` and `half` are per-submodel fields whose values are not recovered, so they
+ * are derived from the patient's own profile against two anchors: basal insulin holds target, and one unit
+ * moves glucose by ISF. See [forProfile].
+ */
+class CamapsSubModel(
+    val vg: Double,                 // L, glucose distribution volume
+    val vi: Double,                 // L, insulin distribution volume
+    val ke: Double,                 // 1/min, plasma insulin elimination
+    val tMaxI: Double,              // min, subcutaneous insulin time constant
+    val tMaxG1: Double,             // min, gut compartment 1  (Model1::tMaxG1s)
+    val tMaxG2: Double,             // min, gut compartment 2  (Model1::tMaxG2s)
+    val egp0: Double,               // mmol/min, EGP at reference insulin
+    val f01: Double,                // mmol/min, constant non-insulin-dependent flux
+    val si: Double,                 // mmol/min per mU/L, insulin-dependent disposal
+    val iRef: Double,               // mU/L, insulin at which EGP = egp0
+    val egpHalf: Double,            // mU/L, insulin concentration that halves EGP
+    val agBioavailability: Double   // fraction of declared carbs entering D1 before f is applied
+) : ControlModel {
+    val nStates = 8
+
+    override fun glucoseMmol(s: DoubleArray) = s[Q1] / vg
+
+    fun derivative(s: DoubleArray): DoubleArray {
+        val ins = s[I]
+        val ug = s[F] * s[D2] / tMaxG2
+        val egp = egp0 * 2.0.pow(-(ins - iRef) / egpHalf)
+        return doubleArrayOf(
+            egp + ug - f01 - si * ins + s[FX],      // dQ1  -- no Q1 term
+            0.0,                                     // dS1 filled by the caller (needs u)
+            (s[S1] - s[S2]) / tMaxI,                 // dS2
+            s[S2] / (tMaxI * vi) - ke * ins,         // dI
+            -s[D1] / tMaxG1,                         // dD1
+            s[D1] / tMaxG1 - s[D2] / tMaxG2,         // dD2
+            0.0,                                     // dFx: random walk
+            0.0                                      // df:  random walk
+        )
+    }
+
+    /** RK4 over dtMin with constant infusion u (mU/min). Fx may go negative; f is clamped to fLimits. */
+    override fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
+        fun d(x: DoubleArray) = derivative(x).also { it[S1] = u - x[S1] / tMaxI }
+        val k1 = d(s)
+        val k2 = d(add(s, k1, dtMin / 2)); val k3 = d(add(s, k2, dtMin / 2)); val k4 = d(add(s, k3, dtMin))
+        return DoubleArray(nStates) { i ->
+            clampState(i, s[i] + dtMin / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]))
+        }
+    }
+
+    private fun add(s: DoubleArray, d: DoubleArray, h: Double) =
+        DoubleArray(nStates) { i -> clampState(i, s[i] + h * d[i]) }
+
+    private fun clampState(i: Int, v: Double) = when (i) {
+        FX -> v                                             // a flux, may be negative
+        F  -> min(F_MAX, max(F_MIN, v))                     // SubModel1::fLimits
+        else -> max(0.0, v)
+    }
+
+    /** Declared carbohydrate enters D1. `f` then scales what actually reaches plasma. */
+    fun addMeal(s: DoubleArray, carbsG: Double) = s.copyOf().also {
+        it[D1] += agBioavailability * carbsG * MMOL_PER_G
+    }
+
+    fun addBolus(s: DoubleArray, unitsU: Double) = s.copyOf().also { it[S1] += unitsU * 1000.0 }
+
+    /** Insulin and gut at equilibrium for infusion u; glucose placed at [glucoseMmol]. */
+    fun steadyState(u: Double, glucoseMmol: Double): DoubleArray {
+        val s = DoubleArray(nStates)
+        s[S1] = u * tMaxI; s[S2] = u * tMaxI; s[I] = u / (vi * ke)
+        s[Q1] = glucoseMmol * vg
+        s[FX] = 0.0; s[F] = F_PRIOR
+        return s
+    }
+
+    companion object {
+        const val Q1 = 0; const val S1 = 1; const val S2 = 2; const val I = 3
+        const val D1 = 4; const val D2 = 5; const val FX = 6; const val F = 7
+        const val MMOL_PER_G = 1000.0 / 180.16
+
+        /** `Model1::fPriorN` 1.0, `fPriorSDN` 0.3, `SubModel1::fLimits` [0.2, 2.2]. */
+        const val F_PRIOR = 1.0; const val F_PRIOR_SD = 0.3
+        const val F_MIN = 0.2; const val F_MAX = 2.2
+
+        /** `Model1::tMaxG1s` (0x22f40) and `tMaxG2s` (0x22f64) — the 8-submodel bank. */
+        val TMAXG1 = doubleArrayOf(21.88, 21.88, 81.88, 51.88, 16.63, 16.63, 36.63, 16.63)
+        val TMAXG2 = doubleArrayOf(140.0, 140.0, 140.0, 140.0, 76.91, 76.91, 76.91, 76.91)
+        /** `ModelIMM1::multWini` (0x23630) — initial-covariance multiplier per submodel. */
+        val MULT_W_INI = doubleArrayOf(1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0, 2.0)
+        /** `ModelIMM1::multWktInsIni` (0x23670) — per-submodel insulin-sensitivity split. */
+        val MULT_WKT_INS = doubleArrayOf(1.0, 1.4, 1.0, 1.4, 1.0, 1.4, 1.0, 1.4)
+        /** `Model1::priorMealProb` (0x22ff0) — [submodel][meal size class 0..3]. */
+        val PRIOR_MEAL_PROB = arrayOf(
+            doubleArrayOf(0.1, 0.0, 0.1, 0.0), doubleArrayOf(0.2, 0.2, 0.2, 0.2),
+            doubleArrayOf(0.1, 0.0, 0.1, 0.0), doubleArrayOf(0.2, 0.2, 0.2, 0.2),
+            doubleArrayOf(0.2, 0.0, 0.3, 0.0), doubleArrayOf(0.125, 0.125, 0.125, 0.125),
+            doubleArrayOf(0.2, 0.0, 0.4, 0.0), doubleArrayOf(0.1, 0.1, 0.1, 0.1))
+        /** `Model1::weightCategory` (0x23070), kg. */
+        val WEIGHT_CATEGORY = doubleArrayOf(13.0, 25.0, 50.0, 85.0, 10000.0)
+        /** `Model1::mealSizeForWeightCategory` (0x23084), grams, [weightCat][class]. */
+        val MEAL_SIZE = arrayOf(
+            doubleArrayOf(6.0, 11.0, 36.0, 1000.0), doubleArrayOf(6.0, 16.0, 51.0, 1000.0),
+            doubleArrayOf(11.0, 31.0, 71.0, 1000.0), doubleArrayOf(16.0, 41.0, 71.0, 1000.0),
+            doubleArrayOf(21.0, 51.0, 81.0, 1000.0))
+        /** `halfTimeTran` (0x22cec), min — IMM mode-transition half-times. */
+        val HALF_TIME_TRAN = doubleArrayOf(17.0, 60.0, 180.0)
+        /** `Model1::tMaxIs` (0x22f30). */
+        const val TMAX_I = 45.0
+
+        /** §3.3: meal size class from carbohydrate relative to body weight. */
+        fun mealClass(weightKg: Double, carbsG: Double): Int {
+            val wc = WEIGHT_CATEGORY.indexOfFirst { weightKg <= it }.let { if (it < 0) 4 else it }
+            val row = MEAL_SIZE[wc]
+            return row.indexOfFirst { carbsG <= it }.let { if (it < 0) 3 else it }
+        }
+
+        /**
+         * Build submodel [k] for a patient, deriving the five unrecovered parameters from the profile.
+         *
+         * Anchors, the same two `HovorkaParams.personalize` uses:
+         *  - at basal insulin with no carbohydrate, dQ1/dt = 0, so glucose holds wherever it is;
+         *  - one unit of insulin lowers glucose by ISF, and since disposal is `SI*I` the whole-bolus
+         *    integral is `integral(I dt) = D/(vi*ke)`, giving `SI = ISF * vg * vi * ke / 1000`.
+         *
+         * `iRef` is folded into `egp0`. `F01` keeps Hovorka's `0.0097 * weight`. `egpHalf` is a free
+         * parameter of the fit. `MULT_WKT_INS[k]` scales `SI` per submodel, which is what that decoded
+         * array appears to be for.
+         */
+        fun forProfile(k: Int, weightKg: Double, isfMmolPerU: Double, basalUPerHr: Double,
+                       egpHalfMuPerL: Double, agBio: Double = 0.8): CamapsSubModel {
+            val vg = 0.16 * weightKg
+            val vi = 0.12 * weightKg
+            val ke = 0.14
+            val f01 = 0.0097 * weightKg
+            val si = isfMmolPerU * vg * vi * ke / 1000.0 * MULT_WKT_INS[k]
+            val iBasal = (basalUPerHr * 1000.0 / 60.0) / (vi * ke)
+            // balance at basal: egp0 * 2^(-iBasal/half) = f01 + si*iBasal
+            val egp0 = (f01 + si * iBasal) / 2.0.pow(-iBasal / egpHalfMuPerL)
+            return CamapsSubModel(vg, vi, ke, TMAX_I, TMAXG1[k], TMAXG2[k],
+                egp0, f01, si, 0.0, egpHalfMuPerL, agBio)
+        }
+    }
+}

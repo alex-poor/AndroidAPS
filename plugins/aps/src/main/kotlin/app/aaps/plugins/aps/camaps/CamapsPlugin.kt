@@ -142,20 +142,13 @@ class CamapsPlugin @Inject constructor(
         val icGPerU = profile.getIc()
         val maxBasalUhr = min(preferences.get(DoubleKey.ApsMaxBasal), MAX_BASAL_ABS_CAP)
 
-        // model identified from the titrated profile, anchored so nominal basal holds the profile target
-        val key = "%.1f/%.1f/%.2f/%.4f/%.2f".format(weightKg, isfMgdl, icGPerU, nominalUhr, profileTargetMmol)
-        if (key != cachedKey) {
-            // CamapsModel (CamAPS's own glucose equation) is NOT used: it reproduces the binary's
-            // commanded rates far better but forecasts THIS PATIENT's glucose far worse. See
-            // report/camaps-model-spec.md §21 for the 30-day numbers.
-            cachedModel = EgpFluxModel(HovorkaParams.personalize(
-                weightKg, isfMgdl, icGPerU, nominalUhr, profileTargetMmol, tMaxGmin = TMAXG_MIN))
-            cachedKey = key
-        }
-        val model = cachedModel ?: return
+        // CamAPS's own model: 8 submodels with the decoded two-compartment gut, the bioavailability
+        // state and the EGP form of SubModel1::EndoBalance. Rebuilt each tick, so no filter state can
+        // silently persist. See report/camaps-model-spec.md §23.
+        val isfMmol = isfMgdl / MGDL_PER_MMOL
 
-        val est = estimateState(model, nominalMuMin, now)
-        val rolloutModel = est.rolloutModel() ?: model            // IMM: roll out with the winning submodel
+        val est = estimateState(weightKg, isfMmol, nominalUhr, now)
+        val (rolloutModel, rolloutState) = est.best()              // the winning submodel
         // §5 MPC::MaximumPersonalRange -- the controller's own ceiling. Decoded, not fitted; see
         // CamapsMpc.maximumPersonalRange. Needs TDD, the 24h MEAN basal and the CURRENT block, which
         // differ on any profile with real dawn variation, so all three are passed rather than folded.
@@ -185,7 +178,7 @@ class CamapsPlugin @Inject constructor(
             // meal (GetMeal's window is 60 min), on the reasoning that carbs are on the way.
             mealWithinLastHour = persistenceLayer
                 .getCarbsFromTimeToTimeExpanded(now - 3_600_000L, now, true).any { it.amount > 0.0 }
-        ).decide(est.x)
+        ).decide(rolloutState)
 
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))
         val rawCgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL
@@ -194,14 +187,13 @@ class CamapsPlugin @Inject constructor(
         // DISPLAY ONLY — AAPS's predictive alarms key off eventualBG, and the model rollout is known to be
         // unreliable in both directions, so the mass-balance identity is reported instead. It touches
         // nothing in the control path above; this controller does not consume IOB or COB.
-        val isfMmol = isfMgdl / MGDL_PER_MMOL
         val iobNow = iobCobCalculator.calculateIobFromBolus().iob + iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().basaliob
         val cobG = iobCobCalculator.getCobInfo("CamapsEventual").displayCob ?: 0.0
         val eventualDisplay = (rawCgmMmol - iobNow * isfMmol + (if (icGPerU > 0) cobG * isfMmol / icGPerU else 0.0))
             .coerceIn(1.5, 40.0)
 
         val reasonStr = "${decision.reason} | est.G=%.1f | display eventual %.1f (IOB %.1f, COB %.0f)"
-            .format(model.glucoseMmol(est.x), eventualDisplay, iobNow, cobG)
+            .format(est.glucoseMmol(), eventualDisplay, iobNow, cobG)
         val rt = RT(
             algorithm = APSResult.Algorithm.SMB,
             runningDynamicIsf = false,
@@ -222,47 +214,40 @@ class CamapsPlugin @Inject constructor(
     }
 
     /**
-     * Replay the trailing [WINDOW_H] hours. Stateless: rebuilt every tick.
+     * Replay the trailing [WINDOW_H] hours through CamAPS's own estimator. Stateless: rebuilt every tick,
+     * so a bad filter state cannot persist across ticks.
      *
-     * Uses an EKF over [EgpFluxModel] — Hovorka plus one unmodelled-glucose-flux state — rather than the
-     * IMM bank, because without that state the forecast discards almost all of an observed trend and the
-     * controller cannot predict the hypo that should make it suspend. Measured: glucose 6.5 falling
-     * 3.0 mmol/L/h forecasts to 6.09 at +60 min with the bank, and to 4.58 with the flux state.
+     * [CamapsEstimator] is the decoded structure — 8 submodels differing in the two gut time constants
+     * (`tMaxG1s`/`tMaxG2s`) and an insulin-sensitivity multiplier (`multWktInsIni`), initial covariance
+     * scaled by `multWini`, mode transitions on `halfTimeTran`, a submodel prior selected by the meal size
+     * class (carbohydrate against body weight), and bioavailability as an estimated state clamped to
+     * `fLimits`.
      *
-     * Scored against 627 sanity-verified points from the real binary, in units of profile basal:
+     * Validated on 30 days of this patient's own data, forecast RMSE against actual future CGM
+     * (hovorka-mpc/CamapsRealFit.kt), against what the loop runs today:
      * ```
-     *   config                          level  trend  lowfall  ceiling   points the real one
-     *                                                                    suspends and we do not
-     *   IMM bank                        0.160  0.490    0.190    0.273        11
-     *   single EKF, flux FROZEN (q=0)   0.160  0.490    0.190    0.273        11   <- control
-     *   + flux q = 0.03                 0.162  0.412    0.162    0.213         2
-     *   + flux q = 0.10                 0.198  0.363    0.215    0.148         0
+     *   Hovorka + IMM bank   30m 1.812   60m 3.022   120m 4.421
+     *   Hovorka + single EKF 30m 1.637   60m 2.791   120m 4.453
+     *   CamAPS estimator     30m 1.280   60m 2.129   120m 3.422     <- 22%/24%/23% better
      * ```
-     * The frozen control is bit-identical to the IMM bank, so the whole difference is the flux state and
-     * not the estimator swap. The probes contain no meals, which is why the bank's carb-absorption
-     * submodels contribute nothing to them — on real data with meals they may well, so this is a
-     * deliberate trade that has NOT been validated on real history yet.
-     *
-     * [DIST_PROCESS_VAR] is set to 0.10: it removes all 11 points where the real controller suspends and
-     * this one does not, for 0.04 x basal of level accuracy. That asymmetry is the right way round, but
-     * it is a judgement made against synthetic probes and should be re-derived from the user's own
-     * history before this is trusted.
+     * An earlier one-compartment reduction of the same glucose equation was 44-87% WORSE than Hovorka at
+     * 120 minutes. The difference is the two-compartment gut: `tMaxG1s` into `tMaxG2s` (21.88 into 140 for
+     * submodel 0) is a fast fill and a long slow release, which collapsing to a single time constant
+     * cannot represent.
      */
-    private fun estimateState(model: HovorkaModel, nominalMuMin: Double, now: Long): GlucoseEstimator {
+    private fun estimateState(weightKg: Double, isfMmol: Double, nominalUhr: Double,
+                              now: Long): CamapsEstimator {
         val start = now - WINDOW_H * 3_600_000L
         val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
         val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true)
         val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
         val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
         val profile = profileFunction.getProfile()!!
-        // the SAME model class the rollout uses, so estimator and controller cannot disagree
-        val est: GlucoseEstimator = HovorkaEkf(
-            model, model.steadyState(nominalMuMin),
-            unclampedState = EgpFluxModel.DIST,
-            distInitVar = DIST_INIT_VAR, distProcessNoiseVar = DIST_PROCESS_VAR)
-        fun minOf(ts: Long) = ((ts - start) / 60000L).toInt()
-        val bolusAt = HashMap<Int, Double>(); boluses.forEach { bolusAt.merge(minOf(it.timestamp), it.amount, Double::plus) }
-        val carbAt = HashMap<Int, Double>(); carbs.forEach { carbAt.merge(minOf(it.timestamp), it.amount, Double::plus) }
+        val est = CamapsEstimator(weightKg, isfMmol, nominalUhr,
+            egpHalfMuPerL = EGP_HALF_MU_PER_L, qFlux = Q_FLUX, qBio = Q_BIO)
+        fun minOfTs(ts: Long) = ((ts - start) / 60000L).toInt()
+        val bolusAt = HashMap<Int, Double>(); boluses.forEach { bolusAt.merge(minOfTs(it.timestamp), it.amount, Double::plus) }
+        val carbAt = HashMap<Int, Double>(); carbs.forEach { carbAt.merge(minOfTs(it.timestamp), it.amount, Double::plus) }
         fun basalUhrAt(ts: Long): Double {
             val tb = tbrs.lastOrNull { it.timestamp <= ts && ts < it.timestamp + it.duration }
             val base = profile.getBasal(ts)
@@ -273,7 +258,7 @@ class CamapsPlugin @Inject constructor(
             carbAt[m]?.let { est.meal(it) }
             bolusAt[m]?.let { est.bolus(it) }
             est.predict(basalUhrAt(start + m * 60000L) * 1000.0 / 60.0, 1.0)
-            while (bgIdx < bg.size && minOf(bg[bgIdx].timestamp) <= m) { est.update(bg[bgIdx].value / MGDL_PER_MMOL); bgIdx++ }
+            while (bgIdx < bg.size && minOfTs(bg[bgIdx].timestamp) <= m) { est.update(bg[bgIdx].value / MGDL_PER_MMOL); bgIdx++ }
         }
         return est
     }
@@ -286,17 +271,32 @@ class CamapsPlugin @Inject constructor(
         const val RAW_HYPO_SUSPEND_MMOL = 3.9
         const val MAX_BASAL_ABS_CAP = 5.0
 
-        /** Prior variance on the unmodelled-flux state: sd 0.1 mmol/min. */
-        const val DIST_INIT_VAR = 0.01
+        /**
+         * The three parameters of [CamapsEstimator] whose values the binary does not expose, fitted
+         * against 30 days of this patient's own data on forecast RMSE vs actual future CGM
+         * (hovorka-mpc/CamapsRealFit.kt), NOT against the binary's commanded rates:
+         * ```
+         *   egpHalf   30m     60m    120m
+         *      80   1.349   2.251   3.620
+         *     200   1.296   2.158   3.466
+         *     400   1.280   2.129   3.422     <- chosen; past here the gain is under 1%
+         *     800   1.272   2.115   3.401
+         * ```
+         * `egpHalf` is `SubModel1::EndoBalance`'s `this+0x234`, a per-submodel field in the binary, so
+         * fitting it per patient is what CamAPS itself does with it. At 400 mU/L the exponential is nearly
+         * flat over the physiological insulin range, i.e. this patient's data want weak counter-regulation.
+         */
+        const val EGP_HALF_MU_PER_L = 400.0
 
         /**
-         * Random-walk process variance for the unmodelled-flux state.
-         *
-         * 0.1 is what 30 days of the patient's own data prefer on forecast RMSE against actual future CGM
-         * (1.657 / 3.181 / 7.010 at 30/60/120 min with the CamAPS plant, against 1.876 / 3.615 / 7.720 at
-         * q = 1.0). Against the binary's commanded rates 1.0 scored better, but a forecast checked on real
-         * glucose is the stronger evidence, and it is the patient's own. See §21 of the spec.
+         * Process noise on the unmodelled-flux state. 1e-2 rather than 1e-3: it costs 0.6% at 60 min and
+         * 1.7% at 120 min on real data (2.129 -> 2.141, 3.422 -> 3.480) and in exchange removes one of the
+         * two probe points where the real controller suspends and this one does not, while improving the
+         * level and trend arms (0.248 -> 0.241, 0.451 -> 0.402).
          */
-        const val DIST_PROCESS_VAR = 0.1
+        const val Q_FLUX = 1e-2
+
+        /** Process noise on the bioavailability state. Fitted as above; neutral against 0 once flux is on. */
+        const val Q_BIO = 1e-5
     }
 }

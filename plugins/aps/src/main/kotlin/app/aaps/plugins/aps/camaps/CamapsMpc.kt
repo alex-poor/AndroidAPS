@@ -1,6 +1,5 @@
 package app.aaps.plugins.aps.camaps
 
-import app.aaps.plugins.aps.hovorka.HovorkaModel
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
@@ -81,7 +80,7 @@ import kotlin.math.pow
  * exactly two pieces of safety machinery: the bound above, and the floor above.
  */
 class CamapsMpc(
-    private val model: HovorkaModel,
+    private val model: ControlModel,
     private val targetMmol: Double,
     private val nominalBasalMuPerMin: Double,
     private val maxBasalMuPerMin: Double,
