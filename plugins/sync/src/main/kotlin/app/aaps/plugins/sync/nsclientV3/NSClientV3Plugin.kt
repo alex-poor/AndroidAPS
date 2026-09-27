@@ -360,6 +360,15 @@ class NSClientV3Plugin @Inject constructor(
         handler?.postDelayed(runLoop, T.mins(2).msecs())
     }
 
+    /**
+     * [executeLoop] from a thread that must not block — a socket.io callback. With forceNew it can
+     * sleep in 5 s steps waiting for running work, and doing that on socket.io's single EventThread
+     * stops ping/pong handling until the server drops the connection, which reconnects and repeats.
+     */
+    fun executeLoopAsync(origin: String, forceNew: Boolean) {
+        handler?.post { executeLoop(origin, forceNew) } ?: aapsLogger.debug(LTag.NSCLIENT, "executeLoopAsync($origin) with no handler: plugin stopped")
+    }
+
     fun scheduleIrregularExecution(refreshToken: Boolean = false) {
         if (refreshToken) {
             handler?.post { executeLoop("REFRESH TOKEN", forceNew = true) }

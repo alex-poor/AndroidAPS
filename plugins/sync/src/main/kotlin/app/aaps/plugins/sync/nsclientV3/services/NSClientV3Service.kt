@@ -154,7 +154,31 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onConnectStorage = Emitter.Listener {
+    /**
+     * Every socket.io listener and Ack runs on the library's EventThread, which logs a listener
+     * exception and then rethrows it — there is no handler above it, so one malformed document
+     * from the server (a missing srvModified on a v1-originated treatment, a Gson parse error)
+     * took the whole app down, and could again on every reconnect. Log it and carry on instead.
+     */
+    private fun guarded(name: String, body: (Array<Any>) -> Unit) = Emitter.Listener { args ->
+        try {
+            body(args)
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.NSCLIENT, "WS $name handler failed", e)
+            rxBus.send(EventNSClientNewLog("◄ WS", "$name: ${e.javaClass.simpleName} ${e.message ?: ""}"))
+        }
+    }
+
+    private fun guardedAck(name: String, body: (Array<Any>) -> Unit) = Ack { args ->
+        try {
+            body(args)
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.NSCLIENT, "WS $name ack failed", e)
+            rxBus.send(EventNSClientNewLog("◄ WS", "$name: ${e.javaClass.simpleName} ${e.message ?: ""}"))
+        }
+    }
+
+    private val onConnectStorage = guarded("onConnectStorage") {
         val socketId = storageSocket?.id() ?: "NULL"
         rxBus.send(EventNSClientNewLog("◄ WS", "connected storage ID: $socketId"))
         if (storageSocket != null) {
@@ -163,14 +187,14 @@ class NSClientV3Service : DaggerService() {
                 it.put("collections", JSONArray(arrayOf("devicestatus", "entries", "profile", "treatments", "foods", "settings")))
             }
             rxBus.send(EventNSClientNewLog("► WS", "requesting auth for storage"))
-            storageSocket?.emit("subscribe", authMessage, Ack { args ->
+            storageSocket?.emit("subscribe", authMessage, guardedAck("subscribeStorage") { args ->
                 val response = args[0] as JSONObject
                 wsConnected = if (response.optBoolean("success")) {
                     rxBus.send(EventNSClientNewLog("◄ WS", "Subscribed for: ${response.optString("collections")}"))
                     // during disconnection updated data is not received
                     // thus run non WS load to get missing data
                     nsClientV3Plugin.initialLoadFinished = false
-                    nsClientV3Plugin.executeLoop("WS_CONNECT", forceNew = true)
+                    nsClientV3Plugin.executeLoopAsync("WS_CONNECT", forceNew = true)
                     true
                 } else {
                     rxBus.send(EventNSClientNewLog("◄ WS", "Auth failed"))
@@ -181,7 +205,7 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onConnectAlarms = Emitter.Listener {
+    private val onConnectAlarms = guarded("onConnectAlarms") {
         val socket = alarmSocket
         val socketId = socket?.id() ?: "NULL"
         rxBus.send(EventNSClientNewLog("◄ WS", "connected alarms ID: $socketId"))
@@ -190,7 +214,7 @@ class NSClientV3Service : DaggerService() {
                 it.put("accessToken", preferences.get(StringKey.NsClientAccessToken))
             }
             rxBus.send(EventNSClientNewLog("► WS", "requesting auth for alarms"))
-            socket.emit("subscribe", authMessage, Ack { args ->
+            socket.emit("subscribe", authMessage, guardedAck("subscribeAlarms") { args ->
                 val response = args[0] as JSONObject
                 if (response.optBoolean("success")) rxBus.send(EventNSClientNewLog("◄ WS", response.optString("message")))
                 else rxBus.send(EventNSClientNewLog("◄ WS", "Auth failed"))
@@ -198,7 +222,7 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onDisconnectStorage = Emitter.Listener { args ->
+    private val onDisconnectStorage = guarded("onDisconnectStorage") { args ->
         aapsLogger.debug(LTag.NSCLIENT, "disconnect storage reason: ${args[0]}")
         rxBus.send(EventNSClientNewLog("◄ WS", "disconnect storage event"))
         wsConnected = false
@@ -206,24 +230,26 @@ class NSClientV3Service : DaggerService() {
         rxBus.send(EventNSClientUpdateGuiStatus())
     }
 
-    private val onDisconnectAlarm = Emitter.Listener { args ->
+    private val onDisconnectAlarm = guarded("onDisconnectAlarm") { args ->
         aapsLogger.debug(LTag.NSCLIENT, "disconnect alarm reason: ${args[0]}")
         rxBus.send(EventNSClientNewLog("◄ WS", "disconnect alarm event"))
     }
 
-    private val onDataCreateUpdate = Emitter.Listener { args ->
+    private val onDataCreateUpdate = guarded("onDataCreateUpdate") { args ->
         val response = args[0] as JSONObject
         aapsLogger.debug(LTag.NSCLIENT, "onDataCreateUpdate: $response")
         val collection = response.getString("colName")
         val docJson = response.getJSONObject("doc")
         val docString = response.getString("doc")
         rxBus.send(EventNSClientNewLog("◄ WS CREATE/UPDATE", "$collection <i>$docString</i>"))
-        val srvModified = docJson.getLong("srvModified")
+        // Absent on documents last touched through API v1 (careportal, older uploaders); such a
+        // document is still processed, it just cannot move the high-water mark.
+        val srvModified = docJson.optLong("srvModified", 0L)
         // Don't advance the high-water-mark until the initial catch-up load chain
         // has finished after a (re)connect. Otherwise the Load*Worker chain would
         // query "modifiedSince (just-bumped pointer)" and skip exactly the offline
         // window we need to backfill.
-        if (nsClientV3Plugin.initialLoadFinished) {
+        if (nsClientV3Plugin.initialLoadFinished && srvModified > 0) {
             nsClientV3Plugin.lastLoadedSrvModified.set(collection, srvModified)
             nsClientV3Plugin.storeLastLoadedSrvModified()
         }
@@ -252,11 +278,11 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onDataDelete = Emitter.Listener { args ->
+    private val onDataDelete = guarded("onDataDelete") { args ->
         val response = args[0] as JSONObject
         aapsLogger.debug(LTag.NSCLIENT, "onDataDelete: $response")
-        val collection = response.optString("colName") ?: return@Listener
-        val identifier = response.optString("identifier") ?: return@Listener
+        val collection = response.optString("colName") ?: return@guarded
+        val identifier = response.optString("identifier") ?: return@guarded
         rxBus.send(EventNSClientNewLog("◄ WS DELETE", "$collection $identifier"))
         if (collection == "treatments") {
             storeDataForDb.addToDeleteTreatment(identifier)
@@ -268,7 +294,7 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onAnnouncement = Emitter.Listener { args ->
+    private val onAnnouncement = guarded("onAnnouncement") { args ->
 
         /*
         {
@@ -287,7 +313,7 @@ class NSClientV3Service : DaggerService() {
         if (preferences.get(BooleanKey.NsClientNotificationsFromAnnouncements))
             uiInteraction.addNotificationWithAction(NSAlarmObject(data))
     }
-    private val onAlarm = Emitter.Listener { args ->
+    private val onAlarm = guarded("onAlarm") { args ->
 
         /*
         {
@@ -312,7 +338,7 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onUrgentAlarm = Emitter.Listener { args: Array<Any> ->
+    private val onUrgentAlarm = guarded("onUrgentAlarm") { args: Array<Any> ->
         val data = args[0] as JSONObject
         rxBus.send(EventNSClientNewLog("◄ URGENT ALARM", data.optString("message")))
         aapsLogger.debug(LTag.NSCLIENT, data.toString())
@@ -323,7 +349,7 @@ class NSClientV3Service : DaggerService() {
         }
     }
 
-    private val onClearAlarm = Emitter.Listener { args ->
+    private val onClearAlarm = guarded("onClearAlarm") { args ->
 
         /*
         {

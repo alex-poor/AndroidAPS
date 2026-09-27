@@ -702,6 +702,7 @@ class StoreDataForDbImplTest : TestBaseWithProfile() {
     @Test
     fun `updateDeletedGlucoseValuesInDb invalidates glucose value when found`() {
         val nsIdToDelete = "gv_to_delete_id"
+        whenever(preferences.get(BooleanKey.NsClientAcceptCgmData)).thenReturn(true)
         storeDataForDb.addToDeleteGlucoseValue(nsIdToDelete)
         whenever(persistenceLayer.getBgReadingByNSId(nsIdToDelete)).thenReturn(gv)
 
@@ -713,8 +714,22 @@ class StoreDataForDbImplTest : TestBaseWithProfile() {
     }
 
     @Test
+    fun `updateDeletedGlucoseValuesInDb ignores NS deletes when NS is not a BG source`() {
+        // Upload-only NS with a local sensor: a delete in NS must not remove the reading the loop uses.
+        whenever(preferences.get(BooleanKey.NsClientAcceptCgmData)).thenReturn(false)
+        whenever(nsClientSource.isEnabled()).thenReturn(false)
+        storeDataForDb.addToDeleteGlucoseValue("gv_uploaded_by_us")
+
+        storeDataForDb.updateDeletedGlucoseValuesInDb()
+
+        verify(persistenceLayer, never()).getBgReadingByNSId(any())
+        verify(persistenceLayer, never()).invalidateGlucoseValue(any(), any(), any(), anyOrNull(), anyList())
+    }
+
+    @Test
     fun `updateDeletedGlucoseValuesInDb does nothing if glucose value is not found`() {
         val nsIdNotFound = "gv_not_in_db_id"
+        whenever(preferences.get(BooleanKey.NsClientAcceptCgmData)).thenReturn(true)
         storeDataForDb.addToDeleteGlucoseValue(nsIdNotFound)
         whenever(persistenceLayer.getBgReadingByNSId(nsIdNotFound)).thenReturn(null)
 
