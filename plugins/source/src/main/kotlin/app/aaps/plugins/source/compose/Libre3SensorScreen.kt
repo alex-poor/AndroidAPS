@@ -45,6 +45,7 @@ import app.aaps.core.compose.theme.AapsTheme
 fun Libre3SensorScreen(
     state: Libre3SensorState,
     onStartNewSensor: () -> Unit,
+    onEnterFingerprickBg: () -> Unit = {},
     onStopSensor: () -> Unit,
     onForgetSensor: () -> Unit
 ) {
@@ -100,6 +101,14 @@ fun Libre3SensorScreen(
         )
 
         if (state.serial != null) {
+            // Finger-prick correction for the rise-lag under-read. Non-destructive, so it sits with
+            // the primary action rather than behind the danger divider.
+            PrimaryButton(
+                label = "Enter finger-prick BG",
+                onClick = onEnterFingerprickBg,
+                modifier = Modifier.fillMaxWidth()
+            )
+
             // Destructive actions live below a divider and away from the primary action, and each
             // confirms. Juggluco puts Terminate one tap from Info; that is how sensors get killed
             // by accident.
