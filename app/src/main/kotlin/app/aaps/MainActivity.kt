@@ -62,7 +62,6 @@ import app.aaps.plugins.configuration.activities.DaggerAppCompatActivityWithResu
 import app.aaps.plugins.configuration.activities.SingleFragmentActivity
 import app.aaps.plugins.configuration.maintenance.MaintenancePlugin
 import app.aaps.plugins.configuration.setupwizard.SetupWizardActivity
-import app.aaps.plugins.constraints.signatureVerifier.SignatureVerifierPlugin
 import app.aaps.ui.activities.ProfileHelperActivity
 import app.aaps.ui.activities.StatsActivity
 import app.aaps.ui.activities.TreatmentsActivity
@@ -89,7 +88,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
     @Inject lateinit var protectionCheck: ProtectionCheck
     @Inject lateinit var iconsProvider: IconsProvider
     @Inject lateinit var constraintChecker: ConstraintsChecker
-    @Inject lateinit var signatureVerifierPlugin: SignatureVerifierPlugin
     @Inject lateinit var maintenancePlugin: MaintenancePlugin
     @Inject lateinit var profileFunction: ProfileFunction
     @Inject lateinit var fileListProvider: FileListProvider
@@ -467,8 +465,6 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         fabricPrivacy.setUserProperty("Version", config.VERSION_NAME)
         fabricPrivacy.setUserProperty("HEAD", BuildConfig.HEAD)
         fabricPrivacy.setUserProperty("Remote", remote)
-        val hashes: List<String> = signatureVerifierPlugin.shortHashes()
-        if (hashes.isNotEmpty()) fabricPrivacy.setUserProperty("Hash", hashes[0])
         activePlugin.activePump.let { fabricPrivacy.setUserProperty("Pump", it::class.java.simpleName) }
         if (!config.AAPSCLIENT && !config.PUMPCONTROL)
             activePlugin.activeAPS.let { fabricPrivacy.setUserProperty("Aps", it::class.java.simpleName) }
@@ -480,7 +476,7 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
         // instead, which is where a crash on this device is actually investigated from.
         fabricPrivacy.logMessage(
             "Build: HEAD=${BuildConfig.HEAD} version=${config.VERSION_NAME} type=${config.BUILD_TYPE} " +
-                "flavor=${config.FLAVOR} remote=$remote committed=${config.COMMITTED} hash=${hashes[0]}"
+                "flavor=${config.FLAVOR} remote=$remote committed=${config.COMMITTED}"
         )
     }
 

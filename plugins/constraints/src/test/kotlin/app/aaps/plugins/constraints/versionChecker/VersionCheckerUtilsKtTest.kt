@@ -1,4 +1,4 @@
-package app.aaps.plugins.constraints.signatureVerifier
+package app.aaps.plugins.constraints.versionChecker
 
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.resources.ResourceHelper
