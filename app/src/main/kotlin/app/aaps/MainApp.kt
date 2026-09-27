@@ -126,7 +126,9 @@ class MainApp : DaggerApplication() {
 
     private fun doInit() {
         aapsLogger.debug("doInit")
-        RxDogTag.install()
+        // Debug builds only: RxDogTag wraps every Rx observer and captures a stack trace at each subscribe,
+        // a per-subscription cost the loop build pays all day for crash reports it never sends.
+        if (BuildConfig.DEBUG) RxDogTag.install()
         setRxErrorHandler()
         LocaleHelper.update(this@MainApp)
 
@@ -177,7 +179,10 @@ class MainApp : DaggerApplication() {
         //  schedule widget update
         refreshWidget = Runnable {
             handler.postDelayed(refreshWidget, 60000)
-            Widget.updateWidget(this@MainApp, "ScheduleEveryMin")
+            // Only to age the "x min ago" text for someone looking at it: skip with the screen off. Real data
+            // changes update the widget through UpdateWidgetWorker regardless.
+            if ((getSystemService(POWER_SERVICE) as android.os.PowerManager).isInteractive)
+                Widget.updateWidget(this@MainApp, "ScheduleEveryMin")
         }
         handler.postDelayed(refreshWidget, 60000)
         config.appInitialized = true

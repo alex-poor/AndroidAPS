@@ -89,7 +89,6 @@ class IobCobOrefWorker @Inject internal constructor(
             var previous = autosensDataTable[prevDataTime]
             // start from oldest to be able sub cob
             for (i in bucketedData.size - 4 downTo 0) {
-                rxBus.send(EventIobCalculationProgress(CalculationWorkflow.ProgressData.IOB_COB_OREF, 100 - (100.0 * i / bucketedData.size).toInt(), data.cause))
                 if (isStopped) {
                     aapsLogger.debug(LTag.AUTOSENS) { "Aborting calculation thread (trigger): ${data.reason}" }
                     return Result.failure(workDataOf("Error" to "Aborting calculation thread (trigger): ${data.reason}"))

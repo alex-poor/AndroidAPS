@@ -32,7 +32,7 @@ class AAPSLoggerProduction(val l: L) : AAPSLogger {
 
     override fun debug(tag: LTag, format: String, vararg arguments: Any?) {
         if (l.findByName(tag.tag).enabled)
-            LoggerFactory.getLogger(tag.tag).debug(stackLogMarker() + format, arguments)
+            LoggerFactory.getLogger(tag.tag).debug(stackLogMarker() + format, *arguments)
     }
 
     override fun warn(tag: LTag, message: String) {
@@ -41,7 +41,7 @@ class AAPSLoggerProduction(val l: L) : AAPSLogger {
     }
 
     override fun warn(tag: LTag, format: String, vararg arguments: Any?) {
-        LoggerFactory.getLogger(tag.tag).warn(stackLogMarker() + format, arguments)
+        LoggerFactory.getLogger(tag.tag).warn(stackLogMarker() + format, *arguments)
     }
 
     override fun info(tag: LTag, message: String) {
@@ -51,7 +51,7 @@ class AAPSLoggerProduction(val l: L) : AAPSLogger {
 
     override fun info(tag: LTag, format: String, vararg arguments: Any?) {
         if (l.findByName(tag.tag).enabled)
-            LoggerFactory.getLogger(tag.tag).info(stackLogMarker() + format, arguments)
+            LoggerFactory.getLogger(tag.tag).info(stackLogMarker() + format, *arguments)
     }
 
     override fun error(tag: LTag, message: String) {
@@ -67,7 +67,7 @@ class AAPSLoggerProduction(val l: L) : AAPSLogger {
     }
 
     override fun error(format: String, vararg arguments: Any?) {
-        LoggerFactory.getLogger(LTag.CORE.tag).error(stackLogMarker() + format, arguments)
+        LoggerFactory.getLogger(LTag.CORE.tag).error(stackLogMarker() + format, *arguments)
     }
 
     override fun error(tag: LTag, message: String, throwable: Throwable) {
@@ -75,7 +75,7 @@ class AAPSLoggerProduction(val l: L) : AAPSLogger {
     }
 
     override fun error(tag: LTag, format: String, vararg arguments: Any?) {
-        LoggerFactory.getLogger(tag.tag).error(stackLogMarker() + format, arguments)
+        LoggerFactory.getLogger(tag.tag).error(stackLogMarker() + format, *arguments)
     }
 
     override fun debug(className: String, methodName: String, lineNumber: Int, tag: LTag, message: String) {
