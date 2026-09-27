@@ -1,14 +1,11 @@
 package app.aaps.plugins.main.general.persistentNotification
 
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.graphics.Paint
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
-import androidx.core.app.RemoteInput
 import app.aaps.core.data.model.TrendArrow
 import app.aaps.core.data.plugin.PluginType
 import app.aaps.core.data.time.T
@@ -43,7 +40,10 @@ import app.aaps.core.objects.extensions.generateCOBString
 import app.aaps.core.objects.extensions.round
 import app.aaps.core.objects.extensions.toStringShort
 import app.aaps.plugins.main.R
+import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.disposables.CompositeDisposable
+import io.reactivex.rxjava3.disposables.Disposable
+import java.util.concurrent.TimeUnit
 import io.reactivex.rxjava3.kotlin.plusAssign
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -85,16 +85,10 @@ class PersistentNotificationPlugin @Inject constructor(
     aapsLogger, rh
 ) {
 
-    // For Android Auto
-    // Intents are not declared in manifest and not consumed, this is intentionally because actually we can't do anything with
-    private val PACKAGE = "info.nightscout"
-    private val READ_ACTION = "info.nightscout.androidaps.ACTION_MESSAGE_READ"
-    private val REPLY_ACTION = "info.nightscout.androidaps.ACTION_MESSAGE_REPLY"
-    private val CONVERSATION_ID = "conversation_id"
-    private val EXTRA_VOICE_REPLY = "extra_voice_reply"
-    // End Android auto
-
     private val disposable = CompositeDisposable()
+
+    /** One pending re-render for when the shown reading turns stale; replaced on every update. */
+    private var staleRefresh: Disposable? = null
 
     /** Resolves its palette from the device configuration, so it is built once and not per update. */
     private val chart by lazy { BgNotificationChart(context) }
@@ -102,26 +96,24 @@ class PersistentNotificationPlugin @Inject constructor(
     override fun onStart() {
         super.onStart()
         notificationHolder.createNotificationChannel()
-        disposable += rxBus
-            .toObservable(EventRefreshOverview::class.java)
-            .observeOn(aapsSchedulers.io)
-            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
-        disposable += rxBus
-            .toObservable(EventInitializationChanged::class.java)
-            .observeOn(aapsSchedulers.io)
-            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
-        disposable += rxBus
-            .toObservable(EventAutosensCalculationFinished::class.java)
-            .observeOn(aapsSchedulers.io)
-            .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
-        disposable += rxBus
-            .toObservable(EventPreferenceChange::class.java)
-            .observeOn(aapsSchedulers.io)
+        // One debounced stream. Each rebuild costs IOB/COB, a DB query, two bitmaps and a Binder round-trip
+        // near the 1 MB cap, and one BG that leads to a temp fires several of these events within a second
+        // (and EventPreferenceChange fires for every preference write). Coalesce them.
+        disposable += Observable.merge(
+            listOf(
+                rxBus.toObservable(EventRefreshOverview::class.java),
+                rxBus.toObservable(EventInitializationChanged::class.java),
+                rxBus.toObservable(EventAutosensCalculationFinished::class.java),
+                rxBus.toObservable(EventPreferenceChange::class.java)
+            )
+        )
+            .debounce(UPDATE_DEBOUNCE_MS, TimeUnit.MILLISECONDS, aapsSchedulers.io)
             .subscribe({ triggerNotificationUpdate() }, fabricPrivacy::logException)
     }
 
     override fun onStop() {
         disposable.clear()
+        staleRefresh?.dispose()
         dummyServiceHelper.stopService(context)
         super.onStop()
     }
@@ -129,6 +121,21 @@ class PersistentNotificationPlugin @Inject constructor(
     private fun triggerNotificationUpdate() {
         updateNotification()
         dummyServiceHelper.startService(context)
+        scheduleStaleRefresh()
+    }
+
+    /**
+     * Nothing else re-renders the notification when the CGM goes silent — every trigger is a calculation,
+     * and without new data none runs — so the strike-through and the "old data" title would never appear
+     * and the last reading would sit there looking live. Re-render once when it crosses the stale line.
+     */
+    private fun scheduleStaleRefresh() {
+        staleRefresh?.dispose()
+        val lastBg = lastBgData.lastBg() ?: return
+        val delay = lastBg.timestamp + STALE_AFTER_MS - dateUtil.now()
+        if (delay <= 0) return
+        staleRefresh = Observable.timer(delay, TimeUnit.MILLISECONDS, aapsSchedulers.io)
+            .subscribe({ updateNotification() }, fabricPrivacy::logException)
     }
 
     private fun updateNotification() {
@@ -139,95 +146,45 @@ class PersistentNotificationPlugin @Inject constructor(
         var line3: String? = null
         var tempBasalText: String? = null
         var avgDeltaText: String? = null
-        var unreadConversationBuilder: NotificationCompat.CarExtender.UnreadConversation.Builder? = null
         val profileValid = profileFunction.isProfileValid("Notification")
         if (profileValid) {
-            var line1aa: String
             val lastBG = iobCobCalculator.ads.lastBg()
             val glucoseStatus = glucoseStatusProvider.glucoseStatusData
             if (lastBG != null) {
-                line1aa = profileUtil.fromMgdlToStringInUnits(lastBG.recalculated)
-                line1 = line1aa
+                line1 = profileUtil.fromMgdlToStringInUnits(lastBG.recalculated)
+                // The bucketed reading carries no arrow on the averaged 1-min path (Libre 3) or with
+                // smoothing, which printed "??" here; the custom views already use the calculator.
+                val arrowSymbol = (trendCalculator.getTrendArrow(iobCobCalculator.ads) ?: lastBG.trendArrow).symbol
                 if (glucoseStatus != null) {
                     // Android bundles this notification with AAPS's alarms, and a bundled child is
                     // rendered as ONE ellipsized line built from title + text - the custom views
                     // below are not drawn in that state. So the title carries only what has to
                     // survive truncation: value, trend, delta. The rest moved to line2.
-                    line1 += "  " + lastBG.trendArrow.symbol +
+                    line1 += "  " + arrowSymbol +
                         "  Δ" + profileUtil.fromMgdlToSignedStringInUnits(glucoseStatus.delta)
-                    line1aa += "  " + lastBG.trendArrow.symbol
                     avgDeltaText = "avgΔ" + profileUtil.fromMgdlToSignedStringInUnits(glucoseStatus.shortAvgDelta)
                 } else {
                     line1 += " " +
                         rh.gs(R.string.old_data) +
                         " "
-                    line1aa += "$line1."
                 }
             } else {
-                line1aa = rh.gs(app.aaps.core.ui.R.string.missed_bg_readings)
-                line1 = line1aa
+                line1 = rh.gs(app.aaps.core.ui.R.string.missed_bg_readings)
             }
             val activeTemp = processedTbrEbData.getTempBasalIncludingConvertedExtended(System.currentTimeMillis())
             if (activeTemp != null) {
                 tempBasalText = activeTemp.toStringShort(rh)
-                line1aa += "  " + tempBasalText + "."
             }
             //IOB
             val bolusIob = iobCobCalculator.calculateIobFromBolus().round()
             val basalIob = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
-            line2 =
-                rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, (bolusIob.iob + basalIob.basaliob)) + " " + rh.gs(
-                    app.aaps.core.ui.R
-                        .string.cob
-                ) + ": " + iobCobCalculator.getCobInfo(
-                    "PersistentNotificationPlugin"
-                ).generateCOBString(decimalFormatter)
+            val cobString = iobCobCalculator.getCobInfo("PersistentNotificationPlugin").generateCOBString(decimalFormatter)
+            line2 = rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " +
+                rh.gs(app.aaps.core.ui.R.string.format_insulin_units, (bolusIob.iob + basalIob.basaliob)) + " " +
+                rh.gs(app.aaps.core.ui.R.string.cob) + ": " + cobString
             // Displaced from the title so it stays short enough to read when bundled.
             listOfNotNull(tempBasalText, avgDeltaText).forEach { line2 += "  " + it }
-            val line2aa =
-                rh.gs(app.aaps.core.ui.R.string.treatments_iob_label_string) + " " + rh.gs(app.aaps.core.ui.R.string.format_insulin_units, (bolusIob.iob + basalIob.basaliob)) + ". " + rh.gs(
-                    app.aaps.core.ui.R
-                        .string.cob
-                ) + ": " + iobCobCalculator.getCobInfo(
-                    "PersistentNotificationPlugin"
-                ).generateCOBString(decimalFormatter) + "."
-            line3 = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate)
-            var line3aa = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate) + "."
-            line3 += " - " + profileFunction.getProfileName()
-            line3aa += " - " + profileFunction.getProfileName() + "."
-            /// For Android Auto
-            val msgReadIntent = Intent()
-                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                .setAction(READ_ACTION)
-                .putExtra(CONVERSATION_ID, notificationHolder.notificationID)
-                .setPackage(PACKAGE)
-            val msgReadPendingIntent = PendingIntent.getBroadcast(
-                context,
-                notificationHolder.notificationID,
-                msgReadIntent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            val msgReplyIntent = Intent()
-                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                .setAction(REPLY_ACTION)
-                .putExtra(CONVERSATION_ID, notificationHolder.notificationID)
-                .setPackage(PACKAGE)
-            val msgReplyPendingIntent = PendingIntent.getBroadcast(
-                context,
-                notificationHolder.notificationID,
-                msgReplyIntent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            // Build a RemoteInput for receiving voice input from devices
-            val remoteInput = RemoteInput.Builder(EXTRA_VOICE_REPLY).build()
-            // Create the UnreadConversation
-            unreadConversationBuilder = NotificationCompat.CarExtender.UnreadConversation.Builder(line1aa + "\n" + line2aa)
-                .setLatestTimestamp(System.currentTimeMillis())
-                .setReadPendingIntent(msgReadPendingIntent)
-                .setReplyAction(msgReplyPendingIntent, remoteInput)
-            /// Add dot to produce a "more natural sounding result"
-            unreadConversationBuilder.addMessage(line3aa)
-            /// End Android Auto
+            line3 = rh.gs(app.aaps.core.ui.R.string.pump_base_basal_rate, pump.baseBasalRate) + " - " + profileFunction.getProfileName()
         } else {
             line1 = rh.gs(app.aaps.core.ui.R.string.no_profile_set)
         }
@@ -237,6 +194,9 @@ class PersistentNotificationPlugin @Inject constructor(
         builder.setCategory(NotificationCompat.CATEGORY_STATUS)
         builder.setSmallIcon(iconsProvider.getNotificationIcon())
         builder.setContentTitle(line1)
+        // Stamp the READING's time, not the post time: SystemUI then ages the header ("12m") on its own,
+        // so a silent CGM is visible even between re-renders.
+        lastBgData.lastBg()?.let { builder.setWhen(it.timestamp).setShowWhen(true) }
         if (line2 != null) builder.setContentText(line2)
         if (line3 != null) builder.setSubText(line3)
         // The text above is still the notification's content: Android Auto, wearables and TalkBack
@@ -245,14 +205,6 @@ class PersistentNotificationPlugin @Inject constructor(
         // The app icon is redundant beside the chart, and its bitmap competes for the same 1 MB
         // Binder budget the custom views spend.
         if (!decorated) builder.setLargeIcon(rh.decodeResource(iconsProvider.getIcon()))
-        /// Android Auto
-        if (unreadConversationBuilder != null) {
-            builder.extend(
-                NotificationCompat.CarExtender()
-                    .setUnreadConversation(unreadConversationBuilder.build())
-            )
-        }
-        /// End Android Auto
         builder.setContentIntent(notificationHolder.openAppIntent(context))
         val mNotificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notification = builder.build()
@@ -335,6 +287,11 @@ class PersistentNotificationPlugin @Inject constructor(
 
         /** How much history the chart shows. Long enough to read a meal, short enough to stay legible. */
         private val CHART_WINDOW = T.hours(3).msecs()
+
+        private const val UPDATE_DEBOUNCE_MS = 2_000L
+
+        /** Matches the 9-minute "actual BG" line the widget and Overview strike through at. */
+        private val STALE_AFTER_MS = T.mins(9).plus(T.secs(15)).msecs()
     }
 }
 
