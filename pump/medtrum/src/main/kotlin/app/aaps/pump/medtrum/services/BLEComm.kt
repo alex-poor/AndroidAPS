@@ -53,6 +53,12 @@ class BLEComm @Inject internal constructor(
 
     companion object {
 
+        /**
+         * The write went out but came back with an error status: the pump may or may not have received
+         * it. Distinct from "Failed to write characteristic", where Android never queued the write.
+         */
+        const val WRITE_STATUS_FAILURE = "onCharacteristicWrite failure"
+
         private const val WRITE_DELAY_MILLIS: Long = 10
         private const val SERVICE_UUID = "669A9001-0008-968F-E311-6050405558B3"
         private const val READ_UUID = "669a9120-0008-968f-e311-6050405558b3"
@@ -284,7 +290,7 @@ class BLEComm @Inject internal constructor(
                     }
                 }
             } else {
-                mCallback?.onSendMessageError("onCharacteristicWrite failure", true)
+                mCallback?.onSendMessageError(WRITE_STATUS_FAILURE, true)
             }
         }
 
