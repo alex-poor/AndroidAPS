@@ -40,7 +40,7 @@ class UpdateNsIdTemporaryBasalTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(temporaryBasalDao).updateExistingEntry(current)
+        verify(temporaryBasalDao).update(current)
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpdateNsIdTemporaryBasalTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(temporaryBasalDao, never()).updateExistingEntry(any())
+        verify(temporaryBasalDao, never()).update(any())
     }
 
     @Test
@@ -72,7 +72,7 @@ class UpdateNsIdTemporaryBasalTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(temporaryBasalDao, never()).updateExistingEntry(any())
+        verify(temporaryBasalDao, never()).update(any())
     }
 
     private fun createTemporaryBasal(

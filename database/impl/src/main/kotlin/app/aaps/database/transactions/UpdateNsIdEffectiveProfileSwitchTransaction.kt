@@ -10,7 +10,9 @@ class UpdateNsIdEffectiveProfileSwitchTransaction(private val effectiveProfileSw
             val current = database.effectiveProfileSwitchDao.findById(effectiveProfileSwitch.id)
             if (current != null && current.interfaceIDs.nightscoutId != effectiveProfileSwitch.interfaceIDs.nightscoutId) {
                 current.interfaceIDs.nightscoutId = effectiveProfileSwitch.interfaceIDs.nightscoutId
-                database.effectiveProfileSwitchDao.updateExistingEntry(current)
+                // In-place: adding the NS id is bookkeeping, not an edit. updateExistingEntry would write a full history
+                // copy (which NS sync then skips as "only NS id changed") and fire a data-change event that re-runs IOB/COB.
+                database.effectiveProfileSwitchDao.update(current)
                 result.updatedNsId.add(current)
             }
         }

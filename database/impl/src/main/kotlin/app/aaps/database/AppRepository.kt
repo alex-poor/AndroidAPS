@@ -146,6 +146,46 @@ class AppRepository @Inject internal constructor(
         return ret.toString()
     }
 
+    /**
+     * Delete history copies of records unchanged for [keepDays] (see
+     * TraceableDao.deleteTrackedChangesUnchangedSince). Every NS-id acknowledgement and every edit adds
+     * a full copy of the row, roughly doubling each synced table, and the regular cleanup keeps them
+     * as long as the records themselves. Foods keep their history, as in the manual cleanup.
+     */
+    fun pruneTrackedChanges(keepDays: Long): String {
+        val than = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(keepDays)
+        val removed = listOf(
+            "APSResult" to database.apsResultDao.deleteTrackedChangesUnchangedSince(than),
+            "GlucoseValue" to database.glucoseValueDao.deleteTrackedChangesUnchangedSince(than),
+            "TherapyEvent" to database.therapyEventDao.deleteTrackedChangesUnchangedSince(than),
+            "TemporaryBasal" to database.temporaryBasalDao.deleteTrackedChangesUnchangedSince(than),
+            "Bolus" to database.bolusDao.deleteTrackedChangesUnchangedSince(than),
+            "ExtendedBolus" to database.extendedBolusDao.deleteTrackedChangesUnchangedSince(than),
+            "TotalDailyDose" to database.totalDailyDoseDao.deleteTrackedChangesUnchangedSince(than),
+            "Carbs" to database.carbsDao.deleteTrackedChangesUnchangedSince(than),
+            "TemporaryTarget" to database.temporaryTargetDao.deleteTrackedChangesUnchangedSince(than),
+            "BolusCalculatorResult" to database.bolusCalculatorResultDao.deleteTrackedChangesUnchangedSince(than),
+            "EffectiveProfileSwitch" to database.effectiveProfileSwitchDao.deleteTrackedChangesUnchangedSince(than),
+            "ProfileSwitch" to database.profileSwitchDao.deleteTrackedChangesUnchangedSince(than),
+            "RunningMode" to database.runningModeDao.deleteTrackedChangesUnchangedSince(than),
+            "HeartRate" to database.heartRateDao.deleteTrackedChangesUnchangedSince(than),
+            "StepsCount" to database.stepsCountDao.deleteTrackedChangesUnchangedSince(than)
+        )
+        return removed.filter { it.second > 0 }.joinToString(", ") { "${it.first} ${it.second}" }
+    }
+
+    /**
+     * Rebuild the database file so space freed by deletes is returned to the filesystem — SQLite never
+     * shrinks a file on its own. Blocks other writers for its duration (seconds on this DB), so callers
+     * run it rarely. Must not be called inside a transaction.
+     */
+    fun vacuum() {
+        val db = database.openHelper.writableDatabase
+        db.execSQL("VACUUM")
+        // WAL mode: fold the log back in and truncate it, or the -wal file keeps the old size.
+        db.query("PRAGMA wal_checkpoint(TRUNCATE)").use { it.moveToFirst() }
+    }
+
     fun clearCachedTddData(from: Long) {
         database.totalDailyDoseDao.deleteNewerThan(from, InterfaceIDs.PumpType.CACHE)
     }

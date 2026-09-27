@@ -23,6 +23,9 @@ internal interface TotalDailyDoseDao : TraceableDao<TotalDailyDose> {
     @Query("DELETE FROM $TABLE_TOTAL_DAILY_DOSES WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_TOTAL_DAILY_DOSES WHERE referenceId IN (SELECT id FROM $TABLE_TOTAL_DAILY_DOSES WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT * FROM $TABLE_TOTAL_DAILY_DOSES WHERE unlikely(pumpId = :pumpId) AND likely(pumpType = :pumpType) AND likely(pumpSerial = :pumpSerial) AND likely(referenceId IS NULL)")
     fun findByPumpIds(pumpId: Long, pumpType: InterfaceIDs.PumpType, pumpSerial: String): TotalDailyDose?
 

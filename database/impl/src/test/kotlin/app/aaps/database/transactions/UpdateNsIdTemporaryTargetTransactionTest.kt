@@ -40,7 +40,7 @@ class UpdateNsIdTemporaryTargetTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(temporaryTargetDao).updateExistingEntry(current)
+        verify(temporaryTargetDao).update(current)
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpdateNsIdTemporaryTargetTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(temporaryTargetDao, never()).updateExistingEntry(any())
+        verify(temporaryTargetDao, never()).update(any())
     }
 
     @Test
@@ -72,7 +72,7 @@ class UpdateNsIdTemporaryTargetTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(temporaryTargetDao, never()).updateExistingEntry(any())
+        verify(temporaryTargetDao, never()).update(any())
     }
 
     @Test
@@ -93,8 +93,8 @@ class UpdateNsIdTemporaryTargetTransactionTest {
         assertThat(tt1.interfaceIDs.nightscoutId).isEqualTo("new-1")
         assertThat(tt2.interfaceIDs.nightscoutId).isEqualTo("new-2")
 
-        verify(temporaryTargetDao).updateExistingEntry(tt1)
-        verify(temporaryTargetDao).updateExistingEntry(tt2)
+        verify(temporaryTargetDao).update(tt1)
+        verify(temporaryTargetDao).update(tt2)
     }
 
     @Test
@@ -105,7 +105,7 @@ class UpdateNsIdTemporaryTargetTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(temporaryTargetDao, never()).updateExistingEntry(any())
+        verify(temporaryTargetDao, never()).update(any())
     }
 
     @Test
@@ -122,7 +122,7 @@ class UpdateNsIdTemporaryTargetTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo("new-ns")
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(temporaryTargetDao).updateExistingEntry(current)
+        verify(temporaryTargetDao).update(current)
     }
 
     private fun createTemporaryTarget(

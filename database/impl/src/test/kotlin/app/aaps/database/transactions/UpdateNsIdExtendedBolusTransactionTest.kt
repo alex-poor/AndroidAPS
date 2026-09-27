@@ -40,7 +40,7 @@ class UpdateNsIdExtendedBolusTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(extendedBolusDao).updateExistingEntry(current)
+        verify(extendedBolusDao).update(current)
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpdateNsIdExtendedBolusTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(extendedBolusDao, never()).updateExistingEntry(any())
+        verify(extendedBolusDao, never()).update(any())
     }
 
     @Test
@@ -72,7 +72,7 @@ class UpdateNsIdExtendedBolusTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(extendedBolusDao, never()).updateExistingEntry(any())
+        verify(extendedBolusDao, never()).update(any())
     }
 
     private fun createExtendedBolus(

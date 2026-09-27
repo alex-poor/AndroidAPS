@@ -41,7 +41,7 @@ class UpdateNsIdCarbsTransactionTest {
         assertThat(result.updatedNsId).hasSize(1)
         assertThat(result.updatedNsId[0]).isEqualTo(current)
 
-        verify(carbsDao).updateExistingEntry(current)
+        verify(carbsDao).update(current)
     }
 
     @Test
@@ -58,7 +58,7 @@ class UpdateNsIdCarbsTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(carbsDao, never()).updateExistingEntry(any())
+        verify(carbsDao, never()).update(any())
     }
 
     @Test
@@ -73,7 +73,7 @@ class UpdateNsIdCarbsTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(carbsDao, never()).updateExistingEntry(any())
+        verify(carbsDao, never()).update(any())
     }
 
     @Test
@@ -94,8 +94,8 @@ class UpdateNsIdCarbsTransactionTest {
         assertThat(carbs1.interfaceIDs.nightscoutId).isEqualTo("new-1")
         assertThat(carbs2.interfaceIDs.nightscoutId).isEqualTo("new-2")
 
-        verify(carbsDao).updateExistingEntry(carbs1)
-        verify(carbsDao).updateExistingEntry(carbs2)
+        verify(carbsDao).update(carbs1)
+        verify(carbsDao).update(carbs2)
     }
 
     @Test
@@ -106,7 +106,7 @@ class UpdateNsIdCarbsTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(carbsDao, never()).updateExistingEntry(any())
+        verify(carbsDao, never()).update(any())
     }
 
     @Test
@@ -138,7 +138,7 @@ class UpdateNsIdCarbsTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo("new-ns")
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(carbsDao).updateExistingEntry(current)
+        verify(carbsDao).update(current)
     }
 
     private fun createCarbs(

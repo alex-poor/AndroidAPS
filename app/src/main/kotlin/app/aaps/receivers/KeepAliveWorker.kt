@@ -67,6 +67,8 @@ class KeepAliveWorker(
 
         private val STATUS_UPDATE_FREQUENCY = T.mins(15).msecs()
         private const val IOB_UPDATE_FREQUENCY_IN_MINUTES = 5L
+        private const val TRACKED_CHANGES_KEEP_DAYS = 7L
+        private const val VACUUM_INTERVAL_DAYS = 7L
 
         private var lastReadStatus: Long = 0
         private var lastRun: Long = 0
@@ -145,13 +147,34 @@ class KeepAliveWorker(
 
     // Perform history data cleanup every day
     // Keep 6 months
-    private fun databaseCleanup() {
+    @VisibleForTesting
+    internal fun databaseCleanup() {
         val lastRun = preferences.get(LongNonKey.LastCleanupRun)
         if (lastRun < dateUtil.now() - T.days(1).msecs()) {
             val result = persistenceLayer.cleanupDatabase(6 * 31, deleteTrackedChanges = false)
             aapsLogger.debug(LTag.CORE, "Cleanup result: $result")
+            // History copies of records untouched for a week: their edits have long been uploaded to NS.
+            // Housekeeping must never break the keep-alive, so a failure here is logged and skipped.
+            runCatching { persistenceLayer.pruneTrackedChanges(TRACKED_CHANGES_KEEP_DAYS) }
+                .onSuccess { aapsLogger.debug(LTag.CORE, "Pruned tracked changes: $it") }
+                .onFailure { aapsLogger.error(LTag.CORE, "Pruning tracked changes failed", it) }
             preferences.put(LongNonKey.LastCleanupRun, dateUtil.now())
+            vacuumIfDue()
         }
+    }
+
+    /**
+     * Weekly VACUUM, right after a cleanup. Deleting rows never shrinks an SQLite file, so without this
+     * the pruning above frees space inside the file but the file stays its peak size. It blocks DB
+     * writers for a few seconds, which the loop tolerates (writes queue), so it is kept rare.
+     */
+    private fun vacuumIfDue() {
+        if (preferences.get(LongNonKey.LastVacuumRun) > dateUtil.now() - T.days(VACUUM_INTERVAL_DAYS).msecs()) return
+        val start = dateUtil.now()
+        runCatching { persistenceLayer.vacuumDatabase() }
+            .onSuccess { aapsLogger.debug(LTag.CORE, "VACUUM done in ${dateUtil.now() - start} ms") }
+            .onFailure { aapsLogger.error(LTag.CORE, "VACUUM failed", it) }
+        preferences.put(LongNonKey.LastVacuumRun, dateUtil.now())
     }
 
     // When Worker DB grows too much, work operations become slow

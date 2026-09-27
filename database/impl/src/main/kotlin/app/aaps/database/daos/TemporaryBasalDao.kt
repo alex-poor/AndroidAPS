@@ -23,6 +23,9 @@ internal interface TemporaryBasalDao : TraceableDao<TemporaryBasal> {
     @Query("DELETE FROM $TABLE_TEMPORARY_BASALS WHERE referenceId IS NOT NULL")
     override fun deleteTrackedChanges(): Int
 
+    @Query("DELETE FROM $TABLE_TEMPORARY_BASALS WHERE referenceId IN (SELECT id FROM $TABLE_TEMPORARY_BASALS WHERE referenceId IS NULL AND dateCreated < :than)")
+    override fun deleteTrackedChangesUnchangedSince(than: Long): Int
+
     @Query("SELECT id FROM $TABLE_TEMPORARY_BASALS ORDER BY id DESC limit 1")
     fun getLastId(): Long?
 

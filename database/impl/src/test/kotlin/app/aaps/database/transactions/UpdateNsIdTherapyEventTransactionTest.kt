@@ -41,7 +41,7 @@ class UpdateNsIdTherapyEventTransactionTest {
         assertThat(current.interfaceIDs.nightscoutId).isEqualTo(newNsId)
         assertThat(result.updatedNsId).hasSize(1)
 
-        verify(therapyEventDao).updateExistingEntry(current)
+        verify(therapyEventDao).update(current)
     }
 
     @Test
@@ -58,7 +58,7 @@ class UpdateNsIdTherapyEventTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(therapyEventDao, never()).updateExistingEntry(any())
+        verify(therapyEventDao, never()).update(any())
     }
 
     @Test
@@ -73,7 +73,7 @@ class UpdateNsIdTherapyEventTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(therapyEventDao, never()).updateExistingEntry(any())
+        verify(therapyEventDao, never()).update(any())
     }
 
     @Test
@@ -84,7 +84,7 @@ class UpdateNsIdTherapyEventTransactionTest {
 
         assertThat(result.updatedNsId).isEmpty()
 
-        verify(therapyEventDao, never()).updateExistingEntry(any())
+        verify(therapyEventDao, never()).update(any())
     }
 
     private fun createTherapyEvent(

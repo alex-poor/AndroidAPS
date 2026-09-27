@@ -10,7 +10,9 @@ class UpdateNsIdBolusCalculatorResultTransaction(private val bolusCalculatorResu
             val current = database.bolusCalculatorResultDao.findById(bolusCalculatorResult.id)
             if (current != null && current.interfaceIDs.nightscoutId != bolusCalculatorResult.interfaceIDs.nightscoutId) {
                 current.interfaceIDs.nightscoutId = bolusCalculatorResult.interfaceIDs.nightscoutId
-                database.bolusCalculatorResultDao.updateExistingEntry(current)
+                // In-place: adding the NS id is bookkeeping, not an edit. updateExistingEntry would write a full history
+                // copy (which NS sync then skips as "only NS id changed") and fire a data-change event that re-runs IOB/COB.
+                database.bolusCalculatorResultDao.update(current)
                 result.updatedNsId.add(current)
             }
         }

@@ -10,7 +10,9 @@ class UpdateNsIdGlucoseValueTransaction(private val glucoseValues: List<GlucoseV
             val current = database.glucoseValueDao.findById(glucoseValue.id)
             if (current != null && current.interfaceIDs.nightscoutId != glucoseValue.interfaceIDs.nightscoutId) {
                 current.interfaceIDs.nightscoutId = glucoseValue.interfaceIDs.nightscoutId
-                database.glucoseValueDao.updateExistingEntry(current)
+                // In-place: adding the NS id is bookkeeping, not an edit. updateExistingEntry would write a full history
+                // copy (which NS sync then skips as "only NS id changed") and fire a data-change event that re-runs IOB/COB.
+                database.glucoseValueDao.update(current)
                 result.updatedNsId.add(current)
             }
         }

@@ -10,7 +10,9 @@ class UpdateNsIdCarbsTransaction(private val carbs: List<Carbs>) : Transaction<U
             val current = database.carbsDao.findById(carb.id)
             if (current != null && current.interfaceIDs.nightscoutId != carb.interfaceIDs.nightscoutId) {
                 current.interfaceIDs.nightscoutId = carb.interfaceIDs.nightscoutId
-                database.carbsDao.updateExistingEntry(current)
+                // In-place: adding the NS id is bookkeeping, not an edit. updateExistingEntry would write a full history
+                // copy (which NS sync then skips as "only NS id changed") and fire a data-change event that re-runs IOB/COB.
+                database.carbsDao.update(current)
                 result.updatedNsId.add(current)
             }
         }
