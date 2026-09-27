@@ -81,4 +81,5 @@ enum class IntKey(
     NsClientUrgentAlarmStaleData("ns_alarm_urgent_stale_data_value", 31, 30, 180),
 
     SiteRotationUserProfile("site_rotation_user_profile", 0, 0, 2),
+    Libre3LagWindow("libre3_lag_window", 5, 3, 15),
 }

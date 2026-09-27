@@ -28,6 +28,14 @@ import app.aaps.libre3.Libre3NfcActivation
 import app.aaps.libre3.Libre3NfcV
 import app.aaps.libre3.Libre3PatchStatus
 import app.aaps.libre3.Libre3SecuritySession
+import app.aaps.core.keys.DoubleKey
+import app.aaps.core.keys.IntKey
+import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.core.validators.preferences.AdaptiveDoublePreference
+import app.aaps.core.validators.preferences.AdaptiveIntPreference
+import androidx.preference.PreferenceCategory
+import androidx.preference.PreferenceManager
+import androidx.preference.PreferenceScreen
 import app.aaps.plugins.source.compose.Libre3SensorState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,7 +63,8 @@ class Libre3SourcePlugin @Inject constructor(
     private val context: Context,
     private val persistenceLayer: PersistenceLayer,
     private val dateUtil: DateUtil,
-    private val credentials: Libre3CredentialStore
+    private val credentials: Libre3CredentialStore,
+    private val preferences: Preferences
 ) : AbstractBgSourceWithSensorInsertLogPlugin(
     PluginDescription()
         .mainType(PluginType.BGSOURCE)
@@ -90,8 +99,16 @@ class Libre3SourcePlugin @Inject constructor(
     /** Sensor start already recorded as a SENSOR_CHANGE, so warm-up/expiry show and we don't re-insert. */
     private var sensorStartRecorded: Long? = null
 
-    /** Manual-BG lag override: a finger-prick during a fast rise corrects the lagging sensor stream. */
-    private val lagOverride = Libre3LagOverride()
+    /** Manual-BG lag override: a finger-prick during a fast rise corrects the lagging sensor stream.
+     *  Rebuilt from preferences in [onStart], so pref changes apply on the next plugin start. */
+    private var lagOverride = Libre3LagOverride()
+
+    private fun lagConfig() = Libre3LagOverride.Config(
+        windowSize = preferences.get(IntKey.Libre3LagWindow),
+        armThresholdMgdlPerMin = preferences.get(DoubleKey.Libre3LagArmRate),
+        decayHalfLifeMin = preferences.get(DoubleKey.Libre3LagHalfLifeMin),
+        maxDurationMin = preferences.get(DoubleKey.Libre3LagMaxDurationMin)
+    )
 
     /** Latest sensor lifecycle state, for the UI to show warm-up/expiry honestly. */
     var patchStatus: Libre3PatchStatus? = null
@@ -296,6 +313,7 @@ class Libre3SourcePlugin @Inject constructor(
 
     override fun onStart() {
         super.onStart()
+        lagOverride = Libre3LagOverride(lagConfig())     // pick up any pref changes
         val creds = credentials.load()
         update {
             it.copy(
@@ -432,6 +450,21 @@ class Libre3SourcePlugin @Inject constructor(
         lagOverride.reset()
         update { Libre3SensorState() }
         super.onStop()
+    }
+
+    override fun addPreferenceScreen(preferenceManager: PreferenceManager, parent: PreferenceScreen, context: Context, requiredKey: String?) {
+        if (requiredKey != null) return
+        val category = PreferenceCategory(context)
+        parent.addPreference(category)
+        category.apply {
+            key = "libre3_lag_settings"
+            title = context.getString(R.string.libre3_lag_category)
+            initialExpandedChildrenCount = 0
+            addPreference(AdaptiveIntPreference(ctx = context, intKey = IntKey.Libre3LagWindow, title = R.string.libre3_lag_window))
+            addPreference(AdaptiveDoublePreference(ctx = context, doubleKey = DoubleKey.Libre3LagArmRate, title = R.string.libre3_lag_arm_rate))
+            addPreference(AdaptiveDoublePreference(ctx = context, doubleKey = DoubleKey.Libre3LagHalfLifeMin, title = R.string.libre3_lag_halflife))
+            addPreference(AdaptiveDoublePreference(ctx = context, doubleKey = DoubleKey.Libre3LagMaxDurationMin, title = R.string.libre3_lag_maxduration))
+        }
     }
 
     companion object {

@@ -42,4 +42,9 @@
     <!-- Patched Sino App -->
     <string name="patched_sino_app">Sino App</string>
     <string name="description_source_patched_sino_app">Receive glucose data from Patched Sino App.</string>
+    <string name="libre3_lag_category">Libre 3 rise-lag correction</string>
+    <string name="libre3_lag_window">Trend window (samples)</string>
+    <string name="libre3_lag_arm_rate">Arm above rise rate (mg/dL/min)</string>
+    <string name="libre3_lag_halflife">Offset half-life (minutes)</string>
+    <string name="libre3_lag_maxduration">Max duration (minutes)</string>
 </resources>

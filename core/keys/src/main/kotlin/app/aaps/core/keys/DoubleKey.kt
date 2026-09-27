@@ -56,5 +56,8 @@ enum class DoubleKey(
     ApsAutoIsfSmbDeliveryRatioMin("openapsama_smb_delivery_ratio_min", 0.5, 0.5, 1.0, defaultedBySM = true),
     ApsAutoIsfSmbDeliveryRatioMax("openapsama_smb_delivery_ratio_max", 0.5, 0.5, 1.0, defaultedBySM = true),
     ApsAutoIsfSmbMaxRangeExtension("openapsama_smb_max_range_extension", 1.0, 1.0, 5.0, defaultedBySM = true),
+    Libre3LagArmRate("libre3_lag_arm_rate", 1.0, 0.5, 4.0),
+    Libre3LagHalfLifeMin("libre3_lag_halflife_min", 15.0, 5.0, 60.0),
+    Libre3LagMaxDurationMin("libre3_lag_max_duration_min", 30.0, 10.0, 90.0),
 
 }
