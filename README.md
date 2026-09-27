@@ -18,7 +18,7 @@
 
 ## What this fork adds
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Seven workstreams:
+Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Eight workstreams:
 
 | # | Area | What it is | Status |
 |---|------|-----------|--------|
@@ -29,6 +29,7 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Seven workstreams
 | 5 | **[Slim loop build](#5-slim-loop-build)** | Strips the app to the one pump and one algorithm it runs, and lets Android AOT-compile it | Running |
 | 6 | **[Delivery the pump cannot make](#6-delivery-the-pump-cannot-make)** | Stopped pump, empty cartridge: say so, refuse the dose, and never book insulin that did not go in | Running |
 | 7 | **[Native Libre 3 / 3+ CGM](#7-native-libre-3--3-cgm)** | Talks to the sensor directly over BLE — no Juggluco, no xDrip in the glucose path | Live on hardware |
+| 8 | **[Rise-lag manual-BG correction](#8-rise-lag-manual-bg-correction)** | A finger-prick on a fast rise becomes ground truth, correcting the lagging sensor into the loop | Built, untested on hardware |
 
 Plus a number of [smaller changes](#smaller-changes) — Nightscout over a private network, wizard fields
 the redesign had dropped, and pump-driver reliability fixes.
@@ -517,6 +518,55 @@ physical sensor**: a fresh activation is irreversible, so the first real one wai
 change (which also pins the one unconfirmed constant, the account id). Until then the Juggluco import
 path stays as the fallback. This is a **private single-device build** — per-sensor credentials never
 leave the device, and no APK built from it should be distributed.
+
+---
+
+## 8. Rise-lag manual-BG correction
+
+**`libre3/Libre3LagOverride.kt` + `plugins/source/.../Libre3SourcePlugin`**
+
+On a fast rise, blood glucose leads interstitial fluid, so a factory-calibrated CGM reads *stale-low* and
+the loop under-doses through exactly the window it should be acting. A finger-prick taken then is the true
+current value. This makes it ground truth: entered from the Libre 3 sensor screen, it's inserted
+immediately and a **decaying correction rides the sensor stream until the rise resolves** — no persistent
+recalibration (which would be wrong, since the gap is transient lag, not a fixed sensor bias).
+
+The design is shaped by the physiology, not guessed:
+
+- **It's rise-only and rate-scaled.** The gap ≈ *rate × lag*, so the correction is proportional to how
+  fast you're still climbing, and only arms above ~1 mg/dL/min — below that the CGM is already accurate.
+- **It fades out before the peak.** `offset = gap · rateFactor · timeFactor`; `rateFactor` fades to zero
+  as the rise decelerates to half the entry rate — front-running the peak, because a CGM-derived *rate=0*
+  rule fires at the CGM's peak, which lags the blood peak. It is **bounded-and-decaying, not peak-safe**
+  (no CGM-derived rule can be), so the loop's own maxIOB and the [HovorkaMPC](#2-hovorkampc--a-model-predictive-controller)
+  descent-guard absorb the small post-peak residual.
+- **It's denoised.** The rate is a least-squares slope over the last N one-minute samples (default 5),
+  because the Libre 3 per-minute stream is jittery enough that a single minute-delta would false-trigger;
+  it also means nothing acts on fewer than N ticks of evidence.
+- **It's bounded.** Plausibility-caps the finger-prick gap at *slopeEntry × ~15 min* (rejects bad pricks),
+  hard-stops on a fall, on deceleration, and at a max duration. Tunables (window, arm rate, half-life, max
+  duration) are preferences.
+
+Corrected values carry into the DB, so the EKF, the loop and the on-screen number all agree; every
+adjustment is logged for the dosing audit trail.
+
+**Status: built and unit-tested (13 tests across the override, the parser and the flow), but not yet
+exercised on a real excursion** — the dosing behaviour can only be judged in use, so it ships behind a
+deliberate manual trigger and is dormant otherwise.
+
+### References
+
+- **Interstitial↔blood lag (~5–6 min at rest, longer on fast rises):**
+  Basu et al., *Time Lag of Glucose From Intravascular to Interstitial Compartment in Type 1 Diabetes*, Diabetes 2015 — [PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC4495531/);
+  Rebrin, Sheppard & Steil, *Use of Subcutaneous Interstitial Fluid Glucose to Estimate Blood Glucose: Revisiting Delay and Sensor Offset*, JDST 2010 — [DOI](https://doi.org/10.1177/193229681000400507).
+- **Error scales with rate of change (the model's backbone; ARD ~8.5% < 1 mg/dL/min → ~17.5% > 2 mg/dL/min):**
+  Pleus et al., *Rate-of-Change Dependence of the Performance of Two CGM Systems During Induced Glucose Swings*, JDST 2015 — [PubMed](https://pubmed.ncbi.nlm.nih.gov/25852074/);
+  Schmelzeisen-Redeker/Freckmann group, *Numerical simulation of the effect of rate of change of glucose on measurement error of CGMs*, 2010 — [PubMed](https://pubmed.ncbi.nlm.nih.gov/19885136).
+- **Libre effective delay is small on average because Abbott's algorithm extrapolates the trend forward —
+  which over-reads at the peak, reinforcing fade-before-peak:**
+  [Abbott support: sensor readings vs blood](https://www.freestyle.abbott/en-lb/support/sensor-readings-are-a-few-minutes-behind-blood-sugar-.html).
+- **Libre generally underestimates; error worst falling / in hypo (MARD ~13.6%):**
+  Vaughan, *Meta-Analysis of a Decade of Studies Assessing Accuracy of Abbott FreeStyle Libre*, JDST 2025 — [DOI](https://journals.sagepub.com/doi/10.1177/29986702251390418).
 
 ---
 
