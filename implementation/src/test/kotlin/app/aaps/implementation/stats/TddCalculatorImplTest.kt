@@ -16,6 +16,15 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
+import app.aaps.core.data.aps.BasalData
+import app.aaps.core.data.model.EB
+import app.aaps.core.interfaces.profile.Profile
+import app.aaps.core.interfaces.pump.Pump
+import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
 class TddCalculatorImplTest : TestBase() {
@@ -376,5 +385,31 @@ class TddCalculatorImplTest : TestBase() {
         assertThat(result).isNotNull()
         assertThat(result?.data?.basalAmount).isWithin(0.0001).of(20.0015)
         assertThat(result?.data?.bolusAmount).isWithin(0.0001).of(10.0015)
+    }
+
+    @Test
+    fun `calculateInterval counts extended boluses from one query, including one already running`() {
+        val start = midnight
+        val end = start + T.hours(2).msecs()
+        val profile = mock<Profile>()
+        val pump = mock<Pump>()
+        whenever(activePlugin.activePump).thenReturn(pump)
+        whenever(pump.isFakingTempsByExtendedBoluses).thenReturn(false)
+        whenever(profileFunction.getProfile(any<Long>())).thenReturn(profile)
+        whenever(iobCobCalculator.getBasalData(any(), any())).thenReturn(BasalData())
+        whenever(persistenceLayer.getBolusesFromTimeToTime(any(), any(), any())).thenReturn(emptyList())
+        whenever(persistenceLayer.getCarbsFromTimeToTimeExpanded(any(), any(), any())).thenReturn(emptyList())
+        // 1.2 U/h for 1 h, starting 30 min BEFORE the interval (so 30 min of it counts) ...
+        val running = EB(timestamp = start - T.mins(30).msecs(), duration = T.hours(1).msecs(), amount = 1.2)
+        // ... and 0.6 U/h for 30 min inside it.
+        val inside = EB(timestamp = start + T.hours(1).msecs(), duration = T.mins(30).msecs(), amount = 0.3)
+        whenever(persistenceLayer.getExtendedBolusesStartingFromTimeToTime(any(), any(), any())).thenReturn(listOf(running, inside))
+
+        val tdd = tddCalculator.calculateInterval(start, end, allowMissingData = false)
+
+        assertThat(tdd).isNotNull()
+        // 0.6 U from the running one + 0.3 U from the inside one
+        assertThat(tdd!!.bolusAmount).isWithin(1e-9).of(0.9)
+        verify(persistenceLayer, never()).getExtendedBolusActiveAt(anyOrNull())
     }
 }
