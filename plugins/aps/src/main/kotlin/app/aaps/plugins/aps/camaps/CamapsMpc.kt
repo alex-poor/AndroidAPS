@@ -69,11 +69,10 @@ import kotlin.math.pow
  *
  * WHAT IS DELIBERATELY NOT REPLICATED
  *
- *  - A hard hypo suspend at [hypoSuspendMmol] is KEPT -- and is no longer a deviation. It was added on
- *    the reasoning that its absence from the decoded spec was more likely an RE gap than a design
- *    decision; driving the real binary confirmed that directly (0.00 U/h up to BG 4.500, 0.79 x basal
- *    at 4.625). The threshold was raised 3.9 -> 4.5 to match, i.e. the real controller is MORE
- *    conservative at the low end than this replica was.
+ *  - The low-glucose suspend is no longer a deviation at all: it is `MPC::ModifyRateGlucoseLevel`,
+ *    transcribed at [hypoSuspendThreshold]. It was originally added here on the reasoning that its
+ *    absence from the decoded spec was an RE gap rather than a design decision; that turned out to be
+ *    right, and the threshold it was measured at (4.5) is exactly `finalTargetGlucose - 1.3`.
  *  - A small deadband around the previous command is KEPT, purely so AAPS does not emit a fresh TBR
  *    every tick. It is an integration concern, not therapy.
  *
@@ -126,20 +125,17 @@ class CamapsMpc(
      */
     private val maxRateMuPerMin: Double = 0.0,
     /**
-     * Hard suspend threshold. MEASURED at 4.5: on flat glucose the real controller returns exactly
-     * 0.00 U/h up to BG 4.500 and 0.79 x basal at 4.625, bang-bang with no ramp, and the threshold
-     * is identical at profile basals 0.45/0.85/2.40 so it is absolute, not scaled. The decoded spec
-     * showed no such layer, which was a gap in the RE, not a design decision -- so this is now a
-     * replicated behaviour rather than the bolted-on backstop it started as.
-     */
-    /**
-     * Observed glucose slope in mmol/L per HOUR, for [modifyRateGlucoseRate]. The real controller uses
+     * Observed glucose slope in mmol/L per HOUR, for the attenuation stage. The real controller uses
      * `MPC::GetSlope` over two windows (base span + 70 and + 40 min), takes the more NEGATIVE, then
      * takes the more negative again against the model's own 2-minute prediction scaled x30. Pass 0 to
      * disable the attenuation stage.
      */
     private val observedSlopeMmolPerH: Double = 0.0,
-    private val hypoSuspendMmol: Double = 4.5,
+    /**
+     * Whether a meal was recorded in the last 60 minutes, which relaxes the suspend threshold. See
+     * [hypoSuspendThreshold].
+     */
+    private val mealWithinLastHour: Boolean = false,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -178,6 +174,37 @@ class CamapsMpc(
 
         /** Binary constant `BIRasFractionOfTDD`, vaddr 0x22d88. */
         const val BIR_AS_FRACTION_OF_TDD = 0.48
+
+        /**
+         * `MPC::ModifyRateGlucoseLevel` (0x46dcc), transcribed in full — it is only 324 bytes:
+         * ```
+         *   GetPrevCGM(t, &prev, &prevTime); if (!ok || age >= 91 min) prev = 5.5
+         *   g   = min(modelGlucose, prev)
+         *   GetMeal(&t, &mealAmt, .., 60)
+         *   off = (mealAmt > 0 && ret == 1) ? 1.5 : 1.3
+         *   if (g < finalTargetGlucose - off) { *rate = 0; diag[3] = 'L' }
+         * ```
+         * `finalTargetGlucose` is the symbol at vaddr 0x92800, **5.8** — not 6.0. So with no recent meal
+         * the suspend threshold is 5.8 - 1.3 = **4.500**, which is exactly where the measured suspend
+         * edge sits (0.00 U/h up to glucose 4.500, 0.79 x basal at 4.625). After a meal it relaxes to
+         * 5.8 - 1.5 = 4.3, which is the sensible direction: carbs are on the way.
+         *
+         * This is why the fixed 4.5 that replaced the original 3.9 was right. It was measured then;
+         * it is derived now, and expressed relative to the target so it tracks a target that is not 5.8.
+         * The 'L' is the flag seen in the real controller's Diagnostics field at low glucose.
+         *
+         * NOT replicated: the `min(modelGlucose, prevCGM)` pairing (we pass the model estimate only) and
+         * the 91-minute CGM staleness substitution.
+         */
+        fun hypoSuspendThreshold(targetMmol: Double, mealWithinLastHour: Boolean): Double =
+            targetMmol - (if (mealWithinLastHour) HYPO_OFFSET_AFTER_MEAL else HYPO_OFFSET)
+
+        /** `MPC::ModifyRateGlucoseLevel` immediates: 1.3 normally, 1.5 within an hour of a meal. */
+        const val HYPO_OFFSET = 1.3
+        const val HYPO_OFFSET_AFTER_MEAL = 1.5
+
+        /** Symbol `finalTargetGlucose`, vaddr 0x92800. The binary's default target. */
+        const val FINAL_TARGET_GLUCOSE_MMOL = 5.8
 
         /** `MPC::DetermineSetPoint` immediates. Slopes are mmol/L per MINUTE. */
         const val SLOPE_ABOVE_13 = -1.0 / 24.0          // 0xBD2AAAAB, -2.5 mmol/L/h
@@ -393,7 +420,7 @@ class CamapsMpc(
 
         if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
-        if (g0 <= hypoSuspendMmol) finalU = 0.0                             // kept backstop, see class doc
+        if (g0 < hypoSuspendThreshold(targetMmol, mealWithinLastHour)) finalU = 0.0   // §5 ModifyRateGlucoseLevel
 
         var es = stateEstimate.copyOf()
         for (i in 0 until steps) {

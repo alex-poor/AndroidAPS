@@ -167,7 +167,11 @@ class CamapsPlugin @Inject constructor(
             nominalBasalMuPerMin = nominalMuMin,
             maxBasalMuPerMin = maxBasalUhr * 1000.0 / 60.0,
             maxRateMuPerMin = maxRateUhr * 1000.0 / 60.0,
-            observedSlopeMmolPerH = slopeMmolPerH
+            observedSlopeMmolPerH = slopeMmolPerH,
+            // §5 ModifyRateGlucoseLevel relaxes the suspend threshold by 0.2 mmol/L within an hour of a
+            // meal (GetMeal's window is 60 min), on the reasoning that carbs are on the way.
+            mealWithinLastHour = persistenceLayer
+                .getCarbsFromTimeToTimeExpanded(now - 3_600_000L, now, true).any { it.amount > 0.0 }
         ).decide(est.x)
 
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))

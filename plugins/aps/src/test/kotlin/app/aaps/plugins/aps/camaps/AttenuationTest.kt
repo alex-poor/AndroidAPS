@@ -100,3 +100,41 @@ class SustainedFallCapTest {
         assertEquals(0.0, CamapsMpc.attenuationPercent(CamapsMpc.SUSTAINED_FALL_SLOPE, 10.0), 1e-9)
     }
 }
+
+/**
+ * CONTRACT for `MPC::ModifyRateGlucoseLevel` (0x46dcc) — the low-glucose hard suspend.
+ *
+ * The number this produces, 4.5, was already in the code: it was measured off the binary earlier and
+ * replaced an invented 3.9. What these tests pin is that it is now DERIVED —
+ * `finalTargetGlucose (5.8) - 1.3` — so it tracks a target that is not 5.8 instead of sitting there as
+ * a magic constant, and so the meal relaxation cannot be dropped silently.
+ */
+class HypoSuspendThresholdTest {
+
+    @org.junit.jupiter.api.Test
+    fun `reproduces the measured suspend edge at the binary's own default target`() {
+        // measured: 0.00 U/h up to glucose 4.500, 0.79 x basal at 4.625
+        assertEquals(4.5, CamapsMpc.hypoSuspendThreshold(CamapsMpc.FINAL_TARGET_GLUCOSE_MMOL, false), 1e-9)
+        assertTrue(4.625 > CamapsMpc.hypoSuspendThreshold(CamapsMpc.FINAL_TARGET_GLUCOSE_MMOL, false),
+            "4.625 must be above the threshold, since the binary still delivers there")
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `a recent meal relaxes the threshold, it does not tighten it`() {
+        val dry = CamapsMpc.hypoSuspendThreshold(5.8, false)
+        val fed = CamapsMpc.hypoSuspendThreshold(5.8, true)
+        assertTrue(fed < dry, "after a meal the threshold must be LOWER ($fed vs $dry) — carbs are coming")
+        assertEquals(4.3, fed, 1e-9)
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `the threshold tracks the target rather than being a fixed 4_5`() {
+        assertEquals(4.0, CamapsMpc.hypoSuspendThreshold(5.3, false), 1e-9)
+        assertEquals(5.2, CamapsMpc.hypoSuspendThreshold(6.5, false), 1e-9)
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `the binary default target is 5_8, not 6_0`() {
+        assertEquals(5.8, CamapsMpc.FINAL_TARGET_GLUCOSE_MMOL, 1e-9)   // symbol finalTargetGlucose, 0x92800
+    }
+}
