@@ -221,6 +221,42 @@ class HovorkaMpcPlugin @Inject constructor(
         aapsLogger.debug(LTag.APS, "HovorkaMPC invoke from $initiator")
         lastAPSResult = null
         if (!isEnabled()) return
+        try {
+            invokeChecked()
+        } catch (e: Exception) {
+            // Anything thrown here used to propagate out of LoopPlugin.invoke with no result, leaving the
+            // last temp — possibly max basal — to run out its 30 min, and the same failure recurred every
+            // tick with no specific alarm. Hand the loop the neutral basal instead, and say so.
+            aapsLogger.error(LTag.APS, "HovorkaMPC failed; falling back to neutral basal", e)
+            emitNeutralFallback("HovorkaMPC error: ${e.javaClass.simpleName} ${e.message ?: ""}")
+        }
+    }
+
+    /** A 30-min temp at the lower of profile/operating basal, no SMB — what a failed tick hands the loop. */
+    private fun emitNeutralFallback(reason: String) {
+        val profile = profileFunction.getProfile() ?: return
+        val glucoseStatus = glucoseStatusCalculatorSMB.getGlucoseStatusData(false) ?: return
+        val now = dateUtil.now()
+        val neutral = HovorkaSafetyGate.neutralBasal(profile.getBasal(), profile.getBasal())
+        val rt = RT(
+            algorithm = APSResult.Algorithm.SMB,
+            runningDynamicIsf = false,
+            timestamp = now,
+            bg = glucoseStatus.glucose,
+            targetBG = profile.getTargetMgdl(),
+            reason = StringBuilder("$reason — neutral basal %.2f U/hr, no SMB".format(neutral)),
+            duration = TBR_DURATION_MIN,
+            rate = round(neutral * 100.0) / 100.0
+        )
+        val result = apsResultProvider.get().with(rt)
+        result.glucoseStatus = glucoseStatus
+        lastAPSResult = result
+        lastAPSRun = now
+        rxBus.send(EventNewNotification(Notification(ERROR_NOTIF_ID, reason, Notification.URGENT)))
+        rxBus.send(EventAPSCalculationFinished())
+    }
+
+    private fun invokeChecked() {
         val profile = profileFunction.getProfile() ?: return
         val glucoseStatus = glucoseStatusCalculatorSMB.getGlucoseStatusData(false) ?: return
 
@@ -307,6 +343,7 @@ class HovorkaMpcPlugin @Inject constructor(
             estimateState(model, nominalBasalMuMin, now)
         } catch (e: Exception) {
             aapsLogger.error(LTag.APS, "HovorkaMPC state estimation failed", e)
+            emitNeutralFallback("HovorkaMPC state estimation failed: ${e.javaClass.simpleName}")
             return
         }
 
@@ -679,21 +716,24 @@ class HovorkaMpcPlugin @Inject constructor(
         // Whichever demands the bigger cut wins. Still only ever REMOVES insulin.
         val mbBelow = eventualLinearMmol < DESCENT_GUARD_MMOL
         val bgBelow = rawCgmMmol < DESCENT_BG_GUARD_MMOL
-        if (isfMmol > 0.0 && rateUhr > 0.0 && (mbBelow || bgBelow)) {
-            val span = (DESCENT_GUARD_MMOL - DESCENT_SUSPEND_MMOL).coerceAtLeast(0.1)
-            // 1.0 at/above the guard threshold, 0.0 at/below the suspend threshold
-            val mbKeep = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
-            // raw-CGM taper: full basal at DESCENT_BG_GUARD_MMOL, zero by the hypo-suspend threshold
-            val bgSpan = (DESCENT_BG_GUARD_MMOL - HYPO_SUSPEND_MMOL).coerceAtLeast(0.1)
-            val bgKeep = ((rawCgmMmol - HYPO_SUSPEND_MMOL) / bgSpan).coerceIn(0.0, 1.0)
-            val keepFrac = min(mbKeep, bgKeep)          // the stricter arm wins
-            val guarded = round(rateUhr * keepFrac * 100.0) / 100.0
-            if (guarded < rateUhr) {
-                val arm = if (bgKeep < mbKeep) "BG %.1f".format(rawCgmMmol) else "MB %.1f".format(eventualLinearMmol)
-                corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (%s)".format(rateUhr, guarded, arm)
-                rateUhr = guarded
+        if (isfMmol > 0.0 && (mbBelow || bgBelow)) {
+            if (rateUhr > 0.0) {
+                val span = (DESCENT_GUARD_MMOL - DESCENT_SUSPEND_MMOL).coerceAtLeast(0.1)
+                // 1.0 at/above the guard threshold, 0.0 at/below the suspend threshold
+                val mbKeep = ((eventualLinearMmol - DESCENT_SUSPEND_MMOL) / span).coerceIn(0.0, 1.0)
+                // raw-CGM taper: full basal at DESCENT_BG_GUARD_MMOL, zero by the hypo-suspend threshold
+                val bgSpan = (DESCENT_BG_GUARD_MMOL - HYPO_SUSPEND_MMOL).coerceAtLeast(0.1)
+                val bgKeep = ((rawCgmMmol - HYPO_SUSPEND_MMOL) / bgSpan).coerceIn(0.0, 1.0)
+                val keepFrac = min(mbKeep, bgKeep)          // the stricter arm wins
+                val guarded = round(rateUhr * keepFrac * 100.0) / 100.0
+                if (guarded < rateUhr) {
+                    val arm = if (bgKeep < mbKeep) "BG %.1f".format(rawCgmMmol) else "MB %.1f".format(eventualLinearMmol)
+                    corrNote += " | DESCENT-GUARD %.2f→%.2f U/hr (%s)".format(rateUhr, guarded, arm)
+                    rateUhr = guarded
+                }
             }
-            // an irreversible microbolus must never survive a predicted low
+            // An irreversible microbolus must never survive a predicted low — including when the MPC has
+            // already suspended basal (rate 0), which the rate taper above does not need to touch.
             if (smbU > 0.0) {
                 corrNote += " | DESCENT-GUARD-SMB %.2f→0".format(smbU)
                 smbU = 0.0
@@ -773,6 +813,16 @@ class HovorkaMpcPlugin @Inject constructor(
                 }
             }
         }
+
+        // FINAL SAFETY GATE — after every other stage, only ever removes insulin. See HovorkaSafetyGate.
+        val gate = HovorkaSafetyGate.apply(
+            rateUhr = rateUhr, smbU = smbU,
+            maxIobU = min(constraintsChecker.getMaxIOBAllowed().value(), preferences.get(DoubleKey.ApsSmbMaxIob)),
+            neutralUhr = HovorkaSafetyGate.neutralBasal(profileBasalUhr, operatingBasalUhr)
+        )
+        rateUhr = round(gate.rateUhr * 100.0) / 100.0
+        smbU = round(gate.smbU * 100.0) / 100.0
+        budgetNote += gate.note
 
         var siteNote = ""
         if (siteGuardActive)
@@ -913,9 +963,12 @@ class HovorkaMpcPlugin @Inject constructor(
         val start = now - RE_ID_DAYS * DAY_MS
         val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
         if (bg.isEmpty()) return emptyList()
-        val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true)
+        // PRIMING never reaches the patient (AAPS IOB and dailyInsulinU exclude it too).
+        val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true).filter { it.type != BS.Type.PRIMING }
         val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
-        val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
+        // ACTIVE in the window, not STARTING in it: a temp (or a 0% disconnect temp) that began before
+        // `start` still governed the first part of it. Sorted ascending for basalUhrAt's lastOrNull.
+        val tbrs = persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(start, now).sortedBy { it.timestamp }
         val profile = profileFunction.getProfile() ?: return emptyList()
         fun basalUhrAt(ts: Long): Double {
             val tb = tbrs.lastOrNull { it.timestamp <= ts && ts < it.timestamp + it.duration }
@@ -1088,9 +1141,12 @@ class HovorkaMpcPlugin @Inject constructor(
     private fun estimateState(model: HovorkaModel, nominalBasalMuMin: Double, now: Long): GlucoseEstimator {
         val start = now - WINDOW_H * 3_600_000L
         val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
-        val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true)
+        // PRIMING never reaches the patient; feeding a fill into the EKF would model a phantom dose and
+        // withhold basal for hours after a site change — the window this user's data shows is worst.
+        val boluses = persistenceLayer.getBolusesFromTimeToTime(start, now, true).filter { it.type != BS.Type.PRIMING }
         val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
-        val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
+        // ACTIVE in the window, not STARTING in it (see reconstructIdSamples); ascending for lastOrNull.
+        val tbrs = persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(start, now).sortedBy { it.timestamp }
 
         val profile = profileFunction.getProfile()!!
         val ekf: GlucoseEstimator =
@@ -1164,6 +1220,7 @@ class HovorkaMpcPlugin @Inject constructor(
         const val SMB_STACK_CAP_U = 1.0          // max total SMB within that window (13 x 0.1-0.3U = 2.1U overnight hypo)
         const val RE_ID_DAYS = 10L               // 4: trailing window the re-identification fits over
         const val RE_ID_MIN_SAMPLES = 864        // 4: require ~3 days of 5-min samples before re-tuning
+        const val ERROR_NOTIF_ID = 4211          // a tick failed and fell back to neutral basal (URGENT)
         const val RE_ID_NOTIF_ID = 4210          // 4: notification id for a model re-tune (INFO; re-usable)
         const val EVENTUAL_MIN_MMOL = 1.5        // #1: sanity clamp on the mass-balance eventual (bad COB/IOB)
         const val EVENTUAL_MAX_MMOL = 30.0
