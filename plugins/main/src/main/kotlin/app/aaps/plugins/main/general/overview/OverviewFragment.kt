@@ -13,6 +13,7 @@ import android.graphics.drawable.AnimationDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
@@ -184,8 +185,8 @@ class OverviewFragment : DaggerFragment() {
     private val homeState = mutableStateOf(HomeUiState())
     // Recent carb records for the COB-tap undo sheet. Computed off the UI thread in updateIobCob()
     // (which already reads persistence there) and read synchronously by buildHomeState().
-    private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
-    private var recentInsulin: List<HomeUiState.InsulinEntry> = emptyList()
+    @Volatile private var recentCarbs: List<HomeUiState.CarbEntry> = emptyList()
+    @Volatile private var recentInsulin: List<HomeUiState.InsulinEntry> = emptyList()
 
     //@SuppressLint("NewApi")
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
@@ -328,14 +329,16 @@ class OverviewFragment : DaggerFragment() {
 
     fun refreshAll() {
         if (!config.appInitialized) return
-        // updateIobCob() is the fast path that refreshes the Compose hero's IOB/COB about a second
-        // after a carb entry, instead of waiting for the next 60 s tick.
+        // Everything below reads the database and computes IOB/COB, so it runs on this fragment's
+        // background handler, never on the UI thread (a busy DB there stalls drawing, or worse).
+        if (Looper.myLooper() != handler.looper) {
+            handler.post { refreshAll() }
+            return
+        }
+        // updateIobCob() also rebuilds and publishes the Home state; it used to be built a second
+        // time here, on the UI thread.
         updateIobCob()
         refreshChart()
-        runOnUiThread {
-            composeHome ?: return@runOnUiThread
-            buildHomeState()
-        }
     }
 
     // region ---- Redesigned Home (Compose) ----
@@ -439,11 +442,15 @@ class OverviewFragment : DaggerFragment() {
         else                                       -> ""
     }
 
-    /** Map the current Overview providers into [HomeUiState]. Runs on the UI thread. */
+    /**
+     * Map the current Overview providers into [HomeUiState]. Runs OFF the UI thread: it reads the
+     * database (therapy events, running mode, basal data) and computes IOB/COB. Only the result is
+     * handed to the UI thread, by [publishHomeState].
+     */
     @SuppressLint("SetTextI18n")
-    private fun buildHomeState() {
-        if (!config.appInitialized) return
-        val ctx = context ?: return
+    private fun buildHomeState(): HomeUiState? {
+        if (!config.appInitialized) return null
+        val ctx = context ?: return null
         val units = profileFunction.getUnits()
         val unitsStr = if (units == GlucoseUnit.MMOL) "mmol/L" else "mg/dL"
         val lastBg = lastBgData.lastBg()
@@ -604,7 +611,7 @@ class OverviewFragment : DaggerFragment() {
                 TimeUnit.MILLISECONDS.toMinutes(warmupMs - elapsed) + 1 else null
         }
 
-        homeState.value = HomeUiState(
+        return HomeUiState(
             loopStateLabel = loopLabel,
             loopSubLabel = loopSub,
             loopTone = loopTone,
@@ -798,13 +805,19 @@ class OverviewFragment : DaggerFragment() {
                     amount = ca.amount.toInt()
                 )
             }
+        // Refresh the hero so its IOB/COB reflect a just-entered treatment within ~1s (this event
+        // fires debounced after the iobCob recalc). Previously the hero only rebuilt in refreshAll()
+        // — up to 60s / next CGM tick later — so a fresh carb entry looked like it hadn't
+        // registered, tempting a duplicate entry.
+        publishHomeState()
+    }
+
+    /** Build the Home state on the calling (background) thread; hand only the result to the UI thread. */
+    private fun publishHomeState() {
+        val state = buildHomeState() ?: return
         runOnUiThread {
             composeHome ?: return@runOnUiThread
-            // Refresh the hero so its IOB/COB reflect a just-entered treatment within ~1s (this event
-            // fires debounced after the iobCob recalc). Previously the hero only rebuilt in refreshAll()
-            // — up to 60s / next CGM tick later — so a fresh carb entry looked like it hadn't
-            // registered, tempting a duplicate entry.
-            buildHomeState()
+            homeState.value = state
         }
     }
 
