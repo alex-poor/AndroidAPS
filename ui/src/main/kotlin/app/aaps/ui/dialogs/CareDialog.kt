@@ -42,6 +42,7 @@ import io.reactivex.rxjava3.disposables.CompositeDisposable
 import io.reactivex.rxjava3.kotlin.plusAssign
 import java.util.LinkedList
 import javax.inject.Inject
+import kotlin.math.roundToInt
 
 /**
  * Redesigned generic careportal event dialog. UI is Compose ([CareSheet]); [submit] runs the SAME
@@ -59,6 +60,7 @@ class CareDialog(val fm: FragmentManager) : DaggerDialogFragment() {
     @Inject lateinit var profileUtil: ProfileUtil
     @Inject lateinit var preferences: Preferences
     @Inject lateinit var dateUtil: DateUtil
+    @Inject lateinit var activePlugin: app.aaps.core.interfaces.plugin.ActivePlugin
 
     private val disposable = CompositeDisposable()
 
@@ -235,6 +237,15 @@ class CareDialog(val fm: FragmentManager) : DaggerDialogFragment() {
                     note = notes,
                     listValues = valuesWithUnit.filterNotNull()
                 ).subscribe()
+                // A BG check is also fed to the active source so it can act on it (e.g. the Libre 3
+                // rise-lag correction) — there's no "just annotate" case. Sources with no use for it
+                // ignore it. The event record above stays regardless.
+                if (options == UiInteraction.EventType.BGCHECK && inputs.bg > 0.0) {
+                    val mgdl = profileUtil.convertToMgdl(inputs.bg, profileFunction.getUnits()).roundToInt()
+                    activePlugin.activeBgSource.onManualBg(eventTime, mgdl)
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { android.widget.Toast.makeText(activity, it, android.widget.Toast.LENGTH_LONG).show() }
+                }
             }, null)
         }
         dismiss()

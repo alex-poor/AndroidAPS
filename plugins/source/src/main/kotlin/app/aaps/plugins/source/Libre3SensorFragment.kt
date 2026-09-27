@@ -1,28 +1,22 @@
 package app.aaps.plugins.source
 
-import android.app.AlertDialog
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
-import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.Toast
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import app.aaps.core.compose.theme.AapsTheme
-import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.ui.dialogs.OKDialog
-import app.aaps.libre3.Libre3LagOverride
 import app.aaps.libre3.Libre3NfcActivation
 import app.aaps.plugins.source.compose.Libre3SensorScreen
 import dagger.android.support.DaggerFragment
 import javax.inject.Inject
-import kotlin.math.roundToInt
 
 /**
  * Host for [Libre3SensorScreen]. State comes straight from the plugin's flow, so the screen has
@@ -38,7 +32,6 @@ class Libre3SensorFragment : DaggerFragment() {
 
     @Inject lateinit var libre3SourcePlugin: Libre3SourcePlugin
     @Inject lateinit var rh: app.aaps.core.interfaces.resources.ResourceHelper
-    @Inject lateinit var profileUtil: ProfileUtil
 
     private val nfcAdapter: NfcAdapter? get() = context?.let { NfcAdapter.getDefaultAdapter(it) }
 
@@ -51,7 +44,6 @@ class Libre3SensorFragment : DaggerFragment() {
                     Libre3SensorScreen(
                         state = state,
                         onStartNewSensor = { startActivationScan() },
-                        onEnterFingerprickBg = { promptFingerprickBg() },
                         onStopSensor = {
                             OKDialog.showConfirmation(
                                 requireActivity(),
@@ -113,44 +105,6 @@ class Libre3SensorFragment : DaggerFragment() {
             }
             OKDialog.show(requireContext(), rh.gs(R.string.source_libre3), msg)
         }
-    }
-
-    /**
-     * Enter a finger-prick BG. On a fast rise it arms the lag override (the finger-prick becomes the
-     * loop's ground truth and a decaying correction rides the sensor stream until the rise resolves);
-     * on a flat/falling trace it does nothing, and says so.
-     */
-    private fun promptFingerprickBg() {
-        val ctx = requireContext()
-        val units = profileUtil.units
-        val input = EditText(ctx).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            hint = "BG (${units.asText})"
-        }
-        AlertDialog.Builder(ctx)
-            .setTitle("Finger-prick BG")
-            .setMessage(
-                "Your current finger-prick reading. On a fast rise this becomes the loop's ground " +
-                    "truth and corrects the lagging sensor until the rise flattens. It does nothing " +
-                    "when you're flat or falling — the sensor is accurate then."
-            )
-            .setView(input)
-            .setPositiveButton("Apply") { _, _ ->
-                val entered = input.text.toString().toDoubleOrNull() ?: return@setPositiveButton
-                val mgdl = profileUtil.convertToMgdl(entered, units).roundToInt()
-                val msg = when (val r = libre3SourcePlugin.applyManualBg(mgdl)) {
-                    is Libre3LagOverride.ArmResult.Armed ->
-                        "Applied. Correcting the sensor by +${profileUtil.fromMgdlToStringInUnits(r.gapMgdl)} " +
-                            "${units.asText}, fading out as the rise flattens." +
-                            if (r.clamped) " (Capped to a physiologically plausible gap.)" else ""
-
-                    is Libre3LagOverride.ArmResult.Rejected ->
-                        "Not applied: ${r.reason}"
-                }
-                OKDialog.show(ctx, rh.gs(R.string.source_libre3), msg)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
     }
 
     override fun onPause() {

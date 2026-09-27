@@ -16,9 +16,12 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.iob.GlucoseStatusProvider
 import app.aaps.core.interfaces.logging.UserEntryLogger
+import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.sync.XDripBroadcast
+import app.aaps.core.interfaces.utils.DateUtil
+import kotlin.math.roundToInt
 import app.aaps.core.ui.dialogs.OKDialog
 import app.aaps.core.utils.HtmlHelper
 import app.aaps.ui.dialogs.compose.CalibrationSheet
@@ -36,6 +39,8 @@ class CalibrationDialog : DaggerDialogFragment() {
     @Inject lateinit var xDripBroadcast: XDripBroadcast
     @Inject lateinit var uel: UserEntryLogger
     @Inject lateinit var glucoseStatusProvider: GlucoseStatusProvider
+    @Inject lateinit var activePlugin: ActivePlugin
+    @Inject lateinit var dateUtil: DateUtil
 
     override fun onStart() {
         super.onStart()
@@ -75,7 +80,14 @@ class CalibrationDialog : DaggerDialogFragment() {
             activity?.let { activity ->
                 OKDialog.showConfirmation(activity, rh.gs(app.aaps.core.ui.R.string.calibration), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
                     uel.log(action = Action.CALIBRATION, source = Sources.CalibrationDialog, value = ValueWithUnit.fromGlucoseUnit(bg, units))
-                    xDripBroadcast.sendCalibration(bg)
+                    // Route the entered BG to the active source first (e.g. Libre 3 rise-lag correction).
+                    // null = source has no use for a manual BG -> fall back to the xDrip calibration broadcast.
+                    val mgdl = profileUtil.convertToMgdl(bg, units).roundToInt()
+                    val handled = activePlugin.activeBgSource.onManualBg(dateUtil.now(), mgdl)
+                    when {
+                        handled == null      -> xDripBroadcast.sendCalibration(bg)
+                        handled.isNotBlank() -> OKDialog.show(activity, rh.gs(app.aaps.core.ui.R.string.calibration), handled)
+                    }
                 })
             }
         } else

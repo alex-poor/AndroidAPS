@@ -64,7 +64,8 @@ class Libre3SourcePlugin @Inject constructor(
     private val persistenceLayer: PersistenceLayer,
     private val dateUtil: DateUtil,
     private val credentials: Libre3CredentialStore,
-    private val preferences: Preferences
+    private val preferences: Preferences,
+    private val profileUtil: app.aaps.core.interfaces.profile.ProfileUtil
 ) : AbstractBgSourceWithSensorInsertLogPlugin(
     PluginDescription()
         .mainType(PluginType.BGSOURCE)
@@ -346,6 +347,19 @@ class Libre3SourcePlugin @Inject constructor(
     }
 
     /**
+     * BgSource hook: a manually-entered BG routed here from the "Calibrate" / "BG Check" dialogs.
+     * Feeds the rise-lag override. Returns a message when it armed, blank when there was nothing to
+     * correct (still "handled", so the caller does NOT fall back to an xDrip calibration broadcast).
+     */
+    override fun onManualBg(timeMs: Long, glucoseMgdl: Int): String =
+        when (val r = applyManualBg(glucoseMgdl, timeMs)) {
+            is Libre3LagOverride.ArmResult.Armed ->
+                "Rise-lag correction on: sensor +${profileUtil.fromMgdlToStringInUnits(r.gapMgdl)} ${profileUtil.units.asText}, fading as the rise flattens."
+
+            is Libre3LagOverride.ArmResult.Rejected -> ""   // consumed by the native source; nothing to correct
+        }
+
+    /**
      * Feed a finger-prick BG (mg/dL) as ground truth. On a fast rise the lagging sensor reads low and
      * the loop under-doses; this arms the lag override — the finger-prick is inserted immediately as
      * the current BG, and a decaying correction is carried onto subsequent sensor readings until the
@@ -358,7 +372,7 @@ class Libre3SourcePlugin @Inject constructor(
         if (arm is Libre3LagOverride.ArmResult.Armed) {
             val gv = GV(
                 timestamp = timeMs,
-                value = manualMgdl.toDouble(),
+                value = arm.correctedMgdl.toDouble(),   // clamped + sensor-anchored, NEVER the raw prick
                 raw = null,
                 noise = null,
                 trendArrow = TrendArrow.NONE,
