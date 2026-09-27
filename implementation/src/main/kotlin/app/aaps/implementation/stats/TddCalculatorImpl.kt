@@ -64,7 +64,10 @@ class TddCalculatorImpl @Inject constructor(
         if (endTime > startTime) {
             var midnight = startTime
             while (midnight < endTime) {
-                val tdd = calculateInterval(midnight, midnight + T.hours(24).msecs(), allowMissingData = false)
+                // To the NEXT LOCAL midnight, not +24 h: DST days are 23 or 25 h long, and a day computed an hour
+                // short or long here is cached permanently (PumpType.CACHE) and never recomputed.
+                val nextMidnight = MidnightTime.calc(midnight + T.hours(27).msecs())
+                val tdd = calculateInterval(midnight, nextMidnight, allowMissingData = false)
                 aapsLogger.debug(LTag.APS, "Calculated TotalDailyDose for ${dateUtil.dateString(midnight)} $tdd")
                 if (tdd != null) result.put(midnight, tdd)
                 midnight = MidnightTime.calc(midnight + T.hours(27).msecs()) // be sure we find correct midnight
@@ -114,6 +117,13 @@ class TddCalculatorImpl @Inject constructor(
             tdd.carbs += t.amount
         }
         val calculationStep = T.mins(5).msecs()
+        // Extended boluses loaded ONCE for the interval instead of one query per 5-min step (288 a day; the
+        // status lights ran this from the last cannula change on every overview refresh). Per step, the latest
+        // one active at t — the same row getExtendedBolusActiveAt(t) returned.
+        val extendedBoluses =
+            if (activePlugin.activePump.isFakingTempsByExtendedBoluses) emptyList()
+            else persistenceLayer.getExtendedBolusesStartingFromTimeToTime(startTimeAligned - EB_LOOKBACK_MS, endTimeAligned, true)
+                .sortedBy { it.timestamp }
         for (t in startTimeAligned until endTimeAligned step calculationStep) {
 
             val profile = profileFunction.getProfile(t) ?: if (allowMissingData) continue else return null
@@ -123,7 +133,7 @@ class TddCalculatorImpl @Inject constructor(
             tdd.basalAmount += absoluteRate / 60.0 * 5.0
 
             if (!activePlugin.activePump.isFakingTempsByExtendedBoluses) {
-                val eb = persistenceLayer.getExtendedBolusActiveAt(t)
+                val eb = extendedBoluses.lastOrNull { it.timestamp <= t && t < it.timestamp + it.duration }
                 val absoluteEbRate = eb?.rate ?: 0.0
                 tdd.bolusAmount += absoluteEbRate / 60.0 * 5.0
             }
@@ -189,5 +199,11 @@ class TddCalculatorImpl @Inject constructor(
                 layout.addView(todayTdd.toTableRow(context, rh, dateUtil, includeCarbs = true))
             }
         }
+    }
+
+    private companion object {
+
+        /** Longest extended bolus that can still be running at the start of an interval. */
+        val EB_LOOKBACK_MS = T.hours(24).msecs()
     }
 }
