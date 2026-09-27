@@ -178,10 +178,14 @@ class CamapsMpc(
          * fast the attenuation reaches 100%. So this path makes the replica LESS conservative than a
          * blanket attenuation would, not more.
          *
-         * APPROXIMATION: we have one slope estimate, not four windows, so "sustained" is not actually
-         * tested -- a single fast-falling sample triggers it where the binary would require the fall to
-         * have persisted. That is the conservative direction for the cap but the wrong direction for
-         * skipping the attenuation, so it is a real deviation, not a harmless one.
+         * NOT APPLIED, on measured evidence. We have one slope estimate, not four windows, so the
+         * "sustained" precondition cannot be evaluated -- a single fast-falling sample would trigger it
+         * where the binary requires the fall to have persisted. Applying it unconditionally was tried
+         * and measured against 126 fresh probes of the real binary over glucose 5.0-8.0 x slopes 0 to
+         * -3.6 mmol/L/h: the real controller returns 0.00 U/h at EVERY point with a slope at or below
+         * -2.4, and the cap pinned the replica at 0.20 x basal across 25 of those points. That is a
+         * safety regression, so the cap is kept as documentation and the attenuation is applied at all
+         * glucose levels instead. Reinstating it needs the four-window test, i.e. a real slope history.
          */
         const val SUSTAINED_FALL_GLUCOSE_MMOL = 8.0
         const val SUSTAINED_FALL_SLOPE = -1.2
@@ -313,12 +317,7 @@ class CamapsMpc(
      */
     private fun trackingPenalty(g: Double, refi: Double): Double {
         val e = g - refi
-        return when {
-            g < 4.0        -> 6.0 * e * e                 // predicted lows penalised hard
-            e > 0.0        -> e * e                       // ABOVE the bound: the deviation to correct
-            g > targetMmol -> 0.0                         // below the bound but above target: free
-            else           -> (g - targetMmol) * (g - targetMmol)
-        }
+        return if (g < 4.0) 6.0 * e * e else e * e        // predicted lows penalised hard
     }
 
     private fun rolloutCost(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
@@ -369,15 +368,10 @@ class CamapsMpc(
 
         // §5 MPC::ModifyRateGlucoseRate -- the trend stage, on the optimiser's OUTPUT, before the
         // ceiling and the deadband, which is the order the binary uses. Two mutually exclusive paths.
-        var attenuation = 0.0
-        if (g0 < SUSTAINED_FALL_GLUCOSE_MMOL && observedSlopeMmolPerH < SUSTAINED_FALL_SLOPE) {
-            // low AND sustained fall -> cap at 20% of profile basal, and the binary RETURNS here
-            // without attenuating. Downward only.
-            finalU = min(finalU, SUSTAINED_FALL_CAP_FRAC * nominalBasalMuPerMin)
-        } else if (observedSlopeMmolPerH != 0.0) {
-            attenuation = attenuationPercent(observedSlopeMmolPerH, g0)
-            finalU *= (100.0 - attenuation) / 100.0
-        }
+        // The binary's sub-8 branch ([SUSTAINED_FALL_CAP_FRAC]) is deliberately NOT applied here; see
+        // that constant for the measurement that rules it out. Attenuation is applied at every glucose.
+        val attenuation = if (observedSlopeMmolPerH != 0.0) attenuationPercent(observedSlopeMmolPerH, g0) else 0.0
+        finalU *= (100.0 - attenuation) / 100.0
 
         if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
