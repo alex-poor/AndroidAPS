@@ -527,7 +527,8 @@ leave the device, and no APK built from it should be distributed.
 
 On a fast rise, blood glucose leads interstitial fluid, so a factory-calibrated CGM reads *stale-low* and
 the loop under-doses through exactly the window it should be acting. A finger-prick taken then is the true
-current value. This makes it ground truth: entered from the Libre 3 sensor screen, it's inserted
+current value. This makes it ground truth: entered from the overview **"Calibrate"** or **"BG Check"**
+(both route a manual BG to the active source; for the native Libre 3 that means this correction), it's inserted
 immediately and a **decaying correction rides the sensor stream until the rise resolves** — no persistent
 recalibration (which would be wrong, since the gap is transient lag, not a fixed sensor bias).
 
@@ -543,14 +544,17 @@ The design is shaped by the physiology, not guessed:
 - **It's denoised.** The rate is a least-squares slope over the last N one-minute samples (default 5),
   because the Libre 3 per-minute stream is jittery enough that a single minute-delta would false-trigger;
   it also means nothing acts on fewer than N ticks of evidence.
-- **It's bounded.** Plausibility-caps the finger-prick gap at *slopeEntry × ~15 min* (rejects bad pricks),
+- **The input is bounded.** A value outside the valid range is rejected outright (a mmol/L typo like
+  "118" for 11.8 can't reach the loop), and what's stored is the *sensor-anchored, clamped* value —
+  never the raw prick — so an over-cap entry can't spike the stream. On top of that it
+  plausibility-caps the gap at *slopeEntry × ~15 min* (rejects bad pricks),
   hard-stops on a fall, on deceleration, and at a max duration. Tunables (window, arm rate, half-life, max
   duration) are preferences.
 
 Corrected values carry into the DB, so the EKF, the loop and the on-screen number all agree; every
 adjustment is logged for the dosing audit trail.
 
-**Status: built and unit-tested (13 tests across the override, the parser and the flow), but not yet
+**Status: built and unit-tested (the override alone has 11 tests, including a units-typo rejection), but not yet
 exercised on a real excursion** — the dosing behaviour can only be judged in use, so it ships behind a
 deliberate manual trigger and is dormant otherwise.
 
