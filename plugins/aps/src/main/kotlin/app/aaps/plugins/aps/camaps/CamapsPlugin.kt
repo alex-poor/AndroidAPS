@@ -208,7 +208,33 @@ class CamapsPlugin @Inject constructor(
         aapsLogger.debug(LTag.APS, "CamAPS-replica -> $rateUhr U/hr / $TBR_DURATION_MIN min | $reasonStr")
     }
 
-    /** Replay the trailing [WINDOW_H] hours through the IMM bank. Stateless: rebuilt every tick. */
+    /**
+     * Replay the trailing [WINDOW_H] hours. Stateless: rebuilt every tick.
+     *
+     * Uses an EKF over [EgpFluxModel] — Hovorka plus one unmodelled-glucose-flux state — rather than the
+     * IMM bank, because without that state the forecast discards almost all of an observed trend and the
+     * controller cannot predict the hypo that should make it suspend. Measured: glucose 6.5 falling
+     * 3.0 mmol/L/h forecasts to 6.09 at +60 min with the bank, and to 4.58 with the flux state.
+     *
+     * Scored against 627 sanity-verified points from the real binary, in units of profile basal:
+     * ```
+     *   config                          level  trend  lowfall  ceiling   points the real one
+     *                                                                    suspends and we do not
+     *   IMM bank                        0.160  0.490    0.190    0.273        11
+     *   single EKF, flux FROZEN (q=0)   0.160  0.490    0.190    0.273        11   <- control
+     *   + flux q = 0.03                 0.162  0.412    0.162    0.213         2
+     *   + flux q = 0.10                 0.198  0.363    0.215    0.148         0
+     * ```
+     * The frozen control is bit-identical to the IMM bank, so the whole difference is the flux state and
+     * not the estimator swap. The probes contain no meals, which is why the bank's carb-absorption
+     * submodels contribute nothing to them — on real data with meals they may well, so this is a
+     * deliberate trade that has NOT been validated on real history yet.
+     *
+     * [DIST_PROCESS_VAR] is set to 0.10: it removes all 11 points where the real controller suspends and
+     * this one does not, for 0.04 x basal of level accuracy. That asymmetry is the right way round, but
+     * it is a judgement made against synthetic probes and should be re-derived from the user's own
+     * history before this is trusted.
+     */
     private fun estimateState(model: HovorkaModel, nominalMuMin: Double, now: Long): GlucoseEstimator {
         val start = now - WINDOW_H * 3_600_000L
         val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, now, true).sortedBy { it.timestamp }
@@ -216,7 +242,11 @@ class CamapsPlugin @Inject constructor(
         val carbs = persistenceLayer.getCarbsFromTimeToTimeExpanded(start, now, true)
         val tbrs = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(start, now, true)
         val profile = profileFunction.getProfile()!!
-        val est: GlucoseEstimator = HovorkaImmBank(model.p, nominalMuMin)
+        val fluxModel = EgpFluxModel(model.p)
+        val est: GlucoseEstimator = HovorkaEkf(
+            fluxModel, fluxModel.steadyState(nominalMuMin),
+            unclampedState = EgpFluxModel.DIST,
+            distInitVar = DIST_INIT_VAR, distProcessNoiseVar = DIST_PROCESS_VAR)
         fun minOf(ts: Long) = ((ts - start) / 60000L).toInt()
         val bolusAt = HashMap<Int, Double>(); boluses.forEach { bolusAt.merge(minOf(it.timestamp), it.amount, Double::plus) }
         val carbAt = HashMap<Int, Double>(); carbs.forEach { carbAt.merge(minOf(it.timestamp), it.amount, Double::plus) }
@@ -242,5 +272,11 @@ class CamapsPlugin @Inject constructor(
         const val TMAXG_MIN = 90.0
         const val RAW_HYPO_SUSPEND_MMOL = 3.9
         const val MAX_BASAL_ABS_CAP = 5.0
+
+        /** Prior variance on the unmodelled-flux state: sd 0.1 mmol/min. */
+        const val DIST_INIT_VAR = 0.01
+
+        /** Random-walk process variance for the flux state. See [estimateState] for the sweep. */
+        const val DIST_PROCESS_VAR = 0.10
     }
 }

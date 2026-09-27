@@ -30,9 +30,12 @@ import kotlin.math.min
  *
  * Inputs: u = insulin infusion (mU/min); carbs handled as impulses into D1 (see [addMeal]).
  */
-class HovorkaModel(val p: HovorkaParams) {
+// `open` only so the CamAPS replica can add a disturbance state (see camaps/EgpFluxModel.kt).
+// Behaviourally inert: nothing here changes, and the live HovorkaMPC path constructs this class
+// directly as before.
+open class HovorkaModel(val p: HovorkaParams) {
 
-    val nStates = 10
+    open val nStates = 10
 
     /** Plasma glucose concentration G = Q1/VG (mmol/L). */
     fun glucoseMmol(s: DoubleArray): Double = s[0] / p.vg
@@ -40,7 +43,7 @@ class HovorkaModel(val p: HovorkaParams) {
     fun glucoseMgdl(s: DoubleArray): Double = glucoseMmol(s) * 18.0
 
     /** d(state)/dt for insulin infusion u (mU/min). Returns a fresh derivative array. */
-    fun derivative(s: DoubleArray, u: Double): DoubleArray {
+    open fun derivative(s: DoubleArray, u: Double): DoubleArray {
         val q1 = s[0]; val q2 = s[1]
         val x1 = s[2]; val x2 = s[3]; val x3 = s[4]
         val s1 = s[5]; val s2 = s[6]; val ins = s[7]
@@ -69,7 +72,7 @@ class HovorkaModel(val p: HovorkaParams) {
     }
 
     /** RK4 step of dt minutes, constant infusion u over the step. Returns a new state. */
-    fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
+    open fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
         val k1 = derivative(s, u)
         val k2 = derivative(add(s, k1, dtMin / 2), u)
         val k3 = derivative(add(s, k2, dtMin / 2), u)
@@ -114,7 +117,7 @@ class HovorkaModel(val p: HovorkaParams) {
      * been calibrated to. Converging rather than counting removes the discrepancy in both directions and is
      * usually FASTER, since a typical model settles well inside the ceiling.
      */
-    fun steadyState(u: Double, minutes: Int = SS_MAX_MIN): DoubleArray {
+    open fun steadyState(u: Double, minutes: Int = SS_MAX_MIN): DoubleArray {
         var s = doubleArrayOf(
             p.vg * 6.0, p.vg * 3.0, 0.0, 0.0, 0.0, u * p.tMaxI, u * p.tMaxI, 0.0, 0.0, 0.0
         )
