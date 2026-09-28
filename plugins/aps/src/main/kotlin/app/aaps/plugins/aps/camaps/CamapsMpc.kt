@@ -292,6 +292,34 @@ class CamapsMpc(
         const val BELOW_REFERENCE_WEIGHT = 0.25
 
         /**
+         * A FORECAST VALIDITY FLOOR WAS TRIED AND DOES NOT EXPLAIN THE BINARY. **[M]**
+         *
+         * The replica forecasts glucose at 0.00 mmol/L in several post-meal probes, because the decoded
+         * plant is a linearisation around normoglycaemia — `SI · I` removes glucose at a rate independent
+         * of glucose, `F01` is constant, there is no renal term (§2) — so with insulin on board it drives
+         * Q1 straight through zero. Penalised at 6x, an impossible depth outvotes everything and forces a
+         * suspend where the real controller delivers basal.
+         *
+         * The obvious hypothesis was that the binary's cost saturates, so depth beyond some point stops
+         * mattering. Implemented as a floor on the glucose fed to [trackingPenalty] and measured:
+         * ```
+         *   floor   level   trend  low+fall  post-meal  recovery   unsafe
+         *   off     0.203   0.158     0.144      0.295     0.258        0    <- shipped
+         *   2.2     0.203   0.158     0.144      0.326     0.258        0
+         *   3.0     0.203   0.158     0.144      0.338     0.258        0
+         *   3.5     0.203   0.158     0.150      0.347     0.258        1
+         *   3.9     0.203   0.158     0.160      0.351     0.260        3
+         * ```
+         * It makes the post-meal arm monotonically WORSE and starts costing safety cells at 3.5. So a
+         * saturating penalty is not what the real controller is doing, and the floor is not shipped.
+         *
+         * That leaves the two other candidates in §24.10 — the binary clamping model glucose inside the
+         * rollout (in the 7.7 KB of hand-scheduled float code that has not been read), or its optimiser
+         * horizon being effectively shorter than 180 minutes. Both are still open.
+         */
+        const val FORECAST_FLOOR_REFUTED = true
+
+        /**
          * WHY THERE IS NO POST-HYPO HOLD HERE.
          *
          * `MPC::RescueCarbReduction` (0x47a70) appeared to zero the rate when recent minimum glucose was
