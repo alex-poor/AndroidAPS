@@ -88,15 +88,24 @@ class CamapsEstimator(
      * Covariance-inflation half-life, minutes — `forgettingHalfTime` (0x022d28) = 150. 0 disables it.
      * See the note in [predict].
      */
-    private val forgettingHalfMin: Double = FORGETTING_HALF_MIN
+    private val forgettingHalfMin: Double = FORGETTING_HALF_MIN,
+    /** Subcutaneous insulin time constant, minutes — `Model1::tMaxIs`. */
+    private val tMaxIMin: Double = CamapsSubModel.TMAX_I,
+    /** Plasma insulin elimination rate, 1/min. */
+    private val keMin: Double = 0.14,
+    private val vgPerKg: Double = 0.16,
+    /** Build the bank with [CamapsSubModel.fromBIR] — the decoded plant. */
+    private val decodedPlant: Boolean = false
 ) : GlucoseEstimator {
 
     private val n = 9
     private val nm = 8
     private val models = Array(nm) {
-        CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL,
+        if (decodedPlant) CamapsSubModel.fromBIR(it, weightKg, basalUPerHr, fluxHalfMin = fluxHalfMin)
+        else CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL,
                                   gRefMmol = gRefMmol, gDisposal = gDisposal, siScale = siScale,
-                                  fluxHalfMin = fluxHalfMin)
+                                  fluxHalfMin = fluxHalfMin, tMaxIMin = tMaxIMin,
+                                  keOverride = keMin, vgPerKg = vgPerKg)
     }
     private val basalMu = basalUPerHr * 1000.0 / 60.0
     private val xs = Array(nm) { models[it].steadyState(basalMu, 7.0) }

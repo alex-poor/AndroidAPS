@@ -85,19 +85,35 @@ class CamapsMpc(
     private val nominalBasalMuPerMin: Double,
     private val maxBasalMuPerMin: Double,
     /**
-     * Optimiser horizon, minutes. §5 decodes `MPC::Optimise` as fetching seven `Vector<float,180>` arrays,
-     * i.e. 180 steps; the minutes per step were never recovered, and 180 one-minute steps is the natural
-     * reading. Kept at 180 deliberately.
+     * PREDICTION horizon, minutes — `predictionHorizonUp`/`Down` = **150**, decoded.
      *
-     * Measured: a shorter horizon scores marginally better against the binary — 140/150 → 0.887 and
-     * 160 → 0.882 summed MAE against 180 → 0.915, all with zero safety cells — but the basin is shallow,
-     * it costs the trend arm, and it would override a decoded structural fact for about 3%. The
-     * discretisation is NOT the cause: at the same 180-minute horizon, 1-minute steps score 0.919 against
-     * 0.915 for 5-minute steps, so the coarser grid used here is faithful.
+     * This was 180 for a long time on the reasoning that `MPC::Optimise` fetches `Vector<float,180u>`
+     * arrays. That is the array's CAPACITY, not the horizon: 150 one-minute samples fit inside a
+     * 180-element vector. The globals are `.bss`, so they read as zero in the file and were repeatedly
+     * written off as "runtime values, not recovered" — they are in fact built by a C++ static constructor
+     * in `.init_array` (0x3b9b0) as `CTimeSpanMy(0,2,30,0)`.
+     *
+     * A horizon sweep had already found 140-160 better than 180 (summed MAE 0.882-0.887 against 0.915)
+     * and that measurement was overridden to defend the "decoded" 180. It was not decoded.
      */
-    private val horizonMin: Int = 180,
+    private val horizonMin: Int = SHIPPED_HORIZON_MIN,
+    /**
+     * CONTROL horizon, minutes — `controlHorizonUp`/`Down` = **100**, decoded, `CTimeSpanMy(0,1,40,0)`.
+     *
+     * Shorter than the prediction horizon, which this replica had no concept of: control moves are
+     * optimised over the first 100 minutes and held constant for the remaining 50 while the prediction
+     * runs on. With [CONTROL_STEP_MIN] = 25 that is 100/25 = **4 control blocks**.
+     */
+    private val controlHorizonMin: Int = DECODED_CONTROL_HORIZON_MIN,
     private val stepMin: Int = 5,
-    private val nSegments: Int = 6,
+    /** Decoded: controlHorizon/controlStep = 100/25 = 4. Shipped: 6, see [SHIPPED_HORIZON_MIN]. */
+    private val nSegments: Int = SHIPPED_SEGMENTS,
+    /**
+     * Control-block length, minutes. 0 = spread [nSegments] evenly over the prediction horizon (the
+     * shipped behaviour); [CONTROL_STEP_MIN] = 25 is the decoded value, which makes the blocks cover
+     * the control horizon and holds the last one for the rest of the prediction.
+     */
+    private val controlStepMin: Int = 0,
     private val sweeps: Int = 2,
     /**
      * Weight on insulin effort in the cost. The binary's own weights are named globals, not immediates
@@ -463,29 +479,35 @@ class CamapsMpc(
         const val SETPOINT_CLAMP_MMOL = 12.0            // fmov s9, #12.0 ; fcsel .., gt
 
         /**
-         * §4.1's prediction lead, minutes. The structure is decoded; the VALUE is a runtime field that was
-         * never recovered, so it is fitted against the binary's measured response. See [initialSetPoint].
+         * §4.1's prediction lead, minutes — `predictLead` = **30**, decoded.
          *
-         * At zero the initial set-point equals current glucose, which inside the dead zone means the
-         * reference simply holds there — no tracking error, and the (two-sided) effort term parks the
-         * controller at exactly profile basal. Measured, that gave a flat 1.000 × basal across glucose
-         * 5.5–8.0 where the real controller ramps 0.88 → 1.41.
-         *
-         * Swept over the 826-point reference:
-         * ```
-         *   lead   level   trend  low+fall  post-meal  recovery   sum   unsafe
-         *     0    0.203   0.158     0.136      0.287     0.258  1.042      0
-         *    15    0.196   0.155     0.128      0.285     0.248  1.012      0
-         *    30    0.187   0.150     0.114      0.282     0.233  0.966      0
-         *    45    0.169   0.151     0.104      0.280     0.222  0.926      0
-         *    60    0.173   0.147     0.097      0.271     0.227  0.915      0    <- shipped
-         *    75    0.185   0.146     0.093      0.268     0.231  0.923      0
-         *    90    0.198   0.144     0.091      0.265     0.239  0.937      0
-         * ```
-         * Better on EVERY arm with no safety cost, flat between 45 and 75, best at 60 — which is also the
-         * right order of magnitude for a controller whose insulin peaks around an hour out.
+         * `CTimeSpanMy(0,0,30,0)` in the static constructor at 0x3b9b0. This was fitted to 60 against the
+         * probe set while the global was believed unrecoverable.
          */
+        const val DECODED_PREDICT_LEAD_MIN = 30.0
+        /** Shipped value — fitted, see [SHIPPED_HORIZON_MIN] for why the decoded 30 is not shipped yet. */
         const val PREDICT_LEAD_MIN = 60.0
+
+        /** `controlStep` = 25 min, decoded — `CTimeSpanMy(0,0,25,0)`. Same value as the global `dt`. */
+        const val CONTROL_STEP_MIN = 25
+
+        /** `predictionHorizonUp/Down` = 150, `controlHorizonUp/Down` = 100 — decoded. */
+        const val DECODED_HORIZON_MIN = 150
+        const val DECODED_CONTROL_HORIZON_MIN = 100
+
+        /**
+         * WHY THE DECODED HORIZONS ARE NOT SHIPPED YET.
+         *
+         * They are facts about CamAPS, read from its static constructor. But applied to this replica's
+         * RECONSTRUCTED plant and estimator they make its behaviour less like CamAPS's, not more — summed
+         * MAE 0.922 -> 1.042 — because the reconstruction's other parts (lead 60, egpHalf, qFlux, the cost
+         * weights) were co-tuned against the wrong horizon. The same happens for every decoded piece
+         * dropped into the reconstruction on its own. So the decoded values ship as a COHERENT bundle with
+         * the decoded plant and estimator, once the estimator is decoded; until then the shipped path stays
+         * on the configuration that measurably behaves most like the binary.
+         */
+        const val SHIPPED_HORIZON_MIN = 180
+        const val SHIPPED_SEGMENTS = 6
         /**
          * The glucose < 8.0 branch of `MPC::ModifyRateGlucoseRate` (0x472b8..0x474f0). The binary tests
          * `GetSlope` over FOUR successive look-back windows, each x60 into mmol/L/h, each against
@@ -900,7 +922,12 @@ class CamapsMpc(
         val g0 = model.glucoseMmol(stateEstimate)
         val ref = referenceTrajectory(g0)
         val steps = ref.size - 1
-        val segLen = max(1, steps / nSegments)
+        // CONTROL HORIZON. Each block is one `controlStep` (25 min) long, so the nSegments blocks cover
+        // controlHorizon (100 min) and the LAST block's value is held for the rest of the prediction
+        // horizon -- `seq[min(seq.size-1, i/segLen)]` in the rollout does the holding. This used to be
+        // `steps / nSegments`, which stretched the blocks across the whole prediction horizon and made
+        // the control horizon a no-op.
+        val segLen = if (controlStepMin > 0) max(1, controlStepMin / stepMin) else max(1, steps / nSegments)
         // AAPS's own maxBasal still applies; the controller's own ceiling is usually the binding one
         val hi = if (maxRateMuPerMin > 0.0) min(maxBasalMuPerMin, maxRateMuPerMin) else maxBasalMuPerMin
         val seq = if (useClosedFormSolve) solveClosedForm(stateEstimate, ref, segLen, hi)

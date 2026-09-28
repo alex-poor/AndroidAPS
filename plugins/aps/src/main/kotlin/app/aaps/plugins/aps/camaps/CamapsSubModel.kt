@@ -1,5 +1,7 @@
 package app.aaps.plugins.aps.camaps
 
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -72,7 +74,12 @@ class CamapsSubModel(
     /** 0 disables the ∝G scaling and reproduces `EndoBalance` exactly. */
     val glucoseDisposalWeight: Double = GLUCOSE_DEPENDENT_DISPOSAL,
     /** Half-life of the unmodelled-flux state, minutes; 0 = random walk. See [FLUX_IS_A_RANDOM_WALK]. */
-    val fluxHalfMin: Double = 0.0
+    val fluxHalfMin: Double = 0.0,
+    /**
+     * Use the glucose equation DECODED from `SubModel1::PredictStep` rather than the earlier reconstruction.
+     * See [fromBIR] for where every parameter comes from.
+     */
+    val decodedPlant: Boolean = false
 ) : ControlModel {
     val nStates = 9
 
@@ -91,16 +98,28 @@ class CamapsSubModel(
         // weight the term equals si*ins when G == gRefMmol, so the basal anchor is untouched. See
         // [GLUCOSE_DEPENDENT_DISPOSAL] for why the decoded insulin-only form cannot stand on its own.
         val gNow = s[Q1] / vg
-        val gScale = 1.0 + glucoseDisposalWeight * (gNow / gRefMmol - 1.0)
-        val f01c = if (gNow < 4.5) f01 * max(0.0, gNow) / 4.5 else f01
+        val dQ1 = if (decodedPlant) {
+            // SubModel1::PredictStep, decoded (0x54170-0x54448):
+            //   EGP       = EGP0 * 2^(-(I - Iref)/egpHalf)
+            //   F01_eff   = F01 * (6.5/5.5) * G/(G+1)       Michaelis-Menten, == F01 at G = 5.5
+            //   disposal  = SI * I * Q1                     rate SI*I on the glucose MASS
+            // Balances exactly at G = 5.5, I = Iref because SetBIC sets F01 = EGP0 - 5.5*Vg*SI*Iref.
+            val g = max(0.0, gNow)
+            egp + ug - f01 * (6.5 / 5.5) * g / (g + 1.0) - si * ins * s[Q1] + s[FX]
+        } else {
+            val gScale = 1.0 + glucoseDisposalWeight * (gNow / gRefMmol - 1.0)
+            val f01c = if (gNow < 4.5) f01 * max(0.0, gNow) / 4.5 else f01
+            egp + ug - f01c - si * ins * max(0.0, gScale) + s[FX]
+        }
         return doubleArrayOf(
-            egp + ug - f01c - si * ins * max(0.0, gScale) + s[FX],      // dQ1
+            dQ1,                                     // dQ1
             0.0,                                     // dS1 filled by the caller (needs u)
             (s[S1] - s[S2]) / tMaxI,                 // dS2
             s[S2] / (tMaxI * vi) - ke * ins,         // dI
             -s[D1] / t1,                             // dD1
             s[D1] / t1 - s[D2] / t2,                 // dD2
-            if (fluxHalfMin > 0.0) -s[FX] * LN2 / fluxHalfMin else 0.0,   // dFx
+            if (decodedPlant) -s[FX] * LN2 / CS_HALF_MIN
+            else if (fluxHalfMin > 0.0) -s[FX] * LN2 / fluxHalfMin else 0.0,   // dFx
             0.0,                                     // df:  random walk
             0.0                                      // dlg: random walk
         )
@@ -120,7 +139,15 @@ class CamapsSubModel(
         DoubleArray(nStates) { i -> clampState(i, s[i] + h * d[i]) }
 
     private fun clampState(i: Int, v: Double) = when (i) {
-        FX -> v                                             // a flux, may be negative
+        // SubModel1::CsLimits = [-0.005, 0.005], applied in SubModel1::Learn. CamAPS carries glucose per
+        // kilogram, so that is +-0.005 mmol/kg/min -- about +-2.1 mmol/L/h at Vg 0.14. This replica's
+        // flux state had NO bound, which is how a fall of 3.6 mmol/L/h could be extrapolated for three
+        // hours into a forecast of 0.00 mmol/L. Only applied with the decoded plant, so the old
+        // reconstruction stays comparable.
+        // With the decoded plant, FX is CamAPS's Cs: clamped to CsLimits (+-0.005 mmol/kg/min) in
+        // SubModel1::Learn. Its 540-minute decay is applied in derivative() via CS_HALF_MIN.
+        FX -> if (decodedPlant) v.coerceIn(-CS_LIMIT_PER_KG * vg / VG_PER_KG, CS_LIMIT_PER_KG * vg / VG_PER_KG)
+              else v
         F  -> min(F_MAX, max(F_MIN, v))                     // SubModel1::fLimits
         LG -> min(LG_MAX, max(LG_MIN, v))                   // log-scale on absorption, bounded
         else -> max(0.0, v)
@@ -166,6 +193,35 @@ class CamapsSubModel(
          * about the MEAL path over-accumulating flux, not about the flux state as such. Recorded as a
          * known gap rather than patched with a global decay.
          */
+        /**
+         * `SubModel1::GetVg()` returns **0.14** L/kg — not Hovorka's 0.16, which this replica used.
+         */
+        const val VG_PER_KG = 0.14
+
+        /**
+         * `EndoBalance` converts its insulin argument to a plasma concentration as
+         * `I = u · (1000/60) / (W · 0.02709)`, so CamAPS's `Vi · ke` is **0.02709** L/(kg·min). This
+         * replica had 0.12 × 0.14 = 0.0168 — a **1.61×** error in the insulin gain, invisible at steady
+         * state because the ISF anchor cancels it, and very much not invisible in the dynamics.
+         * `Vi` is kept at 0.12 (the constant `PredictStep` carries alongside 0.14) and `ke` follows.
+         */
+        const val VI_PER_KG = 0.12
+        const val VI_KE_PER_KG = 0.02709
+        const val KE = VI_KE_PER_KG / VI_PER_KG          // 0.2258 /min
+
+        /**
+         * `SubModel1::CsLimits` = [-0.005, 0.005], decoded. **Not applied to [FX].** Mapping it onto this
+         * replica's flux state (as +-0.005 mmol/kg/min) was tried and made agreement far worse — summed
+         * MAE 1.196 -> 2.178, unsafe cells 10 -> 27 — because it removes the trend response the binary
+         * plainly has. CamAPS's filter state is 6-D (`SubModel1::InitialiseCovariance` sets
+         * diag(196, 100, 3.08e-5, 0.09, 196, 3.08e-5)) and the Cs-sized states are 2 and 5, whose meaning
+         * is not yet decoded. A constraint cannot be transplanted until the state it constrains is known.
+         */
+        const val CS_LIMIT_PER_KG = 0.005
+
+        /** Cs half-life: PredictStep multiplies it by exp(ln2*dt/-540) each step. Decoded, 9 hours. */
+        const val CS_HALF_MIN = 540.0
+
         const val FLUX_IS_A_RANDOM_WALK = true
         private val LN2 = Math.log(2.0)
 
@@ -275,19 +331,61 @@ class CamapsSubModel(
          * parameter of the fit. `MULT_WKT_INS[k]` scales `SI` per submodel, which is what that decoded
          * array appears to be for.
          */
+        /**
+         * The plant exactly as the binary builds it: every parameter from the patient's basal insulin
+         * requirement via `SubModel1::SetBIC` (0x554ac), transcribed instruction by instruction.
+         * **ISF is never used** — the binary's input does not carry it.
+         * ```
+         *   Iref    = clamp( BIR*(1000/60) / (W*0.02709), 0.5, 100 )           mU/L
+         *   s9      = 1.4 (BIR<0.3) .. linear -0.571429/(U/h) .. 1.0 (BIR>1.0)
+         *   m       = multWktInsIni[k]            1.0 or 1.4
+         *   tMaxI   = tMaxIs / m                  the bank varies insulin TIMING, not a bare SI multiplier
+         *   L       = ln( Iref / (m*1.38) )
+         *   egpHalf = s9 * exp(L + 0.201)
+         *   SI      = exp(-1.683*L - 4.489) / s9
+         *   EGP0    = 0.0111 mmol/kg/min          (SubModel1 ctor, rodata 0x22ee8)
+         *   F01     = EGP0 - 5.5*Vg*SI*Iref       closes the balance at G = 5.5 exactly
+         * ```
+         * At BIR 0.85 U/h, 70 kg: Iref 7.47, egpHalf 7.19 / 5.13, SI 6.0e-4 / 1.06e-3. This replica had
+         * egpHalf FITTED to 50, SI derived from ISF, Iref = 0 and the anchor at target 5.8.
+         */
+        fun fromBIR(k: Int, weightKg: Double, birUPerHr: Double, agBio: Double = 0.8,
+                    fluxHalfMin: Double = 0.0): CamapsSubModel {
+            val vg = VG_PER_KG * weightKg
+            val vi = VI_PER_KG * weightKg
+            val ke = KE
+            val m = MULT_WKT_INS[k]
+            val iRef = (birUPerHr * 1000.0 / 60.0 / (weightKg * VI_KE_PER_KG)).coerceIn(0.5, 100.0)
+            val s9 = when {
+                birUPerHr < 0.3 -> 1.4
+                birUPerHr > 1.0 -> 1.0
+                else            -> 1.4 - 0.571429 * (birUPerHr - 0.3)
+            }
+            val l = ln(iRef / (m * 1.38))
+            val egpHalf = s9 * exp(l + 0.201)
+            val si = exp(-1.683 * l - 4.489) / s9
+            val egp0PerKg = 0.0111
+            val f01PerKg = egp0PerKg - 5.5 * VG_PER_KG * si * iRef
+            return CamapsSubModel(vg, vi, ke, TMAX_I / m, TMAXG1[k], TMAXG2[k],
+                egp0PerKg * weightKg, f01PerKg * weightKg, si, iRef, egpHalf, agBio,
+                fluxHalfMin = fluxHalfMin, decodedPlant = true)
+        }
+
         fun forProfile(k: Int, weightKg: Double, isfMmolPerU: Double, basalUPerHr: Double,
                        egpHalfMuPerL: Double, agBio: Double = 0.8, gRefMmol: Double = 5.8,
                        gDisposal: Double = GLUCOSE_DEPENDENT_DISPOSAL,
-                       siScale: Double = 1.0, fluxHalfMin: Double = 0.0): CamapsSubModel {
-            val vg = 0.16 * weightKg
-            val vi = 0.12 * weightKg
-            val ke = 0.14
+                       siScale: Double = 1.0, fluxHalfMin: Double = 0.0,
+                       tMaxIMin: Double = TMAX_I, keOverride: Double = 0.14,   // reconstructed ke
+                       vgPerKg: Double = 0.16): CamapsSubModel {   // reconstructed plant: Hovorka's Vg
+            val vg = vgPerKg * weightKg
+            val vi = VI_PER_KG * weightKg
+            val ke = keOverride
             val f01 = 0.0097 * weightKg
             val si = isfMmolPerU * siScale * vg * vi * ke / 1000.0 * MULT_WKT_INS[k]
             val iBasal = (basalUPerHr * 1000.0 / 60.0) / (vi * ke)
             // balance at basal: egp0 * 2^(-iBasal/half) = f01 + si*iBasal
             val egp0 = (f01 + si * iBasal) / 2.0.pow(-iBasal / egpHalfMuPerL)
-            return CamapsSubModel(vg, vi, ke, TMAX_I, TMAXG1[k], TMAXG2[k],
+            return CamapsSubModel(vg, vi, ke, tMaxIMin, TMAXG1[k], TMAXG2[k],
                 egp0, f01, si, 0.0, egpHalfMuPerL, agBio, gRefMmol, gDisposal, fluxHalfMin)
         }
     }
