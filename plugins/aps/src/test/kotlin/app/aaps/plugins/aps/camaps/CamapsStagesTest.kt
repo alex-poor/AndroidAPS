@@ -14,16 +14,21 @@ import org.junit.jupiter.api.Test
  */
 class CamapsStagesTest {
 
-    /** A plant whose glucose is whatever the state's first element says, and which never moves. */
-    private class FrozenPlant(private val g: Double) : ControlModel {
-        override fun glucoseMmol(s: DoubleArray) = g
-        override fun step(s: DoubleArray, u: Double, dtMin: Double) = s
+    /**
+     * The minimal plant that makes the optimiser well posed: glucose holds at profile basal, falls above
+     * it and rises below it. A plant that ignores insulin makes the cost independent of the control, so
+     * the optimiser returns an arbitrary point on a flat surface and the test asserts nothing.
+     */
+    private class BalancedPlant(private val basalMu: Double, private val k: Double = 0.004) : ControlModel {
+        override fun glucoseMmol(s: DoubleArray) = s[0]
+        override fun step(s: DoubleArray, u: Double, dtMin: Double) =
+            doubleArrayOf(s[0] + k * (basalMu - u) * dtMin)
     }
 
     private fun rate(glucoseMmol: Double, exercising: Boolean, basalUhr: Double = 0.85): Double {
         val basalMu = basalUhr * 1000.0 / 60.0
         return CamapsMpc(
-            FrozenPlant(glucoseMmol),
+            BalancedPlant(basalMu),
             targetMmol = 5.8,
             nominalBasalMuPerMin = basalMu,
             maxBasalMuPerMin = 10.0 * 1000.0 / 60.0,
@@ -32,7 +37,7 @@ class CamapsStagesTest {
             exercising = exercising,
             cgmGapMin = 5.0,
             smoothedBasalMuPerMin = basalMu
-        ).decide(DoubleArray(9)).basalUPerHr
+        ).decide(doubleArrayOf(glucoseMmol)).basalUPerHr
     }
 
     // ---- §6.6 ModifyExercise -------------------------------------------------------------------
@@ -110,5 +115,41 @@ class CamapsStagesTest {
         val blended = CamapsTddAdapter.blend(storedTdd = 40.0, newTdd = 60.0)
         assertTrue(blended in 40.0..50.0 + 1e-9,
                    "the blend must not overshoot halfway; got $blended")
+    }
+
+    // ---- GetBIRpump's minimum non-zero rate, and the one-sided reference -----------------------
+
+    /**
+     * MEASURED rule: across all 826 reference points the binary returns 0.00 U/h 129 times and never a
+     * rate in (0, 0.20). Anything the optimiser wants below 0.20 U/h is sent as a suspend.
+     */
+    @Test
+    fun `a commanded rate under 0_20 U per h is sent as a suspend`() {
+        assertEquals(0.20, CamapsMpc.MIN_NONZERO_RATE_UHR, 1e-9)
+        // a tiny profile basal makes every interior optimum fall under the floor
+        val r = rate(6.0, exercising = false, basalUhr = 0.05)
+        assertTrue(r == 0.0 || r >= CamapsMpc.MIN_NONZERO_RATE_UHR - 1e-9,
+                   "rate must be 0 or at least 0.20 U/h, got $r")
+    }
+
+    /**
+     * The reference trajectory is a one-sided BOUND on the rate of fall, so a forecast below it is not an
+     * error to correct. With a symmetric penalty the optimiser fought every permitted descent and
+     * suspended inside the set-point dead zone; that was the largest remaining disagreement with the real
+     * controller.
+     */
+    @Test
+    fun `undershooting the reference is not penalised`() {
+        assertEquals(0.0, CamapsMpc.BELOW_REFERENCE_WEIGHT, 1e-9)
+    }
+
+    /**
+     * ...but a PREDICTED LOW still is, from both sides. This is what keeps the one-sided bound from being
+     * a relaxation of hypo protection, alongside the level suspend and the attenuation.
+     */
+    @Test
+    fun `glucose below target minus 1_3 still suspends outright`() {
+        assertEquals(4.5, CamapsMpc.hypoSuspendThreshold(5.8, mealWithinLastHour = false), 1e-9)
+        assertEquals(0.0, rate(4.4, exercising = false), 1e-9)
     }
 }

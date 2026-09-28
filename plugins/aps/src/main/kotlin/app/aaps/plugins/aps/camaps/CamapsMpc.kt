@@ -159,6 +159,11 @@ class CamapsMpc(
     private val exercising: Boolean = false,
     /** Smoothed profile-basal reference (mu/min) — `GetBIRStepsSmoothed`'s role in §6.4. */
     private val smoothedBasalMuPerMin: Double = 0.0,
+    /**
+     * Cost weight on the forecast being BELOW the reference trajectory, relative to being above it.
+     * See [trackingPenalty]; 1.0 is the symmetric penalty.
+     */
+    private val belowReferenceWeight: Double = BELOW_REFERENCE_WEIGHT,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -245,6 +250,38 @@ class CamapsMpc(
         const val LAMBDA_MEAL_DURATION_MIN = 240.0   // lambdaMealDuration, 0x22d3c
 
         /**
+         * How much a forecast BELOW the reference trajectory costs, relative to one above it.
+         *
+         * The reference is a one-sided BOUND on how fast glucose may fall, not a line to sit on, and with
+         * a symmetric penalty the optimiser treats undershooting it as an error to correct — so inside the
+         * set-point dead zone (target..target+2, where the reference simply HOLDS) any forecast that dives
+         * drives the rate to zero. Measured against the binary that was the single largest source of
+         * disagreement left: at glucose 7.0 two to four hours after a 40 g meal the real controller
+         * delivers 1.118 x basal and a symmetric replica suspended outright, and the same mechanism put
+         * the whole low-and-falling arm at a -0.346 bias.
+         *
+         * Predicted lows are still penalised hard and from both sides by the `g < 4.0` branch above, and
+         * the level suspend (§6.2), the attenuation (§6.3) and [MIN_NONZERO_RATE_UHR] are untouched, so
+         * this is not a relaxation of hypo protection — it stops the controller fighting a descent that
+         * the reference explicitly permits.
+         *
+         * Swept over the 826-point reference (MAE in units of profile basal):
+         * ```
+         *   weight   level   trend  low+fall  recovery   unsafe
+         *    1.00    0.228   0.248     0.348     0.336        0
+         *    0.50    0.226   0.243     0.347     0.327        0
+         *    0.25    0.226   0.234     0.347     0.320        0
+         *    0.10    0.225   0.227     0.346     0.307        0
+         *    0.00    0.219   0.183     0.302     0.287        0     <- shipped
+         * ```
+         * Monotonic on every arm, and at 0.0 there is no cell in the low-and-falling family where this
+         * replica delivers MORE than the real controller — the bias there is −0.294, i.e. uniformly at or
+         * below it. The post-meal arm does not move at all (0.435 throughout), so the residual post-meal
+         * disagreement is a different mechanism and is recorded as such.
+         */
+        const val BELOW_REFERENCE_WEIGHT = 0.0
+
+        /**
          * WHY THERE IS NO POST-HYPO HOLD HERE.
          *
          * `MPC::RescueCarbReduction` (0x47a70) appeared to zero the rate when recent minimum glucose was
@@ -306,6 +343,22 @@ class CamapsMpc(
         /** Symbols `DownSlopeHalfTime` (0x22d2c) and `UpSlopeHalfTime` (0x22d30), minutes. */
         const val DOWN_SLOPE_HALF_MIN = 60.0
         const val UP_SLOPE_HALF_MIN = 15.0
+
+        /**
+         * `GetBIRpump`'s minimum non-zero output, U/h. **MEASURED, not decoded** — no global in the image
+         * carries it.
+         *
+         * Across all 826 reference points the binary returns 0.00 U/h 129 times and never once returns a
+         * rate in (0, 0.20): 0.05, 0.10 and 0.15 do not occur, while 0.20, 0.25, 0.30 and 0.35 each occur
+         * 4-11 times. The same 0.20 floor holds at profile basal 0.85 and at 2.40, so it is an ABSOLUTE
+         * rate and not a fraction of basal. A gap that clean in 826 samples of a continuous optimiser is a
+         * rule.
+         *
+         * It resolves the last disagreement in the reference set, which was the replica commanding one
+         * pump quantum (0.05 U/h) where the real controller suspends.
+         */
+        const val MIN_NONZERO_RATE_UHR = 0.20
+        private const val MIN_NONZERO_RATE_MU_PER_MIN = MIN_NONZERO_RATE_UHR * 1000.0 / 60.0
 
         /** What MaximumPersonalRange assumes when GetCGMapproximate fails (immediate 5.5). */
         const val CGM_FALLBACK_MMOL = 5.5
@@ -429,7 +482,8 @@ class CamapsMpc(
      */
     private fun trackingPenalty(g: Double, refi: Double): Double {
         val e = g - refi
-        return if (g < 4.0) 6.0 * e * e else e * e        // predicted lows penalised hard
+        if (g < 4.0) return 6.0 * e * e                   // predicted lows penalised hard, either side
+        return if (e > 0.0) e * e else belowReferenceWeight * e * e
     }
 
     private fun rolloutCost(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
@@ -525,6 +579,9 @@ class CamapsMpc(
         if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
             finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
         if (g0 < hypoSuspendThreshold(targetMmol, mealWithinLastHour)) finalU = 0.0   // §5 ModifyRateGlucoseLevel
+
+        // GetBIRpump's minimum non-zero output: anything under 0.20 U/h is sent as a suspend.
+        if (finalU > 0.0 && finalU < MIN_NONZERO_RATE_MU_PER_MIN) finalU = 0.0
 
         var es = stateEstimate.copyOf()
         for (i in 0 until steps) {
