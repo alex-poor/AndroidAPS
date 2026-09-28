@@ -84,6 +84,17 @@ class CamapsMpc(
     private val targetMmol: Double,
     private val nominalBasalMuPerMin: Double,
     private val maxBasalMuPerMin: Double,
+    /**
+     * Optimiser horizon, minutes. §5 decodes `MPC::Optimise` as fetching seven `Vector<float,180>` arrays,
+     * i.e. 180 steps; the minutes per step were never recovered, and 180 one-minute steps is the natural
+     * reading. Kept at 180 deliberately.
+     *
+     * Measured: a shorter horizon scores marginally better against the binary — 140/150 → 0.887 and
+     * 160 → 0.882 summed MAE against 180 → 0.915, all with zero safety cells — but the basin is shallow,
+     * it costs the trend arm, and it would override a decoded structural fact for about 3%. The
+     * discretisation is NOT the cause: at the same 180-minute horizon, 1-minute steps score 0.919 against
+     * 0.915 for 5-minute steps, so the coarser grid used here is faithful.
+     */
     private val horizonMin: Int = 180,
     private val stepMin: Int = 5,
     private val nSegments: Int = 6,

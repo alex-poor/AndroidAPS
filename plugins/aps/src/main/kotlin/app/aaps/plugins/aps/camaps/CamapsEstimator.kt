@@ -57,14 +57,38 @@ class CamapsEstimator(
     /** Glucose the plant's basal anchor is struck at, mmol/L — see CamapsSubModel.gRefMmol. */
     private val gRefMmol: Double = 5.8,
     /** ∝G disposal blend — see CamapsSubModel.GLUCOSE_DEPENDENT_DISPOSAL. */
-    private val gDisposal: Double = CamapsSubModel.GLUCOSE_DEPENDENT_DISPOSAL
+    private val gDisposal: Double = CamapsSubModel.GLUCOSE_DEPENDENT_DISPOSAL,
+    /**
+     * Multiplier on the ISF used to derive SI. 1.0 uses the patient's profile ISF unchanged.
+     *
+     * ⛔ Exists because of a hypothesis that was **measured and rejected**. The binary's input carries
+     * weight, basal profile and TDD only — no ISF and no IC — so it must derive insulin sensitivity
+     * itself, and at the probes' basal-only TDD of 20.4 U a TDD-derived ISF (~100/TDD) would be about
+     * 4.9 mmol/L/U against this patient's profile 2.3. That would have explained the one region where the
+     * replica still disagrees: flat glucose 10.5–14, where it asks for its ceiling and the binary asks for
+     * 1.65–2.06.
+     *
+     * It does not. Swept over the 826-point reference:
+     * ```
+     *   siScale   implied ISF   level   trend  low+fall  post-meal   unsafe
+     *     1.0         2.3       0.173   0.147     0.097      0.271        0   <- shipped
+     *     1.4         3.2       0.171   0.151     0.066      0.255        1
+     *     1.8         4.1       0.168   0.160     0.047      0.245        2
+     *     2.1         4.8       0.164   0.167     0.054      0.259        3
+     *     3.0         6.9       0.157   0.189     0.060      0.391        5
+     * ```
+     * The level arm barely moves across a 3x change in sensitivity (0.173 → 0.157) while safety cells
+     * appear immediately. So that disagreement is not about how much glucose a unit of insulin buys, and
+     * the patient's own ISF stays.
+     */
+    private val siScale: Double = 1.0
 ) : GlucoseEstimator {
 
     private val n = 9
     private val nm = 8
     private val models = Array(nm) {
         CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL,
-                                  gRefMmol = gRefMmol, gDisposal = gDisposal)
+                                  gRefMmol = gRefMmol, gDisposal = gDisposal, siScale = siScale)
     }
     private val basalMu = basalUPerHr * 1000.0 / 60.0
     private val xs = Array(nm) { models[it].steadyState(basalMu, 7.0) }

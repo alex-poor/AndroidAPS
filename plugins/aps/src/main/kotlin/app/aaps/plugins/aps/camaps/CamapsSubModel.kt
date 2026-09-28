@@ -274,12 +274,13 @@ class CamapsSubModel(
          */
         fun forProfile(k: Int, weightKg: Double, isfMmolPerU: Double, basalUPerHr: Double,
                        egpHalfMuPerL: Double, agBio: Double = 0.8, gRefMmol: Double = 5.8,
-                       gDisposal: Double = GLUCOSE_DEPENDENT_DISPOSAL): CamapsSubModel {
+                       gDisposal: Double = GLUCOSE_DEPENDENT_DISPOSAL,
+                       siScale: Double = 1.0): CamapsSubModel {
             val vg = 0.16 * weightKg
             val vi = 0.12 * weightKg
             val ke = 0.14
             val f01 = 0.0097 * weightKg
-            val si = isfMmolPerU * vg * vi * ke / 1000.0 * MULT_WKT_INS[k]
+            val si = isfMmolPerU * siScale * vg * vi * ke / 1000.0 * MULT_WKT_INS[k]
             val iBasal = (basalUPerHr * 1000.0 / 60.0) / (vi * ke)
             // balance at basal: egp0 * 2^(-iBasal/half) = f01 + si*iBasal
             val egp0 = (f01 + si * iBasal) / 2.0.pow(-iBasal / egpHalfMuPerL)
