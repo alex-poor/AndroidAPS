@@ -179,6 +179,8 @@ class CamapsMpc(
     private val predictedLowWeight: Double = PREDICTED_LOW_WEIGHT,
     /** Exponent on the tracking error. See [TRACKING_EXPONENT]. */
     private val trackingExponent: Double = TRACKING_EXPONENT,
+    /** Use `Model::Optimise`'s actual algorithm rather than the old gridded search. [solveClosedForm]. */
+    private val useClosedFormSolve: Boolean = USE_CLOSED_FORM_SOLVE,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -346,6 +348,39 @@ class CamapsMpc(
          * glucose — which changes where the interior optimum sits without changing the cost at all.
          */
         const val TRACKING_EXPONENT = 2.0
+
+        /**
+         * Whether to use `Model::Optimise`'s actual algorithm — see [solveClosedForm].
+         *
+         * ⚠️ **FALSE, and that is an admission, not a conclusion.** The closed-form solve is what the
+         * binary does; the gridded search is not. But measured on the 826-point reference the decoded
+         * solver agrees with the binary WORSE:
+         * ```
+         *   solver                                   level  trend  low+fall  post-meal  recov   sum  unsafe
+         *   gridded + 3 fitted asymmetric terms       0.173  0.147     0.097      0.271  0.227  0.915     0
+         *   closed-form LQ, lambda 0.05, 6 blocks     0.219  0.142     0.240      0.332  0.258  1.191     0
+         *   closed-form LQ, lambda 0.05, 8 blocks     0.207  0.143     0.229      0.334  0.258  1.171     1
+         *   closed-form LQ, lambda 0.10, 8 blocks     0.166  0.168     0.138      0.350  0.243  1.065     2
+         * ```
+         * The comparison is not like for like, and that is the point. A closed-form LQ solve can only
+         * express a symmetric quadratic cost, so it cannot use [belowReferenceWeight],
+         * [predictedLowWeight] or [trackingExponent] — the three terms fitted against probe outputs while
+         * the optimiser was a search. Removing them makes agreement worse, which means **they were
+         * compensating for a different structural error that is still present and is now unmasked.**
+         *
+         * So this ships false for the moment: the gridded path has the better-measured behaviour and zero
+         * unsafe cells, and the plugin is not enabled either way. But the shipped controller is running an
+         * optimiser the binary does not have, and closing that is the top open item — it needs the
+         * remaining error found rather than the fudge terms restored.
+         */
+        const val USE_CLOSED_FORM_SOLVE = false
+
+        /**
+         * Scale relating [effortWeight] — which was fitted for the gridded search's cost units — to the
+         * Tikhonov regularisation added to the diagonal of `S^T S`. The binary's own absolute scale is
+         * still **[?]**: §5.1 recovers only the λ ratio, so this is fitted like its predecessor.
+         */
+        const val LQ_LAMBDA_SCALE = 1.0
 
         /**
          * A FORECAST VALIDITY FLOOR WAS TRIED AND DOES NOT EXPLAIN THE BINARY. **[M]**
@@ -665,14 +700,108 @@ class CamapsMpc(
         return lo
     }
 
-    /** One control decision. Mirrors MPC::Optimise -> GetBIR -> GetBIRpump. */
-    fun decide(stateEstimate: DoubleArray): Decision {
-        val g0 = model.glucoseMmol(stateEstimate)
-        val ref = referenceTrajectory(g0)
+    /**
+     * `Model::Optimise` (0x3f7b0, 7236 B), transcribed. **This is what the binary actually does**, and it
+     * is not a search.
+     *
+     * The call sequence in the disassembly settles it. A virtual call builds a sensitivity matrix `S` and
+     * its transpose, then:
+     * ```
+     *   Vector<float,8> = S * x                         ; the free response
+     *   Matrix<float,8,8> = S^T * S                     ; the Hessian
+     *   ... + lambda added on the diagonal
+     *   Matrix<float,8,8>::inv()                        ; H^-1
+     *   inline fmadd loop: result = H^-1 * g            ; ONE closed-form solve
+     * ```
+     * i.e. Tikhonov-regularised least squares, `u = (S^T S + lambda I)^-1 S^T e`, over at most EIGHT
+     * piecewise-constant control blocks — which is exactly why `CriticalErrorMPC(0x75)` fires beyond 8.
+     * `inv()`, `operator*` and the matrix-vector multiply each appear **exactly once** in the whole
+     * function: there is no iteration, no line search, and no constraint handling anywhere in it. The
+     * bounds are applied afterwards, by the §6 output pipeline.
+     *
+     * The consequence matters more than the algorithm. A closed-form linear-quadratic solve can only
+     * express a **symmetric quadratic** cost. It cannot express an asymmetric one
+     * ([belowReferenceWeight]), a glucose-dependent one ([predictedLowWeight]) or a non-quadratic one
+     * ([trackingExponent]) — all three of which were fitted against probe outputs purely because a gridded
+     * search made them expressible. They are artefacts of the wrong optimiser, not properties of CamAPS.
+     *
+     * `S` is built here by finite differences on the plant — perturb each block by one pump quantum, roll
+     * out, record the glucose deviation at every horizon step. That is the same object the binary's
+     * virtual call produces, and it costs `nSegments + 1` rollouts against the gridded search's
+     * ~40 x nSegments x sweeps.
+     */
+    private fun solveClosedForm(state: DoubleArray, ref: DoubleArray, segLen: Int, hi: Double): DoubleArray {
         val steps = ref.size - 1
-        val segLen = max(1, steps / nSegments)
-        // AAPS's own maxBasal still applies; the controller's own ceiling is usually the binding one
-        val hi = if (maxRateMuPerMin > 0.0) min(maxBasalMuPerMin, maxRateMuPerMin) else maxBasalMuPerMin
+        val n = nSegments
+        val nominal = DoubleArray(n) { nominalBasalMuPerMin }
+
+        val free = rollout(state, nominal, segLen, steps)
+        val e = DoubleArray(steps + 1) { ref[it] - free[it] }     // what the control moves must remove
+
+        val du = 0.05 * 1000.0 / 60.0                             // one pump quantum, mU/min
+        val sMat = Array(steps + 1) { DoubleArray(n) }
+        for (j in 0 until n) {
+            val probe = nominal.copyOf(); probe[j] += du
+            val resp = rollout(state, probe, segLen, steps)
+            for (i in 0..steps) sMat[i][j] = (resp[i] - free[i]) / du
+        }
+
+        val lambda = effortWeight * lambdaFactor(minutesSinceMeal) * LQ_LAMBDA_SCALE
+        val h = Array(n) { DoubleArray(n) }
+        val g = DoubleArray(n)
+        for (a in 0 until n) {
+            for (b in 0 until n) {
+                var acc = 0.0
+                for (i in 0..steps) acc += sMat[i][a] * sMat[i][b]
+                h[a][b] = acc
+            }
+            h[a][a] += lambda
+            var acc = 0.0
+            for (i in 0..steps) acc += sMat[i][a] * e[i]
+            g[a] = acc
+        }
+
+        val delta = solveSymmetric(h, g)
+        // the solve itself is UNCONSTRAINED; bounds belong to the output pipeline, but the sequence still
+        // has to be a deliverable one for GetBIR's horizon mean to mean anything
+        return DoubleArray(n) { (nominalBasalMuPerMin + delta[it]).coerceIn(0.0, hi) }
+    }
+
+    /** Glucose at every horizon step under a piecewise-constant control sequence. */
+    private fun rollout(state: DoubleArray, seq: DoubleArray, segLen: Int, steps: Int): DoubleArray {
+        var s = state.copyOf()
+        val out = DoubleArray(steps + 1)
+        for (i in 0..steps) {
+            out[i] = model.glucoseMmol(s)
+            if (i < steps) {
+                val u = seq[min(seq.size - 1, i / segLen)]
+                repeat(stepMin) { s = model.step(s, u, 1.0) }
+            }
+        }
+        return out
+    }
+
+    /** Gauss-Jordan solve of the small symmetric system — the replica's `Matrix<float,8,8>::inv()`. */
+    private fun solveSymmetric(a: Array<DoubleArray>, b: DoubleArray): DoubleArray {
+        val n = b.size
+        val m = Array(n) { i -> DoubleArray(n + 1) { j -> if (j < n) a[i][j] else b[i] } }
+        for (c in 0 until n) {
+            var piv = c
+            for (r in c + 1 until n) if (abs(m[r][c]) > abs(m[piv][c])) piv = r
+            if (abs(m[piv][c]) < 1e-12) continue                  // singular column: leave that move at 0
+            val t = m[c]; m[c] = m[piv]; m[piv] = t
+            val d = m[c][c]
+            for (j in c..n) m[c][j] /= d
+            for (r in 0 until n) if (r != c) {
+                val f = m[r][c]
+                if (f != 0.0) for (j in c..n) m[r][j] -= f * m[c][j]
+            }
+        }
+        return DoubleArray(n) { m[it][n] }
+    }
+
+    /** The gridded search this replica used before `Model::Optimise` was read. Kept for comparison. */
+    private fun searchGridded(state: DoubleArray, ref: DoubleArray, segLen: Int, hi: Double): DoubleArray {
         val seq = DoubleArray(nSegments) { nominalBasalMuPerMin }
         val grid = max(0.05 * 1000.0 / 60.0, hi / 40.0)
         repeat(sweeps) {
@@ -681,20 +810,33 @@ class CamapsMpc(
                 var u = 0.0
                 while (u <= hi + 1e-9) {
                     seq[j] = u
-                    val c = rolloutCost(stateEstimate, seq, ref, segLen)
+                    val c = rolloutCost(state, seq, ref, segLen)
                     if (c < bestCost) { bestCost = c; best = u }
                     u += grid
                 }
                 var lo = max(0.0, best - grid); var hh = min(hi, best + grid); val gr = 0.618
                 repeat(12) {
-                    val a = hh - gr * (hh - lo); val b = lo + gr * (hh - lo)
-                    seq[j] = a; val ca = rolloutCost(stateEstimate, seq, ref, segLen)
-                    seq[j] = b; val cb = rolloutCost(stateEstimate, seq, ref, segLen)
-                    if (ca < cb) hh = b else lo = a
+                    val aa = hh - gr * (hh - lo); val bb = lo + gr * (hh - lo)
+                    seq[j] = aa; val ca = rolloutCost(state, seq, ref, segLen)
+                    seq[j] = bb; val cb = rolloutCost(state, seq, ref, segLen)
+                    if (ca < cb) hh = bb else lo = aa
                 }
                 seq[j] = 0.5 * (lo + hh)
             }
         }
+        return seq
+    }
+
+    /** One control decision. Mirrors MPC::Optimise -> GetBIR -> GetBIRpump. */
+    fun decide(stateEstimate: DoubleArray): Decision {
+        val g0 = model.glucoseMmol(stateEstimate)
+        val ref = referenceTrajectory(g0)
+        val steps = ref.size - 1
+        val segLen = max(1, steps / nSegments)
+        // AAPS's own maxBasal still applies; the controller's own ceiling is usually the binding one
+        val hi = if (maxRateMuPerMin > 0.0) min(maxBasalMuPerMin, maxRateMuPerMin) else maxBasalMuPerMin
+        val seq = if (useClosedFormSolve) solveClosedForm(stateEstimate, ref, segLen, hi)
+                  else searchGridded(stateEstimate, ref, segLen, hi)
 
         // --- §4 GetBIR: floor the command at 70% of the PLANNED horizon mean ---
         val horizonMean = seq.average()
