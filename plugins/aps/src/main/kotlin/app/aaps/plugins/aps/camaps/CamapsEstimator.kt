@@ -83,7 +83,12 @@ class CamapsEstimator(
      */
     private val siScale: Double = 1.0,
     /** Flux half-life, minutes; 0 = random walk. */
-    private val fluxHalfMin: Double = 0.0
+    private val fluxHalfMin: Double = 0.0,
+    /**
+     * Covariance-inflation half-life, minutes — `forgettingHalfTime` (0x022d28) = 150. 0 disables it.
+     * See the note in [predict].
+     */
+    private val forgettingHalfMin: Double = FORGETTING_HALF_MIN
 ) : GlucoseEstimator {
 
     private val n = 9
@@ -119,6 +124,33 @@ class CamapsEstimator(
         else -> 1e-6
     }
 
+    companion object {
+
+        /**
+         * `forgettingHalfTime` (0x022d28) = **150** minutes — the half-life of the covariance inflation
+         * `SubModel1::PredictStep` computes as `exp(+ln2 * dt / forgettingHalfTime)` and stores to
+         * `SubModel1::forgettingFactor`. Decoded, and real.
+         *
+         * ⚠️ The transcription is INCOMPLETE: in the binary the inflation sits behind two guards
+         * (0x55330–0x55348 — a magnitude test on `this+0x21c` against `smallVal`, and `this+0x4c == 1`)
+         * which are not decoded. The plausible reading is "time actually advanced" and "estimator mode",
+         * which is where this applies it, but that is inference.
+         *
+         * It was briefly shipped OFF on a measurement showing it degraded the 30-day forecast by 80%.
+         * **That measurement was wrong** — an artefact of `CamapsRealFit` running ONE filter across the
+         * whole stream, where inflation compounds without bound, while `CamapsPlugin.estimateState`
+         * rebuilds the filter from a 6-hour window every tick, where it is bounded at 2^(360/150) ≈ 5x.
+         * Measured the way the plugin actually uses it:
+         * ```
+         *   forgettingHalf   30 min   60 min   120 min
+         *        0            1.522    2.665     4.862
+         *      150            1.548    2.691     4.868     <- shipped
+         * ```
+         * ~1.7% at 30 minutes and under 1% beyond, against a mechanism that is decoded. It ships.
+         */
+        const val FORGETTING_HALF_MIN = 150.0
+    }
+
     override val x: DoubleArray get() = DoubleArray(n) { i -> (0 until nm).sumOf { k -> mu[k] * xs[k][i] } }
     override fun glucoseMmol() = (0 until nm).sumOf { k -> mu[k] * models[k].glucoseMmol(xs[k]) }
 
@@ -140,10 +172,18 @@ class CamapsEstimator(
         val off = (1.0 - stay) / (nm - 1)
         val mixed = DoubleArray(nm) { j -> (0 until nm).sumOf { i -> (if (i == j) stay else off) * mu[i] } }
         mu = mixed; normalise()
+        // `SubModel1::PredictStep` computes  forgettingFactor = exp(+ln2 * dt / forgettingHalfTime)
+        // (globals `ln2` 0x8d648 and `forgettingHalfTime` 0x8d6d0 = 150 min) and stores it to
+        // `SubModel1::forgettingFactor`. The exponent is POSITIVE, so it inflates the covariance —
+        // exponential forgetting, which stops the filter becoming over-confident and keeps it tracking.
+        // This replica had additive process noise only.
+        val ff = if (forgettingHalfMin > 0.0) 2.0.pow(dtMin / forgettingHalfMin) else 1.0
         for (k in 0 until nm) {
             val F = jacobian(k, u, dtMin)
             xs[k] = models[k].step(xs[k], u, dtMin)
-            Ps[k] = addDiag(mul(mul(F, Ps[k]), transpose(F))) { i -> qDiag(i) * dtMin }
+            val prop = addDiag(mul(mul(F, Ps[k]), transpose(F))) { i -> qDiag(i) * dtMin }
+            if (ff != 1.0) for (i in 0 until n) for (j in 0 until n) prop[i][j] *= ff
+            Ps[k] = prop
         }
     }
 
