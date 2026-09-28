@@ -149,17 +149,43 @@ class CamapsStagesTest {
     }
 
     /**
-     * The effort term must be TWO-SIDED. Deviating below the profile basal is as much a deviation as
-     * deviating above it, and while it was one-sided the cost surface was flat for every rate in
-     * [0, basal] — which the grid search resolved at zero, costing the low-and-falling arm a -0.29 bias.
-     * Asserted through behaviour: with a plant that holds glucose at basal and a reference that holds too,
-     * the only well-posed answer is basal itself.
+     * The effort term must be TWO-SIDED. While it was one-sided the cost surface was flat for every rate in
+     * [0, basal] — the grid search resolved that at zero, costing the low-and-falling arm a -0.29 bias and
+     * making the replica suspend where the binary delivers basal. A well-posed cost cannot answer 0 here.
      */
     @Test
-    fun `a balanced plant inside the dead zone asks for profile basal`() {
-        val r = rate(6.5, exercising = false, basalUhr = 0.85)   // 6.5 is inside target..target+2
-        assertTrue(r > 0.6 && r < 1.1,
-                   "a held reference and a balanced plant must give ~basal 0.85, got $r")
+    fun `a balanced plant at moderate glucose does not answer zero`() {
+        val r = rate(6.5, exercising = false, basalUhr = 0.85)
+        assertTrue(r >= 0.6, "a balanced plant at 6.5 mmol/L must not suspend, got $r")
+    }
+
+    /**
+     * §4.1's set-point INITIALISATION is a different function from §4.2's per-step recursion, and in
+     * particular has NO `target..target+2` dead zone. Using the recursion for both (which is what the code
+     * did) pins the initial reference to current glucose anywhere inside that zone, leaving no tracking
+     * error at all — so the controller parks at exactly profile basal and the whole 5.5–8.0 band comes out
+     * as a flat 1.000 × basal against the binary's 0.88 → 1.41 ramp.
+     *
+     * With a non-zero lead the reference is pulled toward target, so flat glucose inside the dead zone must
+     * ask for MORE than basal. That is the property the bug removed.
+     */
+    @Test
+    fun `flat glucose inside the dead zone still asks for more than basal`() {
+        assertTrue(CamapsMpc.PREDICT_LEAD_MIN > 0.0,
+                   "a zero lead makes the initialisation and the recursion identical and hides this")
+        val basal = 0.85
+        for (g in listOf(6.5, 7.0, 7.5)) {
+            val r = rate(g, exercising = false, basalUhr = basal)
+            assertTrue(r > basal, "flat $g mmol/L is above target and must ask for more than basal, got $r")
+        }
+    }
+
+    /** ...and below target it must ask for less. */
+    @Test
+    fun `flat glucose below target asks for less than basal`() {
+        val basal = 0.85
+        val r = rate(5.0, exercising = false, basalUhr = basal)
+        assertTrue(r < basal && r > 0.0, "flat 5.0 mmol/L must ask for less than basal but not zero, got $r")
     }
 
     /**

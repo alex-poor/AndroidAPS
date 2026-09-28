@@ -110,7 +110,7 @@ class CamapsMpc(
      * (`predictLead`, a runtime CTimeSpanMy whose value is not recovered). 0 = seed from the current
      * estimate. Replaces the old `refTauMin`; the trajectory is no longer an exponential to target.
      */
-    private val predictLeadMin: Double = 0.0,
+    private val predictLeadMin: Double = PREDICT_LEAD_MIN,
     /**
      * REMOVED, because it was never in the binary. `MPC::GetBIR(int)` (0x429bc) decodes to
      * ```
@@ -166,6 +166,8 @@ class CamapsMpc(
     private val belowReferenceWeight: Double = BELOW_REFERENCE_WEIGHT,
     /** Extra cost multiplier on a forecast under 4.0 mmol/L. See [PREDICTED_LOW_WEIGHT]. */
     private val predictedLowWeight: Double = PREDICTED_LOW_WEIGHT,
+    /** Exponent on the tracking error. See [TRACKING_EXPONENT]. */
+    private val trackingExponent: Double = TRACKING_EXPONENT,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -306,6 +308,35 @@ class CamapsMpc(
         const val PREDICTED_LOW_WEIGHT = 6.0
 
         /**
+         * Exponent on the tracking error. 2 is the ordinary quadratic. **OURS** — §5.1 never recovered the
+         * absolute scale or the shape of the binary's cost, only the λ ratio.
+         *
+         * Motivation: a quadratic makes the response to a LARGE error grow without bound, and at flat
+         * glucose above 10 mmol/L that drives this replica to its ceiling (2.118 × basal from glucose 10.5
+         * upward) where the binary keeps a near-linear ramp and does not saturate until 16.5.
+         *
+         * ⛔ **MEASURED AND REJECTED — ships at 2.0.** Both large-error knobs behave the same way, and both
+         * trade the level arm against the ceiling arm:
+         * ```
+         *   exponent   level   trend  post-meal  ceiling   sum      effortWeight   level   trend  ceiling   sum
+         *     2.00     0.173   0.147      0.271    0.000  0.915           0.02     0.173   0.147    0.000  0.915
+         *     1.75     0.159   0.179      0.294    0.019  0.982           0.05     0.119   0.210    0.033  1.052
+         *     1.50     0.094   0.216      0.339    0.142  1.122           0.10     0.210   0.300    0.144  1.518
+         * ```
+         * Either one can nearly eliminate the level arm's error (0.173 → 0.094) and each does it by
+         * destroying a previously **exact** ceiling, because the ceiling family is glucose 20 rising hard —
+         * a large error where saturating is the correct answer. A single scalar cannot both saturate at 20
+         * and stay interior at 12.
+         *
+         * So this is a genuine remaining disagreement, not a knob left untuned: at flat glucose 10.5–14 the
+         * replica asks for its ceiling and the binary asks for 1.65–2.06. The likely cause is that the
+         * binary never receives ISF (its input carries weight, basal profile and TDD only), so its
+         * insulin-sensitivity is derived differently and a unit of insulin buys a different amount of
+         * glucose — which changes where the interior optimum sits without changing the cost at all.
+         */
+        const val TRACKING_EXPONENT = 2.0
+
+        /**
          * A FORECAST VALIDITY FLOOR WAS TRIED AND DOES NOT EXPLAIN THE BINARY. **[M]**
          *
          * The replica forecasts glucose at 0.00 mmol/L in several post-meal probes, because the decoded
@@ -367,6 +398,31 @@ class CamapsMpc(
         const val SLOPE_10_TO_13 = -0.028333334252238274 // 0xBCE81B4F, -1.7 mmol/L/h
         const val SLOPE_BELOW_10 = -1.0 / 60.0          // 0xBC888889, -1.0 mmol/L/h (exp path below 10)
         const val SETPOINT_CLAMP_MMOL = 12.0            // fmov s9, #12.0 ; fcsel .., gt
+
+        /**
+         * §4.1's prediction lead, minutes. The structure is decoded; the VALUE is a runtime field that was
+         * never recovered, so it is fitted against the binary's measured response. See [initialSetPoint].
+         *
+         * At zero the initial set-point equals current glucose, which inside the dead zone means the
+         * reference simply holds there — no tracking error, and the (two-sided) effort term parks the
+         * controller at exactly profile basal. Measured, that gave a flat 1.000 × basal across glucose
+         * 5.5–8.0 where the real controller ramps 0.88 → 1.41.
+         *
+         * Swept over the 826-point reference:
+         * ```
+         *   lead   level   trend  low+fall  post-meal  recovery   sum   unsafe
+         *     0    0.203   0.158     0.136      0.287     0.258  1.042      0
+         *    15    0.196   0.155     0.128      0.285     0.248  1.012      0
+         *    30    0.187   0.150     0.114      0.282     0.233  0.966      0
+         *    45    0.169   0.151     0.104      0.280     0.222  0.926      0
+         *    60    0.173   0.147     0.097      0.271     0.227  0.915      0    <- shipped
+         *    75    0.185   0.146     0.093      0.268     0.231  0.923      0
+         *    90    0.198   0.144     0.091      0.265     0.239  0.937      0
+         * ```
+         * Better on EVERY arm with no safety cost, flat between 45 and 75, best at 60 — which is also the
+         * right order of magnitude for a controller whose insulin peaks around an hour out.
+         */
+        const val PREDICT_LEAD_MIN = 60.0
         /**
          * The glucose < 8.0 branch of `MPC::ModifyRateGlucoseRate` (0x472b8..0x474f0). The binary tests
          * `GetSlope` over FOUR successive look-back windows, each x60 into mmol/L/h, each against
@@ -502,7 +558,7 @@ class CamapsMpc(
     private fun referenceTrajectory(g0: Double): DoubleArray {
         val steps = horizonMin / stepMin
         val ref = DoubleArray(steps + 1)
-        var sp = min(advanceSetPoint(g0, predictLeadMin), SETPOINT_CLAMP_MMOL)
+        var sp = initialSetPoint(g0)
         ref[0] = sp
         for (i in 1..steps) {
             sp = advanceSetPoint(sp, stepMin.toDouble())
@@ -510,6 +566,32 @@ class CamapsMpc(
         }
         return ref
     }
+
+    /**
+     * §4.1's INITIALISATION, which is a different function from §4.2's per-step recursion — and in
+     * particular has **no dead zone**:
+     * ```
+     *   sp0 = cgm > 10 ? cgm + leadMin * zoneSlope(cgm)
+     *                  : target + (cgm - target) * 2^(-leadMin / half)
+     *   sp  = min(sp0, 12.0)
+     * ```
+     * This used to call [advanceSetPoint] with `predictLeadMin`, i.e. the recursion, which applies the
+     * `target..target+2` hold. With a lead of zero the two are identical and it never mattered; with a
+     * non-zero lead the recursion pins the reference to current glucose anywhere inside the dead zone,
+     * and the controller then has no tracking error and parks at exactly profile basal. Measured against
+     * the binary, that showed up as a flat 1.000 x basal across glucose 5.5-8.0 where the real controller
+     * ramps 0.88 -> 1.41.
+     */
+    private fun initialSetPoint(cgm: Double): Double {
+        val lead = predictLeadMin
+        val sp0 = if (cgm > 10.0) cgm + lead * zoneSlope(cgm)
+                  else targetMmol + (cgm - targetMmol) *
+                      2.0.pow(-lead / (if (cgm < targetMmol) UP_SLOPE_HALF_MIN else DOWN_SLOPE_HALF_MIN))
+        return min(sp0, SETPOINT_CLAMP_MMOL)
+    }
+
+    /** The bounded zone rate of fall at a given set-point, mmol/L per minute. */
+    private fun zoneSlope(sp: Double) = if (sp > 13.0) SLOPE_ABOVE_13 else SLOPE_10_TO_13
 
     /** One step of the set-point recursion above. `dtMin` of 0 is a no-op, as in the binary. */
     private fun advanceSetPoint(sp: Double, dtMin: Double): Double = when {
@@ -534,8 +616,9 @@ class CamapsMpc(
      */
     private fun trackingPenalty(g: Double, refi: Double): Double {
         val e = g - refi
-        if (g < 4.0) return predictedLowWeight * e * e    // predicted lows, either side
-        return if (e > 0.0) e * e else belowReferenceWeight * e * e
+        val mag = if (trackingExponent == 2.0) e * e else abs(e).pow(trackingExponent)
+        if (g < 4.0) return predictedLowWeight * mag      // predicted lows, either side
+        return if (e > 0.0) mag else belowReferenceWeight * mag
     }
 
     private fun rolloutCost(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
