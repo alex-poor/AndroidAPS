@@ -17,7 +17,14 @@ import kotlin.math.pow
  *   5  D2    gut, compartment 2                  mmol
  *   6  Fx    unmodelled glucose flux (random walk, may be negative)   mmol/min
  *   7  f     meal bioavailability (random walk, clamped to fLimits)   dimensionless
+ *   8  lg    LOG-scale multiplier on both gut time constants           ln(dimensionless)
  * ```
+ *
+ * State 8 is `SubModel1::Learn`'s absorption adaptation. `Learn` (0x56600) is the EKF parameter update —
+ * `Matrix<float,8u,8u>` products, `expf`/`logf`, and the `fLimits` [0.2, 2.2] and `CsLimits` [-0.005,
+ * 0.005] clamps — and the `logf` is why `Model1::tMaxGpriorLN` and `tMaxIpriorLN` are LOG-normal priors
+ * (log-mean 3.73767, i.e. a median of 42 min). So the absorption constants are estimated in log space on
+ * top of the bank: the bank spans absorption coarsely, `Learn` tunes each submodel's own value.
  *
  * GLUCOSE — `SubModel1::EndoBalance` (0x58370). No term in Q1 anywhere:
  * ```
@@ -57,23 +64,29 @@ class CamapsSubModel(
     val egpHalf: Double,            // mU/L, insulin concentration that halves EGP
     val agBioavailability: Double   // fraction of declared carbs entering D1 before f is applied
 ) : ControlModel {
-    val nStates = 8
+    val nStates = 9
 
     override fun glucoseMmol(s: DoubleArray) = s[Q1] / vg
 
+    /** Gut constants scaled by the estimated log state, so `Learn`'s adaptation applies to both. */
+    fun tg1(s: DoubleArray) = tMaxG1 * Math.exp(s[LG])
+    fun tg2(s: DoubleArray) = tMaxG2 * Math.exp(s[LG])
+
     fun derivative(s: DoubleArray): DoubleArray {
         val ins = s[I]
-        val ug = s[F] * s[D2] / tMaxG2
+        val t1 = tg1(s); val t2 = tg2(s)
+        val ug = s[F] * s[D2] / t2
         val egp = egp0 * 2.0.pow(-(ins - iRef) / egpHalf)
         return doubleArrayOf(
             egp + ug - f01 - si * ins + s[FX],      // dQ1  -- no Q1 term
             0.0,                                     // dS1 filled by the caller (needs u)
             (s[S1] - s[S2]) / tMaxI,                 // dS2
             s[S2] / (tMaxI * vi) - ke * ins,         // dI
-            -s[D1] / tMaxG1,                         // dD1
-            s[D1] / tMaxG1 - s[D2] / tMaxG2,         // dD2
-            0.0,                                     // dFx: random walk
-            0.0                                      // df:  random walk
+            -s[D1] / t1,                             // dD1
+            s[D1] / t1 - s[D2] / t2,                 // dD2
+            0.0,                                     // dFx: random walk -- see FLUX_IS_A_RANDOM_WALK
+            0.0,                                     // df:  random walk
+            0.0                                      // dlg: random walk
         )
     }
 
@@ -93,6 +106,7 @@ class CamapsSubModel(
     private fun clampState(i: Int, v: Double) = when (i) {
         FX -> v                                             // a flux, may be negative
         F  -> min(F_MAX, max(F_MIN, v))                     // SubModel1::fLimits
+        LG -> min(LG_MAX, max(LG_MIN, v))                   // log-scale on absorption, bounded
         else -> max(0.0, v)
     }
 
@@ -108,13 +122,46 @@ class CamapsSubModel(
         val s = DoubleArray(nStates)
         s[S1] = u * tMaxI; s[S2] = u * tMaxI; s[I] = u / (vi * ke)
         s[Q1] = glucoseMmol * vg
-        s[FX] = 0.0; s[F] = F_PRIOR
+        s[FX] = 0.0; s[F] = F_PRIOR; s[LG] = 0.0
         return s
     }
 
     companion object {
         const val Q1 = 0; const val S1 = 1; const val S2 = 2; const val I = 3
-        const val D1 = 4; const val D2 = 5; const val FX = 6; const val F = 7
+        const val D1 = 4; const val D2 = 5; const val FX = 6; const val F = 7; const val LG = 8
+
+        /**
+         * WHY THE FLUX STATE IS A RANDOM WALK AND NOT MEAN-REVERTING.
+         *
+         * A decaying flux was tried, with the binary's own decoded half-times (`DownSlopeHalfTime`
+         * 0x22d2c = 60 min, `UpSlopeHalfTime` 0x22d30 = 15 min) applied to the state. It was measured
+         * against the `recovery` probe family -- a 45-min fall at -3.6 mmol/L/h followed by glucose held
+         * FLAT for 0-180 min, which is the only probe that sees a time constant rather than a static
+         * response. The binary recovers from 0.00 U/h to its flat-history rate within 30 minutes.
+         *
+         * The decay does NOT produce that: recovery MAE was 0.331 without it and 0.335 with it, and it
+         * cost a safety point (a cell where the binary suspends and the replica does not). What actually
+         * governs the recovery is the filter's process noise on this state, `qFlux`: sweeping it moved
+         * recovery MAE from 0.647 (1e-3) to 0.313 (1e-1) and took the unsafe count to zero. So the
+         * recovery is the filter re-learning from new measurements, not the state fading, and these two
+         * half-times belong where they already are -- the set-point recursion in `CamapsMpc`.
+         *
+         * The decay did improve the post-meal family sharply (0.444 -> 0.249), which says something real
+         * about the MEAL path over-accumulating flux, not about the flux state as such. Recorded as a
+         * known gap rather than patched with a global decay.
+         */
+        const val FLUX_IS_A_RANDOM_WALK = true
+
+        /**
+         * Bounds on the log-scale absorption multiplier. `Model1::tMaxGpriorLN` is log-N(3.73767, 2.35),
+         * which is extremely wide; bounded here to a factor of 4 either way so a single noisy window cannot
+         * move absorption by an order of magnitude.
+         */
+        const val LG_MIN = -1.386   // /4
+        const val LG_MAX = 1.386    // x4
+        /** `Model1::tMaxGpriorLN` log-mean and log-sd. */
+        const val TMAXG_LOG_MEAN = 3.73767
+        const val TMAXG_LOG_SD = 2.35
         const val MMOL_PER_G = 1000.0 / 180.16
 
         /** `Model1::fPriorN` 1.0, `fPriorSDN` 0.3, `SubModel1::fLimits` [0.2, 2.2]. */

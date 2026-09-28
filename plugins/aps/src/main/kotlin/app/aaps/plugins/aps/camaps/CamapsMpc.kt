@@ -155,12 +155,17 @@ class CamapsMpc(
     private val minutesSinceMeal: Double? = null,
     /** Minutes between the two most recent CGM samples, for §6.5. NaN if unknown. */
     private val cgmGapMin: Double = Double.NaN,
+    /** Whether exercise is recorded now or within the look-ahead window, for §6.6. */
+    private val exercising: Boolean = false,
     /** Smoothed profile-basal reference (mu/min) — `GetBIRStepsSmoothed`'s role in §6.4. */
     private val smoothedBasalMuPerMin: Double = 0.0,
     private val deadbandFrac: Double = 0.1
 ) {
 
     companion object {
+
+        /** `noInsulinDuringExercise` (0x22d70) — a GLUCOSE threshold in mmol/L, not a duration. */
+        const val NO_INSULIN_DURING_EXERCISE_MMOL = 8.0
 
         /**
          * `MPC::MaximumPersonalRange(float&, CTimeMy const&)`, vaddr 0x46b08, transcribed:
@@ -504,6 +509,11 @@ class CamapsMpc(
         val sm = if (smoothedBasalMuPerMin > 0.0) smoothedBasalMuPerMin else nominalBasalMuPerMin
         if (finalU > sm && lowestGlucoseIfOccluded(stateEstimate) < OCCLUSION_GLUCOSE_MMOL)
             finalU = sm
+
+        // §6.6 MPC::ModifyExercise -- during or around exercise, suspend entirely at or below 8.0 mmol/L.
+        // Far more conservative than the ordinary suspend at target-1.3; `noInsulinDuringExercise` is a
+        // GLUCOSE threshold in mmol/L, not a duration, which the name invites you to misread.
+        if (exercising && g0 <= NO_INSULIN_DURING_EXERCISE_MMOL) finalU = 0.0
 
         // §6.5 MPC::ModifyEnoughGlucoseMeasurements -- a long enough gap in CGM data means fall back to
         // profile basal. The threshold is MEASURED, not taken from the disassembly: see [CGM_GAP_MIN].

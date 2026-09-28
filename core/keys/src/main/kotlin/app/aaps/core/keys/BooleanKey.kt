@@ -19,6 +19,7 @@ enum class BooleanKey(
 
     GeneralSimpleMode("simple_mode", true),
     HovorkaTddAdaptation("hovorka_tdd_adaptation", false),
+    CamapsTddAdaptation("camaps_tdd_adaptation", false),
     HovorkaImmBank("hovorka_imm_bank", false),
     HovorkaEnableSmb("hovorka_enable_smb", false),
     HovorkaMealDetection("hovorka_meal_detection", false),

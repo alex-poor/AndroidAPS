@@ -35,11 +35,28 @@ class CamapsEstimator(
     private val qGut: Double = 1e-2,
     private val qFlux: Double = 1e-3,
     private val qBio: Double = 1e-4,
+    /**
+     * Process noise on the log-scale absorption state — `SubModel1::Learn`'s adaptation.
+     *
+     * DEFAULT 0, i.e. the state exists and is frozen, because it was measured to add nothing on this
+     * patient's 30 days. Re-measured after the covariance fix below, at the shipped qFlux of 3e-2, over
+     * 29024 forecasts (30/60/120-min RMSE against actual future CGM):
+     * ```
+     *   qAbs = 0      1.477  2.821  5.568     <- shipped
+     *   qAbs = 1e-2   1.556  2.986  6.257
+     *   qAbs = 1e-1   1.586  3.097  6.652
+     *   qAbs = 1e0    1.591  3.137  6.806
+     * ```
+     * Monotonically worse, so it stays frozen. The IMM bank already spans absorption via
+     * `tMaxG1s`/`tMaxG2s`, so per-submodel tuning on top of it is redundant here. The mechanism is
+     * replicated and switched off on evidence, not omitted.
+     */
+    private val qAbs: Double = 0.0,
     /** Mode-transition dwell time, from `halfTimeTran`. */
     private val tauTranMin: Double = CamapsSubModel.HALF_TIME_TRAN[0]
 ) : GlucoseEstimator {
 
-    private val n = 8
+    private val n = 9
     private val nm = 8
     private val models = Array(nm) {
         CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL)
@@ -54,6 +71,7 @@ class CamapsEstimator(
     private fun initVar(i: Int) = when (i) {
         CamapsSubModel.FX -> 0.01
         CamapsSubModel.F  -> CamapsSubModel.F_PRIOR_SD * CamapsSubModel.F_PRIOR_SD
+        CamapsSubModel.LG -> 0.25          // log-space prior, sd 0.5 => absorption within ~x1.6
         CamapsSubModel.Q1 -> 5.0
         CamapsSubModel.D1, CamapsSubModel.D2 -> 5.0
         else -> 1.0
@@ -65,6 +83,7 @@ class CamapsEstimator(
         CamapsSubModel.D1, CamapsSubModel.D2 -> qGut
         CamapsSubModel.FX -> qFlux
         CamapsSubModel.F  -> qBio
+        CamapsSubModel.LG -> qAbs
         else -> 1e-6
     }
 
@@ -109,10 +128,15 @@ class CamapsEstimator(
             // bioavailability is only identifiable while carbohydrate is in the gut
             val gutActive = xs[k][CamapsSubModel.D1] + xs[k][CamapsSubModel.D2] > 1e-6
             for (i in 0 until n) {
-                if (i == CamapsSubModel.F && !gutActive) continue
+                if ((i == CamapsSubModel.F || i == CamapsSubModel.LG) && !gutActive) continue
                 xs[k][i] = clamp(i, xs[k][i] + kg[i] * innov)
             }
-            for (i in 0 until n) for (j in 0 until n) Ps[k][i][j] -= kg[i] * (h[j] * s) * kg[j] / 1.0
+            // P = P - K S K^T. This used to read `kg[i] * (h[j] * s) * kg[j]`, and `h` is zero in
+            // every entry but Q1 -- so the covariance was reduced in ONE column only, scaled by
+            // 1/vg, and left asymmetric. The Q1<->Fx cross-covariance is what carries an observed
+            // trend into the flux state, so corrupting it cost the replica ~90% of its trend
+            // response: driven at a measured -3.6 mmol/L/h the forecast fell 0.38 mmol/L/h.
+            for (i in 0 until n) for (j in 0 until n) Ps[k][i][j] -= kg[i] * s * kg[j]
             lik[k] = exp(-0.5 * innov * innov / s) / sqrt(2 * Math.PI * s)
             tot += mu[k] * lik[k]
         }
@@ -140,6 +164,7 @@ class CamapsEstimator(
     private fun clamp(i: Int, v: Double) = when (i) {
         CamapsSubModel.FX -> v
         CamapsSubModel.F  -> minOf(CamapsSubModel.F_MAX, max(CamapsSubModel.F_MIN, v))
+        CamapsSubModel.LG -> minOf(CamapsSubModel.LG_MAX, max(CamapsSubModel.LG_MIN, v))
         else -> max(0.0, v)
     }
     private fun normalise() { val z = mu.sum(); if (z > 0) for (i in mu.indices) mu[i] /= z

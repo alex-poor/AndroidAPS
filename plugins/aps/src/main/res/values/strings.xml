@@ -225,6 +225,8 @@
     <string name="camaps_replica_name">CamAPS replica</string>
     <string name="camaps_replica_shortname">CAMR</string>
     <string name="camaps_replica_description">Clean-room replication of the CamAPS FX controller (zone-bounded reference trajectory, basal-only). Experimental — not for therapy</string>
+    <string name="camaps_tdd_adaptation_title">CamAPS TDD adaptation (§7)</string>
+    <string name="camaps_tdd_adaptation_summary">Scale the operating basal by CamAPS\'s own AdjustTDDbasedOnCGM correction, computed daily from the 23 hours ending 08:00. OFF by default: on this CGM history the hypoglycaemia override fires on most days and drives the operating point DOWN while mean glucose is above target. Turning this on is a therapy change.</string>
     <!--HovorkaMPC-->
     <string name="hovorka_mpc_name">HovorkaMPC</string>
     <string name="hovorka_mpc_shortname">HMPC</string>
