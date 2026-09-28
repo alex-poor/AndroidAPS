@@ -371,7 +371,30 @@ class CamapsPlugin @Inject constructor(
          * fitting it per patient is what CamAPS itself does with it. At 400 mU/L the exponential is nearly
          * flat over the physiological insulin range, i.e. this patient's data want weak counter-regulation.
          */
-        const val EGP_HALF_MU_PER_L = 400.0
+        /**
+         * `EndoBalance`'s `this+0x234`: the insulin concentration in mU/L that halves endogenous glucose
+         * production. This is the replica's ONLY brake on a fall — the decoded plant keeps `F01` constant
+         * and has no renal clearance (§2), so nothing else in it is glucose-dependent.
+         *
+         * Was 400, fitted on 120-min forecast RMSE, at which the exponential is flat across any insulin a
+         * person actually reaches: halving EGP would need +400 mU/L over basal. Its consequence showed up
+         * as post-meal forecasts running to 0.00 mmol/L, which then dominated the cost and made the replica
+         * suspend where the real controller delivers basal.
+         *
+         * Re-fitted against the binary over the 826-point reference, at the shipped cost weights:
+         * ```
+         *   egpHalf   level   trend  low+fall  post-meal  recovery   unsafe
+         *     400     0.198   0.168     0.163      0.418     0.273        0
+         *     200     0.200   0.170     0.162      0.388     0.270        0
+         *     100     0.203   0.170     0.154      0.342     0.263        0
+         *      50     0.203   0.158     0.144      0.295     0.258        0    <- shipped
+         *      25     0.196   0.174     0.126      0.288     0.271        2
+         * ```
+         * 50 is the best point with no safety cell and cuts the post-meal arm 29%. It costs 1.1% of 30-min
+         * and 2.6% of 120-min forecast accuracy on this patient's own 30 days (1.477 -> 1.494,
+         * 5.568 -> 5.711) — a fraction of what it buys.
+         */
+        const val EGP_HALF_MU_PER_L = 50.0
 
         /**
          * Process noise on the unmodelled-flux state — the parameter that decides how fast the filter

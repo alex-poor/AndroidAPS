@@ -133,14 +133,33 @@ class CamapsStagesTest {
     }
 
     /**
-     * The reference trajectory is a one-sided BOUND on the rate of fall, so a forecast below it is not an
-     * error to correct. With a symmetric penalty the optimiser fought every permitted descent and
-     * suspended inside the set-point dead zone; that was the largest remaining disagreement with the real
-     * controller.
+     * The reference trajectory is mostly a one-sided BOUND on the rate of fall: a forecast below it is far
+     * less of an error than one above it. With a symmetric penalty the optimiser fought every permitted
+     * descent and suspended inside the set-point dead zone.
+     *
+     * It must not be fully one-sided either. At exactly 0 the tracking cost and the effort cost are both
+     * flat across every rate from 0 to basal, and the optimiser's answer becomes an arbitrary tie-break.
      */
     @Test
-    fun `undershooting the reference is not penalised`() {
-        assertEquals(0.0, CamapsMpc.BELOW_REFERENCE_WEIGHT, 1e-9)
+    fun `undershooting the reference costs less than overshooting, but not nothing`() {
+        assertTrue(CamapsMpc.BELOW_REFERENCE_WEIGHT > 0.0,
+                   "a zero weight leaves the sub-basal cost surface flat and the optimum arbitrary")
+        assertTrue(CamapsMpc.BELOW_REFERENCE_WEIGHT < 1.0,
+                   "the reference is a bound, not a line to sit on")
+    }
+
+    /**
+     * The effort term must be TWO-SIDED. Deviating below the profile basal is as much a deviation as
+     * deviating above it, and while it was one-sided the cost surface was flat for every rate in
+     * [0, basal] — which the grid search resolved at zero, costing the low-and-falling arm a -0.29 bias.
+     * Asserted through behaviour: with a plant that holds glucose at basal and a reference that holds too,
+     * the only well-posed answer is basal itself.
+     */
+    @Test
+    fun `a balanced plant inside the dead zone asks for profile basal`() {
+        val r = rate(6.5, exercising = false, basalUhr = 0.85)   // 6.5 is inside target..target+2
+        assertTrue(r > 0.6 && r < 1.1,
+                   "a held reference and a balanced plant must give ~basal 0.85, got $r")
     }
 
     /**

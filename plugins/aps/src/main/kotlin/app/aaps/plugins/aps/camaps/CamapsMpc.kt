@@ -265,21 +265,31 @@ class CamapsMpc(
          * this is not a relaxation of hypo protection — it stops the controller fighting a descent that
          * the reference explicitly permits.
          *
-         * Swept over the 826-point reference (MAE in units of profile basal):
+         * Swept over the 826-point reference, at the shipped plant and a TWO-SIDED effort term
+         * (MAE in units of profile basal):
          * ```
-         *   weight   level   trend  low+fall  recovery   unsafe
-         *    1.00    0.228   0.248     0.348     0.336        0
-         *    0.50    0.226   0.243     0.347     0.327        0
-         *    0.25    0.226   0.234     0.347     0.320        0
-         *    0.10    0.225   0.227     0.346     0.307        0
-         *    0.00    0.219   0.183     0.302     0.287        0     <- shipped
+         *   weight   level   trend  low+fall  post-meal  recovery   unsafe
+         *    0.50    0.203   0.179     0.189      0.320     0.275        1
+         *    0.35    0.201   0.164     0.163      0.309     0.263        0
+         *    0.25    0.203   0.158     0.144      0.295     0.258        0    <- shipped
+         *    0.15    0.207   0.168     0.142      0.288     0.258        0
+         *    0.10    0.207   0.164     0.143      0.282     0.262        0
          * ```
-         * Monotonic on every arm, and at 0.0 there is no cell in the low-and-falling family where this
-         * replica delivers MORE than the real controller — the bias there is −0.294, i.e. uniformly at or
-         * below it. The post-meal arm does not move at all (0.435 throughout), so the residual post-meal
-         * disagreement is a different mechanism and is recorded as such.
+         * There is a genuine interior optimum here, and the curve is flat between 0.10 and 0.25 (sum 1.058
+         * at both). 0.25 is taken as the more hypo-conservative end of that flat region; 0.50 already costs
+         * a safety cell.
+         *
+         * It is not a relaxation of hypo protection: predicted glucose under 4.0 mmol/L is still penalised
+         * at 6x from BOTH sides, and the level suspend (§6.2), the attenuation (§6.3) and
+         * [MIN_NONZERO_RATE_UHR] are untouched.
+         *
+         * ⚠️ An earlier revision recorded that the post-meal arm was insensitive to this constant (0.435 at
+         * every weight) and concluded the cost function was not the cause of that error. That was an
+         * artefact of the SCORING HARNESS, which read the sweep variable in one helper only, so the
+         * post-meal arm always used the compiled default and could not move. With the harness fixed the arm
+         * runs 0.438 -> 0.418 across the same sweep and the cost function is very much implicated.
          */
-        const val BELOW_REFERENCE_WEIGHT = 0.0
+        const val BELOW_REFERENCE_WEIGHT = 0.25
 
         /**
          * WHY THERE IS NO POST-HYPO HOLD HERE.
@@ -494,7 +504,13 @@ class CamapsMpc(
             repeat(stepMin) { s = model.step(s, u, 1.0) }
         }
         val lambda = effortWeight * lambdaFactor(minutesSinceMeal)
-        for (u in seq) { val du = u - nominalBasalMuPerMin; if (du > 0.0) cost += lambda * du * du * segLen }
+        // TWO-SIDED. It used to read `if (du > 0.0)`, i.e. only rates ABOVE basal cost effort. Combined
+        // with a one-sided tracking bound that makes the cost perfectly FLAT across every rate from 0 to
+        // basal, so the optimiser's grid search broke the tie at whichever point it visited first -- zero.
+        // That is what put the low-and-falling arm at a -0.29 bias and made the replica suspend at
+        // glucose 7 hours after a meal where the real controller delivers 1.118 x basal, i.e. basal.
+        // Deviating below the profile is as much a deviation as deviating above it.
+        for (u in seq) { val du = u - nominalBasalMuPerMin; cost += lambda * du * du * segLen }
         return cost
     }
 
