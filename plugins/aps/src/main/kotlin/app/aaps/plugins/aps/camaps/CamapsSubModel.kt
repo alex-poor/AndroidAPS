@@ -62,7 +62,15 @@ class CamapsSubModel(
     val si: Double,                 // mmol/min per mU/L, insulin-dependent disposal
     val iRef: Double,               // mU/L, insulin at which EGP = egp0
     val egpHalf: Double,            // mU/L, insulin concentration that halves EGP
-    val agBioavailability: Double   // fraction of declared carbs entering D1 before f is applied
+    val agBioavailability: Double,  // fraction of declared carbs entering D1 before f is applied
+    /**
+     * Glucose at which the basal-balance anchor was struck, mmol/L. Disposal is scaled by `G / gRef`, so
+     * at this glucose the model is identical to the pure decoded form and the anchor is untouched.
+     * See [GLUCOSE_DEPENDENT_DISPOSAL].
+     */
+    val gRefMmol: Double = 5.8,
+    /** 0 disables the ∝G scaling and reproduces `EndoBalance` exactly. */
+    val glucoseDisposalWeight: Double = GLUCOSE_DEPENDENT_DISPOSAL
 ) : ControlModel {
     val nStates = 9
 
@@ -77,8 +85,14 @@ class CamapsSubModel(
         val t1 = tg1(s); val t2 = tg2(s)
         val ug = s[F] * s[D2] / t2
         val egp = egp0 * 2.0.pow(-(ins - iRef) / egpHalf)
+        // ∝G disposal, blended by [glucoseDisposalWeight]; at 0 this is exactly `EndoBalance`, and at any
+        // weight the term equals si*ins when G == gRefMmol, so the basal anchor is untouched. See
+        // [GLUCOSE_DEPENDENT_DISPOSAL] for why the decoded insulin-only form cannot stand on its own.
+        val gNow = s[Q1] / vg
+        val gScale = 1.0 + glucoseDisposalWeight * (gNow / gRefMmol - 1.0)
+        val f01c = if (gNow < 4.5) f01 * max(0.0, gNow) / 4.5 else f01
         return doubleArrayOf(
-            egp + ug - f01 - si * ins + s[FX],      // dQ1  -- no Q1 term
+            egp + ug - f01c - si * ins * max(0.0, gScale) + s[FX],      // dQ1
             0.0,                                     // dS1 filled by the caller (needs u)
             (s[S1] - s[S2]) / tMaxI,                 // dS2
             s[S2] / (tMaxI * vi) - ke * ins,         // dI
@@ -153,6 +167,52 @@ class CamapsSubModel(
         const val FLUX_IS_A_RANDOM_WALK = true
 
         /**
+         * How far the insulin-dependent disposal term is made proportional to glucose. 0 reproduces the
+         * decoded `EndoBalance` exactly; 1 makes disposal fully ∝G, as in Hovorka.
+         *
+         * §2 records `EndoBalance` (0x58370) as insulin-only: `F01` constant, disposal `SI · I` with no
+         * term in Q1, no renal clearance. Taken literally that model has NO glucose-dependent behaviour at
+         * all, so with basal insulin `dQ1 = 0` at ANY glucose — it predicts that wherever glucose is, it
+         * stays. Against the binary that shows up twice over: at glucose 13 after a meal the replica
+         * forecasts a flat 13 for three hours and rails to the ceiling (2.529 x basal against the binary's
+         * 1.82–2.12), and at glucose 7 it forecasts a dive to 0.00 mmol/L and suspends where the binary
+         * delivers basal.
+         *
+         * `F01` is a FIELD (`this+0x230`), not an immediate, so a caller is free to write a
+         * glucose-scaled value into it before each call — a decode of `EndoBalance` alone could not show
+         * that. Hovorka's `F01c = F01 · min(1, G/4.5)` is included here for the same reason.
+         *
+         * The scaling is normalised at [gRefMmol], so the basal-balance anchor in [forProfile] holds
+         * unchanged and this alters nothing at target — only the behaviour away from it.
+         *
+         * ⛔ **MEASURED AND REJECTED. Ships at 0, i.e. the decoded insulin-only form.** Swept over the
+         * 826-point reference:
+         * ```
+         *   weight   level   trend  low+fall  post-meal  recovery  ceiling   unsafe
+         *    0.00    0.203   0.158     0.136      0.287     0.258    0.000        0   <- shipped
+         *    0.25    0.194   0.194     0.091      0.270     0.272    0.014        2
+         *    0.50    0.191   0.246     0.084      0.279     0.287    0.028        2
+         *    0.75    0.191   0.294     0.102      0.306     0.305    0.040        6
+         *    1.00    0.184   0.331     0.124      0.348     0.316    0.056        7
+         * ```
+         * It does what it was meant to at low glucose — the low-and-falling arm nearly halves — but it
+         * wrecks the trend arm (0.158 → 0.331), breaks the previously exact ceiling, and costs up to seven
+         * cells where the real controller suspends and this one does not. So `EndoBalance` really is
+         * insulin-only and the plateau it implies is CamAPS's own behaviour, not a decode error.
+         *
+         * ⚠️ This contradicts an earlier finding in this project that swapping the glucose equation halved
+         * the replica error and made the ceiling exact. That was measured on the crude one-compartment
+         * reduction, before the covariance fix, and with the trend arm scored on 12 of its 96 points — all
+         * three of which are now known to have been wrong. The negative result here supersedes it.
+         *
+         * What IS kept is Hovorka's `F01c = F01 · min(1, G/4.5)` in [derivative], which acts only below
+         * 4.5 mmol/L: non-insulin-dependent uptake cannot continue at a fixed rate into glucose that is not
+         * there. On its own it improves the low-and-falling arm 0.144 → 0.136 and post-meal 0.295 → 0.287
+         * with nothing else moving and no safety cost, so it stays.
+         */
+        const val GLUCOSE_DEPENDENT_DISPOSAL = 0.0
+
+        /**
          * Bounds on the log-scale absorption multiplier. `Model1::tMaxGpriorLN` is log-N(3.73767, 2.35),
          * which is extremely wide; bounded here to a factor of 4 either way so a single noisy window cannot
          * move absorption by an order of magnitude.
@@ -213,7 +273,8 @@ class CamapsSubModel(
          * array appears to be for.
          */
         fun forProfile(k: Int, weightKg: Double, isfMmolPerU: Double, basalUPerHr: Double,
-                       egpHalfMuPerL: Double, agBio: Double = 0.8): CamapsSubModel {
+                       egpHalfMuPerL: Double, agBio: Double = 0.8, gRefMmol: Double = 5.8,
+                       gDisposal: Double = GLUCOSE_DEPENDENT_DISPOSAL): CamapsSubModel {
             val vg = 0.16 * weightKg
             val vi = 0.12 * weightKg
             val ke = 0.14
@@ -223,7 +284,7 @@ class CamapsSubModel(
             // balance at basal: egp0 * 2^(-iBasal/half) = f01 + si*iBasal
             val egp0 = (f01 + si * iBasal) / 2.0.pow(-iBasal / egpHalfMuPerL)
             return CamapsSubModel(vg, vi, ke, TMAX_I, TMAXG1[k], TMAXG2[k],
-                egp0, f01, si, 0.0, egpHalfMuPerL, agBio)
+                egp0, f01, si, 0.0, egpHalfMuPerL, agBio, gRefMmol, gDisposal)
         }
     }
 }

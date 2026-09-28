@@ -53,13 +53,18 @@ class CamapsEstimator(
      */
     private val qAbs: Double = 0.0,
     /** Mode-transition dwell time, from `halfTimeTran`. */
-    private val tauTranMin: Double = CamapsSubModel.HALF_TIME_TRAN[0]
+    private val tauTranMin: Double = CamapsSubModel.HALF_TIME_TRAN[0],
+    /** Glucose the plant's basal anchor is struck at, mmol/L — see CamapsSubModel.gRefMmol. */
+    private val gRefMmol: Double = 5.8,
+    /** ∝G disposal blend — see CamapsSubModel.GLUCOSE_DEPENDENT_DISPOSAL. */
+    private val gDisposal: Double = CamapsSubModel.GLUCOSE_DEPENDENT_DISPOSAL
 ) : GlucoseEstimator {
 
     private val n = 9
     private val nm = 8
     private val models = Array(nm) {
-        CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL)
+        CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL,
+                                  gRefMmol = gRefMmol, gDisposal = gDisposal)
     }
     private val basalMu = basalUPerHr * 1000.0 / 60.0
     private val xs = Array(nm) { models[it].steadyState(basalMu, 7.0) }

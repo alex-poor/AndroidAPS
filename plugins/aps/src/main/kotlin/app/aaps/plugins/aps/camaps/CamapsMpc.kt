@@ -164,6 +164,8 @@ class CamapsMpc(
      * See [trackingPenalty]; 1.0 is the symmetric penalty.
      */
     private val belowReferenceWeight: Double = BELOW_REFERENCE_WEIGHT,
+    /** Extra cost multiplier on a forecast under 4.0 mmol/L. See [PREDICTED_LOW_WEIGHT]. */
+    private val predictedLowWeight: Double = PREDICTED_LOW_WEIGHT,
     private val deadbandFrac: Double = 0.1
 ) {
 
@@ -290,6 +292,18 @@ class CamapsMpc(
          * runs 0.438 -> 0.418 across the same sweep and the cost function is very much implicated.
          */
         const val BELOW_REFERENCE_WEIGHT = 0.25
+
+        /**
+         * Extra cost multiplier on a forecast below 4.0 mmol/L. **OURS, not decoded** — §5.1 recovers only
+         * the λ ratio, never the absolute scale of the cost, and no hypo term was ever found in it.
+         *
+         * It is worth being suspicious of, because the real controller HAS a decoded mechanism for
+         * predicted lows and it is not a cost term at all: §6.4 `ModifyRateDeltaBIR` runs the model forward
+         * under an assumed occlusion and, if the minimum dips below [OCCLUSION_GLUCOSE_MMOL], CAPS the rate
+         * at the smoothed profile basal. A cap at basal, not a drive to zero — which is exactly the
+         * 1.118 × basal the binary returns in the post-meal cells this replica was suspending in.
+         */
+        const val PREDICTED_LOW_WEIGHT = 6.0
 
         /**
          * A FORECAST VALIDITY FLOOR WAS TRIED AND DOES NOT EXPLAIN THE BINARY. **[M]**
@@ -520,7 +534,7 @@ class CamapsMpc(
      */
     private fun trackingPenalty(g: Double, refi: Double): Double {
         val e = g - refi
-        if (g < 4.0) return 6.0 * e * e                   // predicted lows penalised hard, either side
+        if (g < 4.0) return predictedLowWeight * e * e    // predicted lows, either side
         return if (e > 0.0) e * e else belowReferenceWeight * e * e
     }
 
