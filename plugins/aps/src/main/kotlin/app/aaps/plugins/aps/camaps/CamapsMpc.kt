@@ -181,8 +181,15 @@ class CamapsMpc(
     private val trackingExponent: Double = TRACKING_EXPONENT,
     /** Use `Model::Optimise`'s actual algorithm rather than the old gridded search. [solveClosedForm]. */
     private val useClosedFormSolve: Boolean = USE_CLOSED_FORM_SOLVE,
+    /** How the ≤8 control blocks are spread over the horizon. See [collocationPoints]. */
+    private val blockLayout: BlockLayout = BLOCK_LAYOUT,
+    /** Gauss-Newton iterations in [solveClosedForm]; the binary's solve sits in two nested loops. */
+    private val gaussNewtonIterations: Int = GAUSS_NEWTON_ITERATIONS,
     private val deadbandFrac: Double = 0.1
 ) {
+
+    /** How the control blocks are spread over the horizon; the layout is NOT decoded, only the ≤8 count. */
+    enum class BlockLayout { UNIFORM, GEOMETRIC }
 
     companion object {
 
@@ -374,6 +381,16 @@ class CamapsMpc(
          * remaining error found rather than the fudge terms restored.
          */
         const val USE_CLOSED_FORM_SOLVE = false
+
+        /** Default block layout for [solveClosedForm]. Not decoded — see [collocationPoints]. */
+        val BLOCK_LAYOUT = BlockLayout.UNIFORM
+
+        /**
+         * How many times [solveClosedForm] re-linearises. The binary iterates — the matrix build and
+         * `inv()` sit inside two nested backward branches — but the ITERATION COUNT is a runtime value and
+         * was not recovered, so this is fitted.
+         */
+        const val GAUSS_NEWTON_ITERATIONS = 6
 
         /**
          * Scale relating [effortWeight] — which was fitted for the gridded search's cost units — to the
@@ -715,9 +732,16 @@ class CamapsMpc(
      * ```
      * i.e. Tikhonov-regularised least squares, `u = (S^T S + lambda I)^-1 S^T e`, over at most EIGHT
      * piecewise-constant control blocks — which is exactly why `CriticalErrorMPC(0x75)` fires beyond 8.
-     * `inv()`, `operator*` and the matrix-vector multiply each appear **exactly once** in the whole
-     * function: there is no iteration, no line search, and no constraint handling anywhere in it. The
-     * bounds are applied afterwards, by the §6 output pipeline.
+     * The bounds are not in it at all; they are applied afterwards by the §6 output pipeline, so a suspend
+     * is the unconstrained optimum clipped at zero.
+     *
+     * ⚠️ **Correction to a first reading.** `inv()`, `operator*` and the matrix-vector multiply each appear
+     * exactly ONCE as instructions, which looked like a single closed-form solve. They are not: two
+     * backward branches span them (0x41004 -> 0x400f8 and 0x41224 -> 0x40068), so the build-and-solve
+     * EXECUTES many times. It is an iterative **Gauss-Newton** scheme that re-linearises the nonlinear
+     * predictor each pass — `ModelIMM1::PredictForOptimise` (0x603b8) calls `SubModel1::PredictStep`
+     * together with the meal machinery, so the prediction inside the optimiser is the full nonlinear
+     * model, not a linearisation. Counting instruction occurrences is not counting executions.
      *
      * The consequence matters more than the algorithm. A closed-form linear-quadratic solve can only
      * express a **symmetric quadratic** cost. It cannot express an asymmetric one
@@ -735,36 +759,80 @@ class CamapsMpc(
         val n = nSegments
         val nominal = DoubleArray(n) { nominalBasalMuPerMin }
 
-        val free = rollout(state, nominal, segLen, steps)
-        val e = DoubleArray(steps + 1) { ref[it] - free[it] }     // what the control moves must remove
-
+        // COLLOCATION. `Matrix<float,8u,8u>` caps at 8x8 and the binary range-checks its runtime dims
+        // (CriticalErrorMPC(0x75) at >= 9), so `S` cannot have one row per horizon step -- 180 steps do
+        // not fit. The least-squares is collocated at one point per control block, at the END of each
+        // block, which makes S square and 8x8. The `Vector<float,180>` arrays GetDataForOptimisation
+        // fetches are the horizon DATA used to build this reduced problem, not the problem itself.
+        val check = collocationPoints(n, steps, segLen)
         val du = 0.05 * 1000.0 / 60.0                             // one pump quantum, mU/min
-        val sMat = Array(steps + 1) { DoubleArray(n) }
-        for (j in 0 until n) {
-            val probe = nominal.copyOf(); probe[j] += du
-            val resp = rollout(state, probe, segLen, steps)
-            for (i in 0..steps) sMat[i][j] = (resp[i] - free[i]) / du
-        }
-
         val lambda = effortWeight * lambdaFactor(minutesSinceMeal) * LQ_LAMBDA_SCALE
-        val h = Array(n) { DoubleArray(n) }
-        val g = DoubleArray(n)
-        for (a in 0 until n) {
-            for (b in 0 until n) {
-                var acc = 0.0
-                for (i in 0..steps) acc += sMat[i][a] * sMat[i][b]
-                h[a][b] = acc
-            }
-            h[a][a] += lambda
-            var acc = 0.0
-            for (i in 0..steps) acc += sMat[i][a] * e[i]
-            g[a] = acc
-        }
 
-        val delta = solveSymmetric(h, g)
-        // the solve itself is UNCONSTRAINED; bounds belong to the output pipeline, but the sequence still
-        // has to be a deliverable one for GetBIR's horizon mean to mean anything
-        return DoubleArray(n) { (nominalBasalMuPerMin + delta[it]).coerceIn(0.0, hi) }
+        // GAUSS-NEWTON. The matrix build and the solve sit inside TWO nested backward branches
+        // (0x41004 -> 0x400f8 and 0x41224 -> 0x40068), so `inv()` executes many times even though the
+        // instruction appears once: the binary re-linearises its NONLINEAR predictor
+        // (`ModelIMM1::PredictForOptimise` -> `SubModel1::PredictStep`, meal handling included) around the
+        // current sequence and takes another step. A single solve is only the first iteration of that.
+        val seq = nominal.copyOf()
+        repeat(gaussNewtonIterations) {
+            val free = rollout(state, seq, segLen, steps)
+            val e = DoubleArray(n) { ref[check[it]] - free[check[it]] }
+
+            val sMat = Array(n) { DoubleArray(n) }
+            for (j in 0 until n) {
+                val probe = seq.copyOf(); probe[j] += du
+                val resp = rollout(state, probe, segLen, steps)
+                for (i in 0 until n) sMat[i][j] = (resp[check[i]] - free[check[i]]) / du
+            }
+
+            // minimise ||e(u)||^2 + lambda ||u - nominal||^2 about the current u, so the gradient carries
+            // the effort term too: delta = (S^T S + lambda I)^-1 (S^T e - lambda (u - nominal))
+            val h = Array(n) { DoubleArray(n) }
+            val g = DoubleArray(n)
+            for (a in 0 until n) {
+                for (b in 0 until n) {
+                    var acc = 0.0
+                    for (i in 0 until n) acc += sMat[i][a] * sMat[i][b]
+                    h[a][b] = acc
+                }
+                h[a][a] += lambda
+                var acc = 0.0
+                for (i in 0 until n) acc += sMat[i][a] * e[i]
+                g[a] = acc - lambda * (seq[a] - nominalBasalMuPerMin)
+            }
+
+            val delta = solveSymmetric(h, g)
+            var moved = 0.0
+            for (k in 0 until n) {
+                val next = (seq[k] + delta[k]).coerceIn(0.0, hi)
+                moved = max(moved, abs(next - seq[k]))
+                seq[k] = next
+            }
+            if (moved < 1e-3) return seq                           // converged
+        }
+        return seq
+    }
+
+    /**
+     * Where the least-squares is collocated — one point per control block, at the block's end.
+     *
+     * UNIFORM spreads the blocks evenly over the horizon. GEOMETRIC makes the near horizon fine and the
+     * far horizon coarse, which is what most MPCs do and what `GetDataForOptimisation`'s 180-entry arrays
+     * would allow; the block LAYOUT is not decoded, only the ≤8 count is.
+     *
+     * It matters because the layout decides which part of the horizon dominates the fit. With uniform
+     * blocks the late checkpoints dominate, and a forecast that keeps falling drags the solution to a
+     * suspend on mild falls; weighting the near horizon lets the current error matter more.
+     */
+    private fun collocationPoints(n: Int, steps: Int, segLen: Int): IntArray = when (blockLayout) {
+        BlockLayout.UNIFORM -> IntArray(n) { min(steps, (it + 1) * segLen) }
+        BlockLayout.GEOMETRIC -> {
+            // cumulative fractions of the horizon, doubling: 1,2,4,8,... normalised
+            val w = DoubleArray(n) { 2.0.pow(it.toDouble()) }
+            val tot = w.sum()
+            var acc = 0.0
+            IntArray(n) { i -> acc += w[i]; max(1, min(steps, Math.round(steps * acc / tot).toInt())) }
+        }
     }
 
     /** Glucose at every horizon step under a piecewise-constant control sequence. */

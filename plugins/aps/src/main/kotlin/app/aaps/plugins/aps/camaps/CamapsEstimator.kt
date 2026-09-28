@@ -81,14 +81,17 @@ class CamapsEstimator(
      * appear immediately. So that disagreement is not about how much glucose a unit of insulin buys, and
      * the patient's own ISF stays.
      */
-    private val siScale: Double = 1.0
+    private val siScale: Double = 1.0,
+    /** Flux half-life, minutes; 0 = random walk. */
+    private val fluxHalfMin: Double = 0.0
 ) : GlucoseEstimator {
 
     private val n = 9
     private val nm = 8
     private val models = Array(nm) {
         CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL,
-                                  gRefMmol = gRefMmol, gDisposal = gDisposal, siScale = siScale)
+                                  gRefMmol = gRefMmol, gDisposal = gDisposal, siScale = siScale,
+                                  fluxHalfMin = fluxHalfMin)
     }
     private val basalMu = basalUPerHr * 1000.0 / 60.0
     private val xs = Array(nm) { models[it].steadyState(basalMu, 7.0) }

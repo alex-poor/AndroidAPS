@@ -70,7 +70,9 @@ class CamapsSubModel(
      */
     val gRefMmol: Double = 5.8,
     /** 0 disables the ∝G scaling and reproduces `EndoBalance` exactly. */
-    val glucoseDisposalWeight: Double = GLUCOSE_DEPENDENT_DISPOSAL
+    val glucoseDisposalWeight: Double = GLUCOSE_DEPENDENT_DISPOSAL,
+    /** Half-life of the unmodelled-flux state, minutes; 0 = random walk. See [FLUX_IS_A_RANDOM_WALK]. */
+    val fluxHalfMin: Double = 0.0
 ) : ControlModel {
     val nStates = 9
 
@@ -98,7 +100,7 @@ class CamapsSubModel(
             s[S2] / (tMaxI * vi) - ke * ins,         // dI
             -s[D1] / t1,                             // dD1
             s[D1] / t1 - s[D2] / t2,                 // dD2
-            0.0,                                     // dFx: random walk -- see FLUX_IS_A_RANDOM_WALK
+            if (fluxHalfMin > 0.0) -s[FX] * LN2 / fluxHalfMin else 0.0,   // dFx
             0.0,                                     // df:  random walk
             0.0                                      // dlg: random walk
         )
@@ -165,6 +167,7 @@ class CamapsSubModel(
          * known gap rather than patched with a global decay.
          */
         const val FLUX_IS_A_RANDOM_WALK = true
+        private val LN2 = Math.log(2.0)
 
         /**
          * How far the insulin-dependent disposal term is made proportional to glucose. 0 reproduces the
@@ -275,7 +278,7 @@ class CamapsSubModel(
         fun forProfile(k: Int, weightKg: Double, isfMmolPerU: Double, basalUPerHr: Double,
                        egpHalfMuPerL: Double, agBio: Double = 0.8, gRefMmol: Double = 5.8,
                        gDisposal: Double = GLUCOSE_DEPENDENT_DISPOSAL,
-                       siScale: Double = 1.0): CamapsSubModel {
+                       siScale: Double = 1.0, fluxHalfMin: Double = 0.0): CamapsSubModel {
             val vg = 0.16 * weightKg
             val vi = 0.12 * weightKg
             val ke = 0.14
@@ -285,7 +288,7 @@ class CamapsSubModel(
             // balance at basal: egp0 * 2^(-iBasal/half) = f01 + si*iBasal
             val egp0 = (f01 + si * iBasal) / 2.0.pow(-iBasal / egpHalfMuPerL)
             return CamapsSubModel(vg, vi, ke, TMAX_I, TMAXG1[k], TMAXG2[k],
-                egp0, f01, si, 0.0, egpHalfMuPerL, agBio, gRefMmol, gDisposal)
+                egp0, f01, si, 0.0, egpHalfMuPerL, agBio, gRefMmol, gDisposal, fluxHalfMin)
         }
     }
 }
