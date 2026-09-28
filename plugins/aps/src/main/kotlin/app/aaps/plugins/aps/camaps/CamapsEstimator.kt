@@ -95,7 +95,9 @@ class CamapsEstimator(
     private val keMin: Double = 0.14,
     private val vgPerKg: Double = 0.16,
     /** Build the bank with [CamapsSubModel.fromBIR] — the decoded plant. */
-    private val decodedPlant: Boolean = false
+    private val decodedPlant: Boolean = false,
+    /** Use `SubModel1::Learn`'s glucose-proportional CGM noise instead of the constant [measNoiseVar]. */
+    private val decodedMeasNoise: Boolean = DECODED_MEAS_NOISE
 ) : GlucoseEstimator {
 
     private val n = 9
@@ -158,6 +160,9 @@ class CamapsEstimator(
          * ~1.7% at 30 minutes and under 1% beyond, against a mechanism that is decoded. It ships.
          */
         const val FORGETTING_HALF_MIN = 150.0
+
+        /** See the note in [update]. */
+        const val DECODED_MEAS_NOISE = false
     }
 
     override val x: DoubleArray get() = DoubleArray(n) { i -> (0 until nm).sumOf { k -> mu[k] * xs[k][i] } }
@@ -203,7 +208,14 @@ class CamapsEstimator(
             val m = models[k]
             val h = DoubleArray(n).also { it[CamapsSubModel.Q1] = 1.0 / m.vg }
             val pred = m.glucoseMmol(xs[k])
-            val s = (0 until n).sumOf { i -> (0 until n).sumOf { j -> h[i] * Ps[k][i][j] * h[j] } } + measNoiseVar
+            // SubModel1::Learn (0x572c4): CGM noise is PROPORTIONAL to glucose,
+            //   sd = max( 0.02 * max(G, 3.5), 0.16 ) mmol/L
+            // i.e. 2% of the reading, floored at 0.16 (c = 0x3cd1b717 = 0.0256, sqrt 0.16). This replica used
+            // a constant 0.5 (sd 0.71) -- a filter that trusted the CGM 12-20x less than CamAPS's does.
+            val rVar = if (decodedMeasNoise) {
+                val sd = max(0.02 * max(gMeasMmol, 3.5), 0.16); sd * sd
+            } else measNoiseVar
+            val s = (0 until n).sumOf { i -> (0 until n).sumOf { j -> h[i] * Ps[k][i][j] * h[j] } } + rVar
             val kg = DoubleArray(n) { i -> (0 until n).sumOf { j -> Ps[k][i][j] * h[j] } / s }
             val innov = gMeasMmol - pred
             // bioavailability is only identifiable while carbohydrate is in the gut
