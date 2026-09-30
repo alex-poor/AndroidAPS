@@ -222,9 +222,12 @@
     <string name="openapsama_iob_threshold_percent">maxIOB threshold percent for SMB\n(iob_threshold_percent)</string>
 
     <!--CamAPS replica-->
-    <string name="camaps_replica_name">CamAPS replica</string>
+    <string name="camaps_replica_name">CamAPS FX replica</string>
     <string name="camaps_replica_shortname">CAMR</string>
-    <string name="camaps_replica_description">Clean-room replication of the CamAPS FX controller (zone-bounded reference trajectory, basal-only). Experimental — not for therapy</string>
+    <string name="camaps_replica_description">Bit-exact clean-room replication of the CamAPS FX controller (estimator + MPC + output pipeline decoded from the binary; validated 49/49 against the genuine binary on real data; basal-only). Experimental — not for therapy</string>
+    <string name="camaps_native_name">CamAPS native</string>
+    <string name="camaps_native_shortname">CAMN</string>
+    <string name="camaps_native_description">The genuine CamAPS FX controller, embedded and called directly (basal-only). Experimental — not for therapy</string>
     <string name="camaps_tdd_adaptation_title">CamAPS TDD adaptation (§7)</string>
     <string name="camaps_tdd_adaptation_summary">Scale the operating basal by CamAPS\'s own AdjustTDDbasedOnCGM correction, computed daily from the 23 hours ending 08:00. OFF by default: on this CGM history the hypoglycaemia override fires on most days and drives the operating point DOWN while mean glucose is above target. Turning this on is a therapy change.</string>
     <!--HovorkaMPC-->

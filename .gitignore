@@ -44,3 +44,12 @@ libre3/src/test/kotlin/app/aaps/libre3/Libre3SecuritySessionTest.kt
 **/libre3-credentials.json
 **/l3-credentials.json
 realdata/
+
+# --- CamAPS FX: proprietary native embed (LOCAL-ONLY, never publish) ---
+# The genuine decrypted CamAPS FX binary and the JNI scaffolding that loads it.
+# These are used only for offline parity validation of the clean-room replica
+# (plugins/aps/.../camapsfx) and MUST NOT be distributed.
+plugins/aps/src/main/jniLibs/
+plugins/aps/src/main/java/com/camdiab/
+plugins/aps/src/main/kotlin/app/aaps/plugins/aps/camapsnative/
+*.decrypted.so

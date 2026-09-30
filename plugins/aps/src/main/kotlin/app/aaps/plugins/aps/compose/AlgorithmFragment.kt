@@ -68,6 +68,7 @@ class AlgorithmFragment : DaggerFragment() {
     }
 
     private fun isHovorka() = activePlugin.activeAPS.javaClass.simpleName == "HovorkaMpcPlugin"
+    private fun isCamaps() = activePlugin.activeAPS.javaClass.simpleName == "CamapsPlugin"
 
     private fun build() {
         val active = activePlugin.activeAPS as PluginBase
@@ -75,19 +76,24 @@ class AlgorithmFragment : DaggerFragment() {
             AlgoChip(label = (p as PluginBase).name, active = p === active)
         }
         val rt = runCatching { activePlugin.activeAPS.lastAPSResult?.rawData() as? RT }.getOrNull()
-        val toggles = if (isHovorka()) listOf(
-            AlgoToggle("tdd", "Dynamic sensitivity", "Adapts basal to your recent days", preferences.get(BooleanKey.HovorkaTddAdaptation)),
-            AlgoToggle("smb", "SMB microbolus", "Faster post-meal corrections (Objective 8)", preferences.get(BooleanKey.HovorkaEnableSmb)),
-            AlgoToggle("meal", "Meal detection", "Catch unannounced carbs", preferences.get(BooleanKey.HovorkaMealDetection)),
-            AlgoToggle("imm", "Absorption regime bank", "Adapts to fast/slow meals", preferences.get(BooleanKey.HovorkaImmBank))
-        ) else emptyList()
+        val toggles = when {
+            isHovorka() -> listOf(
+                AlgoToggle("tdd", "Dynamic sensitivity", "Adapts basal to your recent days", preferences.get(BooleanKey.HovorkaTddAdaptation)),
+                AlgoToggle("smb", "SMB microbolus", "Faster post-meal corrections (Objective 8)", preferences.get(BooleanKey.HovorkaEnableSmb)),
+                AlgoToggle("meal", "Meal detection", "Catch unannounced carbs", preferences.get(BooleanKey.HovorkaMealDetection)),
+                AlgoToggle("imm", "Absorption regime bank", "Adapts to fast/slow meals", preferences.get(BooleanKey.HovorkaImmBank))
+            )
+            // CamAPS FX replica is a faithful basal-only controller: no user toggles (SMB / meal-detection / IMM /
+            // TDD-adaptation are all intrinsic to the decoded engine, not switches). Body weight is shown below.
+            else -> emptyList()
+        }
 
         state.value = AlgorithmUiState(
             title = active.name,
             chips = chips,
             predictedMmol = rt?.eventualBG?.let { it / MGDL_PER_MMOL },
             targetMmol = rt?.targetBG?.let { it / MGDL_PER_MMOL },
-            bodyWeight = if (isHovorka()) preferences.get(DoubleKey.HovorkaBodyWeight) else null,
+            bodyWeight = if (isHovorka() || isCamaps()) preferences.get(DoubleKey.HovorkaBodyWeight) else null,
             toggles = toggles
         )
     }

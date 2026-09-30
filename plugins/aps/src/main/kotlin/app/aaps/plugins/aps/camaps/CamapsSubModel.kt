@@ -79,7 +79,16 @@ class CamapsSubModel(
      * Use the glucose equation DECODED from `SubModel1::PredictStep` rather than the earlier reconstruction.
      * See [fromBIR] for where every parameter comes from.
      */
-    val decodedPlant: Boolean = false
+    val decodedPlant: Boolean = false,
+    /**
+     * Multiplier applied to every insulin input when [decodedPlant] is set: BIR / profile basal.
+     *
+     * Traced in the real binary: its plasma insulin is exactly Iref x (delivered / profile basal) — 16.47
+     * at ratio 1.0, 29.07 at 1.765, 7.75 at 0.471, for every combination tried. So the plant, which is
+     * parameterised at BIR, sees insulin rescaled so that delivering the profile basal IS delivering BIR.
+     * That is the mechanism behind the binary's output scaling exactly with profile basal.
+     */
+    val insulinScale: Double = 1.0
 ) : ControlModel {
     val nStates = 9
 
@@ -127,7 +136,8 @@ class CamapsSubModel(
 
     /** RK4 over dtMin with constant infusion u (mU/min). Fx may go negative; f is clamped to fLimits. */
     override fun step(s: DoubleArray, u: Double, dtMin: Double): DoubleArray {
-        fun d(x: DoubleArray) = derivative(x).also { it[S1] = u - x[S1] / tMaxI }
+        val uEff = if (decodedPlant) u * insulinScale else u
+        fun d(x: DoubleArray) = derivative(x).also { it[S1] = uEff - x[S1] / tMaxI }
         val k1 = d(s)
         val k2 = d(add(s, k1, dtMin / 2)); val k3 = d(add(s, k2, dtMin / 2)); val k4 = d(add(s, k3, dtMin))
         return DoubleArray(nStates) { i ->
@@ -158,12 +168,14 @@ class CamapsSubModel(
         it[D1] += agBioavailability * carbsG * MMOL_PER_G
     }
 
-    fun addBolus(s: DoubleArray, unitsU: Double) = s.copyOf().also { it[S1] += unitsU * 1000.0 }
+    fun addBolus(s: DoubleArray, unitsU: Double) =
+        s.copyOf().also { it[S1] += unitsU * 1000.0 * (if (decodedPlant) insulinScale else 1.0) }
 
     /** Insulin and gut at equilibrium for infusion u; glucose placed at [glucoseMmol]. */
     fun steadyState(u: Double, glucoseMmol: Double): DoubleArray {
         val s = DoubleArray(nStates)
-        s[S1] = u * tMaxI; s[S2] = u * tMaxI; s[I] = u / (vi * ke)
+        val uEff = if (decodedPlant) u * insulinScale else u
+        s[S1] = uEff * tMaxI; s[S2] = uEff * tMaxI; s[I] = uEff / (vi * ke)
         s[Q1] = glucoseMmol * vg
         s[FX] = 0.0; s[F] = F_PRIOR; s[LG] = 0.0
         return s
@@ -350,7 +362,7 @@ class CamapsSubModel(
          * egpHalf FITTED to 50, SI derived from ISF, Iref = 0 and the anchor at target 5.8.
          */
         fun fromBIR(k: Int, weightKg: Double, birUPerHr: Double, agBio: Double = 0.8,
-                    fluxHalfMin: Double = 0.0): CamapsSubModel {
+                    fluxHalfMin: Double = 0.0, profileBasalUPerHr: Double = birUPerHr): CamapsSubModel {
             val vg = VG_PER_KG * weightKg
             val vi = VI_PER_KG * weightKg
             val ke = KE
@@ -368,7 +380,8 @@ class CamapsSubModel(
             val f01PerKg = egp0PerKg - 5.5 * VG_PER_KG * si * iRef
             return CamapsSubModel(vg, vi, ke, TMAX_I / m, TMAXG1[k], TMAXG2[k],
                 egp0PerKg * weightKg, f01PerKg * weightKg, si, iRef, egpHalf, agBio,
-                fluxHalfMin = fluxHalfMin, decodedPlant = true)
+                fluxHalfMin = fluxHalfMin, decodedPlant = true,
+                insulinScale = if (profileBasalUPerHr > 0) birUPerHr / profileBasalUPerHr else 1.0)
         }
 
         fun forProfile(k: Int, weightKg: Double, isfMmolPerU: Double, basalUPerHr: Double,

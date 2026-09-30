@@ -28,8 +28,11 @@ import app.aaps.core.keys.BooleanKey
 import app.aaps.core.keys.DoubleKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.objects.extensions.target
+import app.aaps.core.validators.preferences.AdaptiveDoublePreference
 import app.aaps.core.validators.preferences.AdaptiveSwitchPreference
 import app.aaps.plugins.aps.R
+import app.aaps.plugins.aps.camapsfx.AapsInput
+import app.aaps.plugins.aps.camapsfx.CamapsFxEngine
 import app.aaps.plugins.aps.hovorka.GlucoseEstimator
 import app.aaps.plugins.aps.hovorka.HovorkaEkf
 import app.aaps.plugins.aps.hovorka.HovorkaImmBank
@@ -89,8 +92,10 @@ class CamapsPlugin @Inject constructor(
 ) : PluginBase(
     PluginDescription()
         .mainType(PluginType.APS)
+        .fragmentClass("app.aaps.plugins.aps.compose.AlgorithmFragment")  // now CAMR-aware (body weight + TDD toggle)
         .pluginName(R.string.camaps_replica_name)
         .shortName(R.string.camaps_replica_shortname)
+        .preferencesId(PluginDescription.PREFERENCE_SCREEN)
         .description(R.string.camaps_replica_description),
     aapsLogger, rh
 ), APS {
@@ -113,50 +118,30 @@ class CamapsPlugin @Inject constructor(
             key = "camaps_replica_settings"
             title = rh.gs(R.string.camaps_replica_name)
             initialExpandedChildrenCount = 0
+            // Body weight drives the operating point (plant Vg / scaling); the two limits are the ceiling on
+            // everything this plugin can do. They are shared keys (also owned by the SMB plugin, which is
+            // disabled while CamAPS is active), so surface them here where the algorithm that obeys them lives.
             addPreference(
-                AdaptiveSwitchPreference(
-                    ctx = context, booleanKey = BooleanKey.CamapsTddAdaptation,
-                    summary = R.string.camaps_tdd_adaptation_summary, title = R.string.camaps_tdd_adaptation_title
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.HovorkaBodyWeight,
+                    dialogMessage = R.string.hovorka_body_weight_summary, title = R.string.hovorka_body_weight_title
                 )
             )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.ApsMaxBasal,
+                    dialogMessage = R.string.hovorka_max_basal_summary, title = R.string.hovorka_max_basal_title
+                )
+            )
+            addPreference(
+                AdaptiveDoublePreference(
+                    ctx = context, doubleKey = DoubleKey.ApsSmbMaxIob,
+                    dialogMessage = R.string.hovorka_max_iob_summary, title = R.string.hovorka_max_iob_title
+                )
+            )
+            // (No TDD-adaptation toggle: the engine's own ModifyTDD is intrinsic; the old gated approximation is gone.)
         }
     }
-
-    /**
-     * §7 `MPC::AdjustTDDbasedOnCGM`, gated on [BooleanKey.CamapsTddAdaptation] and DEFAULT OFF.
-     *
-     * Returns the multiplicative correction for today, or 1.0 when the feature is off or the window is too
-     * thin to mean anything. Recomputed once per LOCAL day — `now / DAY_MS` is a UTC day index, which on
-     * this fork once made a "daily" value roll over at local noon, so the offset is applied here.
-     *
-     * The window is the binary's: 23 hours ending at 08:00. Before 08:00 that window has not closed, so
-     * the previous day's is used rather than a partial one.
-     *
-     * ⚠️ On this patient's own 30 days the hypo override fires on 18 of 29 days and makes 15 of them ask
-     * for LESS insulin at a mean glucose of 7.2 against a 5.8 target — see [CamapsTddAdapter]. That is why
-     * the pref defaults to false, and why turning it on is a therapy decision and not a tuning step.
-     */
-    private fun tddAdaptationFactor(targetMmol: Double, now: Long): Double {
-        if (!preferences.get(BooleanKey.CamapsTddAdaptation)) return 1.0
-        val tz = java.util.TimeZone.getDefault()
-        val dayKey = (now + tz.getOffset(now)) / 86_400_000L
-        if (dayKey != tddCacheDay) {
-            val midnight = MidnightTime.calc(now)
-            var end = midnight + CamapsTddAdapter.WINDOW_END_HOUR * 3_600_000L
-            if (end > now) end -= 86_400_000L                       // 08:00 has not passed yet today
-            val start = end - CamapsTddAdapter.WINDOW_H * 3_600_000L
-            val bg = persistenceLayer.getBgReadingsDataFromTimeToTime(start, end, true)
-                .map { it.value / MGDL_PER_MMOL }
-            tddCacheFactor = if (bg.size < CamapsTddAdapter.MIN_ENTRIES) 1.0
-                             else CamapsTddAdapter.factor(bg, targetMmol)
-            tddCacheDay = dayKey
-            aapsLogger.debug(LTag.APS, "CamAPS TDD adaptation: ${bg.size} readings -> x%.3f".format(tddCacheFactor))
-        }
-        return tddCacheFactor
-    }
-
-    private var tddCacheDay = Long.MIN_VALUE
-    private var tddCacheFactor = 1.0
 
     /**
      * Mean of the 48 half-hourly basal rates, i.e. the same array `MPC::MaximumPersonalRange` averages
@@ -191,69 +176,45 @@ class CamapsPlugin @Inject constructor(
         val tempTargetMgdl = persistenceLayer.getTemporaryTargetActiveAt(now)?.target()
         val controlTargetMmol = (tempTargetMgdl ?: profile.getTargetMgdl()) / MGDL_PER_MMOL
         val weightKg = preferences.get(DoubleKey.HovorkaBodyWeight)
-        // §7 AdjustTDDbasedOnCGM scales the operating point. Default OFF, so this is 1.0 unless the user
-        // has turned it on; see [tddAdaptationFactor] for why it is off.
-        val tddFactor = tddAdaptationFactor(controlTargetMmol, now)
-        val nominalUhr = profile.getBasal() * tddFactor
-        val nominalMuMin = nominalUhr * 1000.0 / 60.0
+        // (TDD-adaptation is intrinsic to the CamAPS FX engine's own ModifyTDD — no separate plugin gate.)
         val isfMgdl = profile.getProfileIsfMgdl()
         val icGPerU = profile.getIc()
         val maxBasalUhr = min(preferences.get(DoubleKey.ApsMaxBasal), MAX_BASAL_ABS_CAP)
 
-        // CamAPS's own model: 8 submodels with the decoded two-compartment gut, the bioavailability
-        // state and the EGP form of SubModel1::EndoBalance. Rebuilt each tick, so no filter state can
-        // silently persist. See report/camaps-model-spec.md §23.
+        // ---- CamAPS FX bit-exact clean-room engine (camapsfx.*) — validated 49/49 vs the genuine binary on the
+        // user's real AAPS history (offline). STATELESS: rebuilt each tick from a trailing window, so no filter
+        // state can silently persist. The whole estimator + optimiser + output pipeline is the decoded controller.
         val isfMmol = isfMgdl / MGDL_PER_MMOL
-
-        val est = estimateState(weightKg, isfMmol, nominalUhr, now)
-        val (rolloutModel, rolloutState) = est.best()              // the winning submodel
-        // §5 MPC::MaximumPersonalRange -- the controller's own ceiling. Decoded, not fitted; see
-        // CamapsMpc.maximumPersonalRange. Needs TDD, the 24h MEAN basal and the CURRENT block, which
-        // differ on any profile with real dawn variation, so all three are passed rather than folded.
-        val tddU = (tddCalculator.calculateDaily(-24, 0)?.let { if (it.totalAmount > 0.0) it.totalAmount else it.basalAmount + it.bolusAmount }
-            ?: (meanProfileBasalUhr(profile) * 24.0)) * tddFactor   // no history yet: basal-only fallback
-        val maxRateUhr = CamapsMpc.maximumPersonalRange(
-            cgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL,
-            tddU = tddU,
-            meanBasal = meanProfileBasalUhr(profile) * tddFactor,
-            basalNow = nominalUhr
+        val windowH = 12f
+        val tz = java.util.TimeZone.getDefault().getOffset(now).toLong()
+        val histStart = now - 24 * 3_600_000L                        // generous lookback; the engine windows to 12h
+        val cgmList = persistenceLayer.getBgReadingsDataFromTimeToTime(histStart, now, true)
+            .map { AapsInput.Cgm(it.timestamp, it.value.toFloat()) }
+        val bolusList = persistenceLayer.getBolusesFromTimeToTime(histStart, now, true)
+            .filter { it.amount > 0.0 }.map { AapsInput.Bolus(it.timestamp, it.amount.toFloat()) }
+        val carbList = persistenceLayer.getCarbsFromTimeToTimeExpanded(histStart, now, true)
+            .filter { it.amount > 0.0 }.map { AapsInput.Carb(it.timestamp, it.amount.toFloat()) }
+        val tbrList = persistenceLayer.getTemporaryBasalsStartingFromTimeToTime(histStart, now, true)
+            .map { AapsInput.Tbr(it.timestamp, it.isAbsolute, it.rate.toFloat(), it.duration) }
+        val decision = CamapsFxEngine.decide(
+            nowMs = now, windowH = windowH, tzOffsetMs = tz, weightKg = weightKg.toFloat(),
+            targetMmol = controlTargetMmol.toFloat(),
+            basalAtLocalSec = { sec -> profile.getBasalTimeFromMidnight(sec).toFloat() },
+            cgm = cgmList, boluses = bolusList, carbs = carbList, tbrs = tbrList
         )
-        // §5 MPC::ModifyRateGlucoseRate keys on GetSlope over two windows, taking the more NEGATIVE.
-        // shortAvgDelta/longAvgDelta are the nearest equivalents AAPS already computes; both are
-        // mg/dL per 5 min, so x12 for per-hour and /18 for mmol/L.
-        val slopeMmolPerH = min(glucoseStatus.shortAvgDelta, glucoseStatus.longAvgDelta) *
-            12.0 / MGDL_PER_MMOL
-        val decision = CamapsMpc(
-            rolloutModel, targetMmol = controlTargetMmol,
-            nominalBasalMuPerMin = nominalMuMin,
-            maxBasalMuPerMin = maxBasalUhr * 1000.0 / 60.0,
-            maxRateMuPerMin = maxRateUhr * 1000.0 / 60.0,
-            observedSlopeMmolPerH = slopeMmolPerH,
-            // §6.5: the gap between the two most recent CGM samples
-            cgmGapMin = cgmGapMinutes(now),
-            smoothedBasalMuPerMin = meanProfileBasalUhr(profile) * 1000.0 / 60.0,
-            // §6.6 ModifyExercise: suspend entirely at or below 8.0 mmol/L during or around exercise.
-            exercising = exercisingAt(now),
-            // §5 ModifyRateGlucoseLevel relaxes the suspend threshold by 0.2 mmol/L within an hour of a
-            // meal (GetMeal's window is 60 min), on the reasoning that carbs are on the way.
-            mealWithinLastHour = persistenceLayer
-                .getCarbsFromTimeToTimeExpanded(now - 3_600_000L, now, true).any { it.amount > 0.0 }
-        ).decide(rolloutState)
-
-        var rateUhr = max(0.0, min(maxBasalUhr, round(decision.basalUPerHr * 100.0) / 100.0))
+        var rateUhr = max(0.0, min(maxBasalUhr, round(decision.rateUhr.toDouble() * 100.0) / 100.0))
         val rawCgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL
         if (rawCgmMmol <= RAW_HYPO_SUSPEND_MMOL) rateUhr = 0.0    // backstop on the UNSMOOTHED sensor value
 
-        // DISPLAY ONLY — AAPS's predictive alarms key off eventualBG, and the model rollout is known to be
-        // unreliable in both directions, so the mass-balance identity is reported instead. It touches
-        // nothing in the control path above; this controller does not consume IOB or COB.
+        // eventualBG = CAMR's OWN model forecast — the predicted glucose at the horizon end (~2.5 h) under the
+        // chosen rate, from the engine's rollout. This is what the controller actually expects (not the pessimistic
+        // IOB mass-balance the old plugin reported); it drives AAPS's predicted-BG display/alarms. Clamped to a
+        // sane display range in case a degenerate tick produces a wild rollout.
+        val eventualDisplay = decision.eventualMmol.toDouble().coerceIn(2.0, 25.0)
         val iobNow = iobCobCalculator.calculateIobFromBolus().iob + iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().basaliob
-        val cobG = iobCobCalculator.getCobInfo("CamapsEventual").displayCob ?: 0.0
-        val eventualDisplay = (rawCgmMmol - iobNow * isfMmol + (if (icGPerU > 0) cobG * isfMmol / icGPerU else 0.0))
-            .coerceIn(1.5, 40.0)
 
-        val reasonStr = "${decision.reason} | est.G=%.1f | display eventual %.1f (IOB %.1f, COB %.0f)"
-            .format(est.glucoseMmol(), eventualDisplay, iobNow, cobG)
+        val reasonStr = "CamAPS-FX -> %.2f U/hr | tgt %.1f | pred %.1f | ncgm=%d nbol=%d nmeal=%d (IOB %.1f)"
+            .format(rateUhr, decision.targetMmol, eventualDisplay, decision.nCgm, decision.nBolus, decision.nMeal, iobNow)
         val rt = RT(
             algorithm = APSResult.Algorithm.SMB,
             runningDynamicIsf = false,
@@ -270,7 +231,7 @@ class CamapsPlugin @Inject constructor(
         lastAPSResult = result
         lastAPSRun = now
         rxBus.send(EventAPSCalculationFinished())
-        aapsLogger.debug(LTag.APS, "CamAPS-replica -> $rateUhr U/hr / $TBR_DURATION_MIN min | $reasonStr")
+        aapsLogger.debug(LTag.APS, "$reasonStr / $TBR_DURATION_MIN min")
     }
 
     /**

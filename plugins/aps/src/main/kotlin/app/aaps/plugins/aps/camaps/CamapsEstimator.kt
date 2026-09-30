@@ -97,13 +97,21 @@ class CamapsEstimator(
     /** Build the bank with [CamapsSubModel.fromBIR] — the decoded plant. */
     private val decodedPlant: Boolean = false,
     /** Use `SubModel1::Learn`'s glucose-proportional CGM noise instead of the constant [measNoiseVar]. */
-    private val decodedMeasNoise: Boolean = DECODED_MEAS_NOISE
+    private val decodedMeasNoise: Boolean = DECODED_MEAS_NOISE,
+    /**
+     * The basal insulin requirement the decoded plant is parameterised from. NOT the profile basal: traced
+     * in the binary, BIR is initialised to `minimumTDD / 24` = 45/24 = 1.875 U/h and only then adapts
+     * online (GetBIRHalf 1440 min). For a probe with no history it stays at 1.875 whatever the profile.
+     * 0 = use the profile basal (the previous, wrong, behaviour).
+     */
+    private val birUPerHr: Double = 0.0
 ) : GlucoseEstimator {
 
     private val n = 9
     private val nm = 8
     private val models = Array(nm) {
-        if (decodedPlant) CamapsSubModel.fromBIR(it, weightKg, basalUPerHr, fluxHalfMin = fluxHalfMin)
+        if (decodedPlant) CamapsSubModel.fromBIR(it, weightKg, if (birUPerHr > 0) birUPerHr else basalUPerHr,
+                                                 fluxHalfMin = fluxHalfMin, profileBasalUPerHr = basalUPerHr)
         else CamapsSubModel.forProfile(it, weightKg, isfMmolPerU, basalUPerHr, egpHalfMuPerL,
                                   gRefMmol = gRefMmol, gDisposal = gDisposal, siScale = siScale,
                                   fluxHalfMin = fluxHalfMin, tMaxIMin = tMaxIMin,

@@ -18,7 +18,7 @@
 
 ## What this fork adds
 
-Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Eight workstreams:
+Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Nine workstreams:
 
 | # | Area | What it is | Status |
 |---|------|-----------|--------|
@@ -30,6 +30,7 @@ Forked from `nightscout/AndroidAPS` at `43cc754` (2026-06-04). Eight workstreams
 | 6 | **[Delivery the pump cannot make](#6-delivery-the-pump-cannot-make)** | Stopped pump, empty cartridge: say so, refuse the dose, and never book insulin that did not go in | Running |
 | 7 | **[Native Libre 3 / 3+ CGM](#7-native-libre-3--3-cgm)** | Talks to the sensor directly over BLE — no Juggluco, no xDrip in the glucose path | Live on hardware |
 | 8 | **[Rise-lag manual-BG correction](#8-rise-lag-manual-bg-correction)** | A finger-prick on a fast rise becomes ground truth, correcting the lagging sensor into the loop | Built, untested on hardware |
+| 9 | **[CamAPS FX replica](#9-camaps-fx-replica--a-bit-exact-clean-room-controller)** | A clean-room reimplementation of the CamAPS FX controller that reproduces the genuine binary's dose *to the bit* — validated 49/49 on real data | Experimental, runs live |
 
 Plus a number of [smaller changes](#smaller-changes) — Nightscout over a private network, wizard fields
 the redesign had dropped, and pump-driver reliability fixes.
@@ -571,6 +572,78 @@ deliberate manual trigger and is dormant otherwise.
   [Abbott support: sensor readings vs blood](https://www.freestyle.abbott/en-lb/support/sensor-readings-are-a-few-minutes-behind-blood-sugar-.html).
 - **Libre generally underestimates; error worst falling / in hypo (MARD ~13.6%):**
   Vaughan, *Meta-Analysis of a Decade of Studies Assessing Accuracy of Abbott FreeStyle Libre*, JDST 2025 — [DOI](https://journals.sagepub.com/doi/10.1177/29986702251390418).
+
+---
+
+## 9. CamAPS FX replica — a bit-exact clean-room controller
+
+**`plugins/aps/src/main/kotlin/app/aaps/plugins/aps/camapsfx/` —
+[full field guide: pipeline, validation, files](plugins/aps/src/main/kotlin/app/aaps/plugins/aps/camapsfx/README.md)**
+
+The largest single piece of work in this fork, and a different exercise from everything above it. Selectable
+as **"CamAPS FX replica"** alongside oref1 and HovorkaMPC.
+
+[HovorkaMPC](#2-hovorkampc--a-model-predictive-controller) is an *independent* controller, informed by
+reverse-engineering CamAPS but built from the published model. **This is the opposite:** a faithful
+transcription of the genuine CamAPS FX controller, reproduced in Kotlin closely enough that it returns **the
+same basal rate as the real binary — to the bit — on the same inputs.**
+
+> **Not affiliated with or endorsed by CamDiab.** A reverse-engineered reimplementation for research and
+> personal use. Not clinically validated. Off by default.
+
+### What "bit-exact" means, and how it was proven
+
+CamAPS FX ships as a stripped native library. It was decoded with Ghidra for control flow and an ARM64
+instruction emulator (Unicorn) that runs the real binary on the host and captures any internal array
+mid-decision — so each Kotlin function could be checked against the genuine one's *actual* floating-point
+output, not just its intent. Every stage was validated that way, function by function, until the whole
+controller agreed with the binary to floating-point rounding (the ~1e-5 ARM-vs-JVM "FP-floor", which rounds
+away on the 0.05 U/h delivery grid).
+
+Two end-to-end results anchor it:
+
+- **Synthetic replay: 49/49 control cycles bit-exact** over a full simulated day.
+- **Real data: 49/49 bit-exact** driven from the author's own AAPS database — the same record types this
+  plugin reads live — with **no CamAPS binary anywhere in the loop.**
+
+The genuine binary is used **only offline**, as the oracle those comparisons are made against. It is not in
+this repository and is not distributed (see below).
+
+### How it works
+
+Stateless per tick, exactly like the binary's `oneRun`: it carries no estimator state between cycles and
+re-derives everything from the recent history, so nothing can silently persist or corrupt.
+
+1. **Input + decimation** — the trailing ~24 h of glucose, insulin and carbs become the binary's input; CGM
+   is resampled onto the coarse grid the binary actually estimates on (reproducing this decimation fixed the
+   single largest early divergence).
+2. **State estimation** — an **8-submodel IMM bank** of Extended Kalman Filters, each with a 6-D state that
+   includes a **bioavailability** estimate, mixed by mode probability, over an ~8 h learning horizon
+   assembled by the binary's exact event-snapping walk.
+3. **Control** — a **Gauss-Newton least-squares** solve for a piecewise-constant basal sequence, regularised
+   by a **tridiagonal move-penalty** (not a plain λI — that distinction was what finally made the optimiser
+   agree), enacting its first block.
+4. **Output** — the binary's seven safety modifiers in order (personal-max cap, suspend-on-low, trend brake,
+   occlusion guard, exercise suspend, staleness guard, hypo rescue), a min-rate trickle, and grid rounding.
+
+### Running live
+
+The plugin reads glucose / boluses / carbs / temp-basals from the persistence layer and the scheduled basal
+from the active profile, computes a rate, and enacts an absolute temp basal. The rate is clamped to the
+**Max Basal** preference with a **raw-CGM hypo backstop**, and the Loop enforces **Max IOB** on top. It
+reports the engine's **own model forecast** as the predicted glucose. It is **basal-only** — the engine's
+meal handling and TDD adaptation are intrinsic to the decoded model, not user toggles — so its Algorithm tab
+shows only body weight and the standard Max Basal / Max IOB.
+
+### Provenance and limits
+
+- **Clean-room and binary-free.** The Kotlin is an independent reimplementation. The genuine decrypted
+  library and the JNI scaffolding that runs it are **local-only validation tooling**, kept out of this
+  repository by `.gitignore` and never distributed; the plugin does not load, link or require them.
+- **Bit-exact is not clinically validated.** Reproducing the arithmetic proves the *transcription* is
+  faithful — nothing more. Parity was shown against one person's data and the host oracle; there is no
+  multi-user testing, and it is not enabled by default. Faithful includes faithfully cautious: it reproduces
+  the genuine controller's tendency to run less basal near and above target.
 
 ---
 
