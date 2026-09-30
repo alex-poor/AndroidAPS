@@ -1,0 +1,988 @@
+package app.aaps.plugins.aps.camaps
+
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+
+/**
+ * Clean-room replication of the CamAPS FX control law, as decoded in report/algorithm-spec.md §4-5.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM HovorkaMpc. The fork's existing controller began as a replication and
+ * diverged: it replaced the decoded zone-bounded reference trajectory with an unbounded exponential, and
+ * six guards were then added over three months to contain the result. Measured over 30 real days that
+ * stack overrides the model on 95% of ticks and the descent guard alone binds on 53.7% — so the deployed
+ * controller is the guard stack, not the model. That divergence cannot be tested by toggling one flag at
+ * a time, because each guard absorbs the component being tested; it has to be a whole configuration.
+ * This is that configuration, kept apart so both can run and be compared on the same person.
+ *
+ * WHAT IS REPLICATED
+ *
+ *  - §5 REFERENCE TRAJECTORY, transcribed from `MPC::DetermineSetPoint` (0x48b84). NOT an exponential
+ *    to target: the set-point is CLAMPED to 12.0 and then walks down by a per-minute zone slope that is
+ *    re-evaluated each step on the evolving set-point.
+ *        sp > 13       -> -1/24    mmol/L/min = -2.5 mmol/L/h    (0xBD2AAAAB)
+ *        10 < sp <= 13 -> -0.02833 mmol/L/min = -1.7 mmol/L/h    (0xBCE81B4F)
+ *        sp <= 10      -> exponential to target, half-life 60 min down / 15 min up, with a
+ *                         [target, target+2] dead zone where it holds
+ *    The 12.0 clamp is the load-bearing part. At glucose 20 the set-point starts at 12, so there is an
+ *    8 mmol/L tracking error from the first step and the optimiser saturates — which is why the real
+ *    controller needs [maximumPersonalRange] to bound it at all.
+ *
+ *    An earlier version of this file used `T + (G0-T)*exp(-t/tau)` with the zone slopes as a ceiling on
+ *    the fall. That reading started the reference AT current glucose, so it never produced a large
+ *    error, and the replica commanded 1.00 x basal at glucose 18 where the real controller commands
+ *    2.53 x. Fixing the trajectory cut the measured level-response error from 0.537 to 0.183 x basal.
+ *
+ *  - §4 OPTIMISER. A basal sequence over a 180-minute horizon (the decoded 180-step BIR vector),
+ *    piecewise-constant, minimising tracking error against the reference plus an effort term; the FIRST
+ *    step is commanded, as GetBIRpump does.
+ *
+ *  - §4 OUTPUT LAW. The first planned step is commanded, bounded above by [maximumPersonalRange].
+ *    There is NO floor: `MPC::GetBIR(int)` (0x429bc) returns
+ *    `mode == 1 ? max(0.48*tdd/24, 0.7*mean(48 half-hourly basals)) : 0.48*tdd/24` -- a reference basal
+ *    rate, the same `base` term `MaximumPersonalRange` uses, with no horizon vector anywhere in it.
+ *    An earlier version of this file floored the command at `0.7 * mean(PLANNED horizon)` on the
+ *    reasoning that flooring against the plan rather than against profile basal would let a plan that
+ *    intends to suspend still suspend. Both readings were wrong, and the floor forced insulin in
+ *    whenever the plan meant to suspend now and resume later.
+ *
+ * NOT YET REPLICATED — AND IT SHOWS
+ *
+ *  - `MPC::ModifyRateGlucoseRate` (0x46f10, 1664 bytes). A post-processing stage applied to the
+ *    optimiser's output, keyed to the observed glucose slope: it takes `GetSlope` over TWO windows
+ *    (base span + 70 min and + 40 min) and uses the more negative, substitutes 5.5 mmol/L if the
+ *    previous CGM is over ~90 min stale. Both of its paths are now implemented — see
+ *    [attenuationPercent] and [SUSTAINED_FALL_CAP_FRAC]. `MPC::RuleUsed(n)` records which rule fired;
+ *    that is the Diagnostics field in the output.
+ *
+ *    This is the whole trend response and it lives OUTSIDE the MPC, on its output. Adding it took the
+ *    measured trend error from 0.646 to 0.522 x basal. What remains there is the RISING arm, where this
+ *    replica is flat (1.38-1.45 x basal) against the real controller's 1.88-2.12: attenuation can only
+ *    reduce, so that residual is the plant difference, not this stage.
+ *
+ *    STILL A BAR TO RUNNING THIS ON A PERSON: the sub-8 path is approximated with a single slope
+ *    estimate where the binary requires the fall to have persisted across four windows, and the plant
+ *    difference above is unaddressed.
+ *
+ * WHAT IS DELIBERATELY NOT REPLICATED
+ *
+ *  - The low-glucose suspend is no longer a deviation at all: it is `MPC::ModifyRateGlucoseLevel`,
+ *    transcribed at [hypoSuspendThreshold]. It was originally added here on the reasoning that its
+ *    absence from the decoded spec was an RE gap rather than a design decision; that turned out to be
+ *    right, and the threshold it was measured at (4.5) is exactly `finalTargetGlucose - 1.3`.
+ *  - A small deadband around the previous command is KEPT, purely so AAPS does not emit a fresh TBR
+ *    every tick. It is an integration concern, not therapy.
+ *
+ * Everything else the fork added — descent guard, high-correction floor, current-glucose damper,
+ * IOB-divergence detector, site guard, SMB — is absent by design. CamAPS is basal-only and carries
+ * exactly two pieces of safety machinery: the bound above, and the floor above.
+ */
+class CamapsMpc(
+    private val model: ControlModel,
+    private val targetMmol: Double,
+    private val nominalBasalMuPerMin: Double,
+    private val maxBasalMuPerMin: Double,
+    /**
+     * PREDICTION horizon, minutes — `predictionHorizonUp`/`Down` = **150**, decoded.
+     *
+     * This was 180 for a long time on the reasoning that `MPC::Optimise` fetches `Vector<float,180u>`
+     * arrays. That is the array's CAPACITY, not the horizon: 150 one-minute samples fit inside a
+     * 180-element vector. The globals are `.bss`, so they read as zero in the file and were repeatedly
+     * written off as "runtime values, not recovered" — they are in fact built by a C++ static constructor
+     * in `.init_array` (0x3b9b0) as `CTimeSpanMy(0,2,30,0)`.
+     *
+     * A horizon sweep had already found 140-160 better than 180 (summed MAE 0.882-0.887 against 0.915)
+     * and that measurement was overridden to defend the "decoded" 180. It was not decoded.
+     */
+    private val horizonMin: Int = SHIPPED_HORIZON_MIN,
+    /**
+     * CONTROL horizon, minutes — `controlHorizonUp`/`Down` = **100**, decoded, `CTimeSpanMy(0,1,40,0)`.
+     *
+     * Shorter than the prediction horizon, which this replica had no concept of: control moves are
+     * optimised over the first 100 minutes and held constant for the remaining 50 while the prediction
+     * runs on. With [CONTROL_STEP_MIN] = 25 that is 100/25 = **4 control blocks**.
+     */
+    private val controlHorizonMin: Int = DECODED_CONTROL_HORIZON_MIN,
+    private val stepMin: Int = 5,
+    /** Decoded: controlHorizon/controlStep = 100/25 = 4. Shipped: 6, see [SHIPPED_HORIZON_MIN]. */
+    private val nSegments: Int = SHIPPED_SEGMENTS,
+    /**
+     * Control-block length, minutes. 0 = spread [nSegments] evenly over the prediction horizon (the
+     * shipped behaviour); [CONTROL_STEP_MIN] = 25 is the decoded value, which makes the blocks cover
+     * the control horizon and holds the last one for the rest of the prediction.
+     */
+    private val controlStepMin: Int = 0,
+    private val sweeps: Int = 2,
+    /**
+     * Weight on insulin effort in the cost. The binary's own weights are named globals, not immediates
+     * inside `Model::Optimise` — which is why the spec called them undecodable:
+     * ```
+     *   lambdaBase         = 1.6     (0x92804, from lambdaBaseOrig 0x22d34)
+     *   lambdaBaseMeal     = 1.2     (0x92808, from lambdaBaseMealOrig 0x22d38)
+     *   lambdaBaseBolus    = 1.0     (0x22d40)
+     *   lambdaMealDuration = 240 min (0x22d3c)
+     * ```
+     * The ABSOLUTE value cannot be transplanted, since it depends on how the binary normalises glucose
+     * error against insulin in its cost and that is not recovered. The RATIO can, and it is the part that
+     * matters: for [LAMBDA_MEAL_DURATION_MIN] after a meal the weight drops to
+     * `lambdaBaseMeal / lambdaBase` = 0.75, so the controller is deliberately allowed to push harder
+     * post-meal. That is exactly the window where this replica was suspending and the real one was
+     * commanding 2.1 x basal.
+     */
+    private val effortWeight: Double = 0.02,
+    /**
+     * Minutes the real controller projects the CGM forward before clamping the initial set-point
+     * (`predictLead`, a runtime CTimeSpanMy whose value is not recovered). 0 = seed from the current
+     * estimate. Replaces the old `refTauMin`; the trajectory is no longer an exponential to target.
+     */
+    private val predictLeadMin: Double = PREDICT_LEAD_MIN,
+    /**
+     * REMOVED, because it was never in the binary. `MPC::GetBIR(int)` (0x429bc) decodes to
+     * ```
+     *   s0 = BIRasFractionOfTDD * tdd / 24
+     *   if (mode != 1) return s0
+     *   return max(s0, 0.7 * mean(48 half-hourly basals))
+     * ```
+     * i.e. a REFERENCE BASAL RATE -- the same expression `maximumPersonalRange` uses for its `base` --
+     * and not a floor on the controller's plan. There is no horizon vector in it. The 0.7 is 70% of the
+     * PROFILE basal mean, not 70% of anything the controller planned.
+     *
+     * The replica had `finalU = max(seq[0], 0.7 * mean(planned horizon))`, which forced insulin in
+     * whenever the plan intended to suspend now and resume later: it commanded 0.455 x basal at glucose
+     * 5.0 falling 1.5 mmol/L/h, where the real controller returns 0.000. Kept as a named constant only
+     * so the mistake is not silently reintroduced.
+     */
+    private val unusedBirFloorFrac: Double = 0.7,
+    /**
+     * Ceiling on the command, in mu/min. DECODED from `MPC::MaximumPersonalRange` (vaddr 0x46b08) and
+     * computed by the caller -- see [maximumPersonalRange]. Pass 0 or less to fall back to
+     * [maxBasalMuPerMin] alone.
+     *
+     * This replaced a flat `2.55 x profile basal`, which was fitted to flat-profile probes and was an
+     * artefact of them: with a flat profile the real rule's 24h-mean and current-block terms coincide
+     * and it collapses to `mult x 0.85 x basal`, which at mult=3.0 is 2.55. The real rule is tiered on
+     * glucose and keyed to TDD, so on any profile with real dawn variation it is nothing like 2.55x.
+     */
+    private val maxRateMuPerMin: Double = 0.0,
+    /**
+     * Observed glucose slope in mmol/L per HOUR, for the attenuation stage. The real controller uses
+     * `MPC::GetSlope` over two windows (base span + 70 and + 40 min), takes the more NEGATIVE, then
+     * takes the more negative again against the model's own 2-minute prediction scaled x30. Pass 0 to
+     * disable the attenuation stage.
+     */
+    private val observedSlopeMmolPerH: Double = 0.0,
+    /**
+     * Whether a meal was recorded in the last 60 minutes, which relaxes the suspend threshold. See
+     * [hypoSuspendThreshold].
+     */
+    private val mealWithinLastHour: Boolean = false,
+    /** Minutes since the last meal, or null if none within [LAMBDA_MEAL_DURATION_MIN]. */
+    private val minutesSinceMeal: Double? = null,
+    /** Minutes between the two most recent CGM samples, for §6.5. NaN if unknown. */
+    private val cgmGapMin: Double = Double.NaN,
+    /** Whether exercise is recorded now or within the look-ahead window, for §6.6. */
+    private val exercising: Boolean = false,
+    /** Smoothed profile-basal reference (mu/min) — `GetBIRStepsSmoothed`'s role in §6.4. */
+    private val smoothedBasalMuPerMin: Double = 0.0,
+    /**
+     * Cost weight on the forecast being BELOW the reference trajectory, relative to being above it.
+     * See [trackingPenalty]; 1.0 is the symmetric penalty.
+     */
+    private val belowReferenceWeight: Double = BELOW_REFERENCE_WEIGHT,
+    /** Extra cost multiplier on a forecast under 4.0 mmol/L. See [PREDICTED_LOW_WEIGHT]. */
+    private val predictedLowWeight: Double = PREDICTED_LOW_WEIGHT,
+    /** Exponent on the tracking error. See [TRACKING_EXPONENT]. */
+    private val trackingExponent: Double = TRACKING_EXPONENT,
+    /** Use `Model::Optimise`'s actual algorithm rather than the old gridded search. [solveClosedForm]. */
+    private val useClosedFormSolve: Boolean = USE_CLOSED_FORM_SOLVE,
+    /** How the ≤8 control blocks are spread over the horizon. See [collocationPoints]. */
+    private val blockLayout: BlockLayout = BLOCK_LAYOUT,
+    /** Gauss-Newton iterations in [solveClosedForm]; the binary's solve sits in two nested loops. */
+    private val gaussNewtonIterations: Int = GAUSS_NEWTON_ITERATIONS,
+    private val deadbandFrac: Double = 0.1
+) {
+
+    /** How the control blocks are spread over the horizon; the layout is NOT decoded, only the ≤8 count. */
+    enum class BlockLayout { UNIFORM, GEOMETRIC }
+
+    companion object {
+
+        /** `noInsulinDuringExercise` (0x22d70) — a GLUCOSE threshold in mmol/L, not a duration. */
+        const val NO_INSULIN_DURING_EXERCISE_MMOL = 8.0
+
+        /**
+         * `MPC::MaximumPersonalRange(float&, CTimeMy const&)`, vaddr 0x46b08, transcribed:
+         *
+         * ```
+         *   mult = cgm > 12 ? 3.0 : cgm > 8 ? 2.5 : 2.0     // cgm defaults to 5.5 when unavailable
+         *   base = max(BIRasFractionOfTDD * tdd / 24, 0.7 * mean(48 half-hourly basals))
+         *   a = mult * base ;  b = mult * basalNow
+         *   return a < b ? (a + b) / 2 : a
+         * ```
+         *
+         * `BIRasFractionOfTDD` is a binary constant, 0.48 (symbol at vaddr 0x22d88). The three
+         * multiplier tiers and the 0.7 are immediates in the function. Verified against all nine
+         * measured ceiling points (profile basal 0.20-3.20 U/h): every one reproduces exactly after
+         * the pump's 0.05 U/h rounding -- see report/camaps-measured-response.md §2.
+         *
+         * All rates in the same unit; the result comes back in that unit.
+         */
+        fun maximumPersonalRange(cgmMmol: Double, tddU: Double, meanBasal: Double,
+                                 basalNow: Double): Double {
+            val cgm = if (cgmMmol > 0.0) cgmMmol else CGM_FALLBACK_MMOL
+            val mult = when {
+                cgm > 12.0 -> 3.0
+                cgm > 8.0  -> 2.5
+                else       -> 2.0
+            }
+            val base = max(BIR_AS_FRACTION_OF_TDD * tddU / 24.0, 0.7 * meanBasal)
+            val a = mult * base
+            val b = mult * basalNow
+            return if (a < b) 0.5 * (a + b) else a
+        }
+
+        /** Binary constant `BIRasFractionOfTDD`, vaddr 0x22d88. */
+        const val BIR_AS_FRACTION_OF_TDD = 0.48
+
+        /**
+         * `MPC::ModifyRateGlucoseLevel` (0x46dcc), transcribed in full — it is only 324 bytes:
+         * ```
+         *   GetPrevCGM(t, &prev, &prevTime); if (!ok || age >= 91 min) prev = 5.5
+         *   g   = min(modelGlucose, prev)
+         *   GetMeal(&t, &mealAmt, .., 60)
+         *   off = (mealAmt > 0 && ret == 1) ? 1.5 : 1.3
+         *   if (g < finalTargetGlucose - off) { *rate = 0; diag[3] = 'L' }
+         * ```
+         * `finalTargetGlucose` is the symbol at vaddr 0x92800, **5.8** — not 6.0. So with no recent meal
+         * the suspend threshold is 5.8 - 1.3 = **4.500**, which is exactly where the measured suspend
+         * edge sits (0.00 U/h up to glucose 4.500, 0.79 x basal at 4.625). After a meal it relaxes to
+         * 5.8 - 1.5 = 4.3, which is the sensible direction: carbs are on the way.
+         *
+         * This is why the fixed 4.5 that replaced the original 3.9 was right. It was measured then;
+         * it is derived now, and expressed relative to the target so it tracks a target that is not 5.8.
+         * The 'L' is the flag seen in the real controller's Diagnostics field at low glucose.
+         *
+         * NOT replicated: the `min(modelGlucose, prevCGM)` pairing (we pass the model estimate only) and
+         * the 91-minute CGM staleness substitution.
+         */
+        fun hypoSuspendThreshold(targetMmol: Double, mealWithinLastHour: Boolean): Double =
+            targetMmol - (if (mealWithinLastHour) HYPO_OFFSET_AFTER_MEAL else HYPO_OFFSET)
+
+        /** `MPC::ModifyRateGlucoseLevel` immediates: 1.3 normally, 1.5 within an hour of a meal. */
+        const val HYPO_OFFSET = 1.3
+        const val HYPO_OFFSET_AFTER_MEAL = 1.5
+
+        /** Symbol `finalTargetGlucose`, vaddr 0x92800. The binary's default target. */
+        const val FINAL_TARGET_GLUCOSE_MMOL = 5.8
+
+        /**
+         * `lambdaBaseMeal / lambdaBase` for [LAMBDA_MEAL_DURATION_MIN] after a meal, else 1. Decoded from
+         * the named globals listed on [CamapsMpc.effortWeight]; see report/camaps-parameter-table.md.
+         */
+        fun lambdaFactor(minutesSinceMeal: Double?): Double =
+            if (minutesSinceMeal != null && minutesSinceMeal in 0.0..LAMBDA_MEAL_DURATION_MIN)
+                LAMBDA_BASE_MEAL / LAMBDA_BASE else 1.0
+
+        const val LAMBDA_BASE = 1.6                  // lambdaBaseOrig, 0x22d34
+        const val LAMBDA_BASE_MEAL = 1.2             // lambdaBaseMealOrig, 0x22d38
+        const val LAMBDA_MEAL_DURATION_MIN = 240.0   // lambdaMealDuration, 0x22d3c
+
+        /**
+         * How much a forecast BELOW the reference trajectory costs, relative to one above it.
+         *
+         * The reference is a one-sided BOUND on how fast glucose may fall, not a line to sit on, and with
+         * a symmetric penalty the optimiser treats undershooting it as an error to correct — so inside the
+         * set-point dead zone (target..target+2, where the reference simply HOLDS) any forecast that dives
+         * drives the rate to zero. Measured against the binary that was the single largest source of
+         * disagreement left: at glucose 7.0 two to four hours after a 40 g meal the real controller
+         * delivers 1.118 x basal and a symmetric replica suspended outright, and the same mechanism put
+         * the whole low-and-falling arm at a -0.346 bias.
+         *
+         * Predicted lows are still penalised hard and from both sides by the `g < 4.0` branch above, and
+         * the level suspend (§6.2), the attenuation (§6.3) and [MIN_NONZERO_RATE_UHR] are untouched, so
+         * this is not a relaxation of hypo protection — it stops the controller fighting a descent that
+         * the reference explicitly permits.
+         *
+         * Swept over the 826-point reference, at the shipped plant and a TWO-SIDED effort term
+         * (MAE in units of profile basal):
+         * ```
+         *   weight   level   trend  low+fall  post-meal  recovery   unsafe
+         *    0.50    0.203   0.179     0.189      0.320     0.275        1
+         *    0.35    0.201   0.164     0.163      0.309     0.263        0
+         *    0.25    0.203   0.158     0.144      0.295     0.258        0    <- shipped
+         *    0.15    0.207   0.168     0.142      0.288     0.258        0
+         *    0.10    0.207   0.164     0.143      0.282     0.262        0
+         * ```
+         * There is a genuine interior optimum here, and the curve is flat between 0.10 and 0.25 (sum 1.058
+         * at both). 0.25 is taken as the more hypo-conservative end of that flat region; 0.50 already costs
+         * a safety cell.
+         *
+         * It is not a relaxation of hypo protection: predicted glucose under 4.0 mmol/L is still penalised
+         * at 6x from BOTH sides, and the level suspend (§6.2), the attenuation (§6.3) and
+         * [MIN_NONZERO_RATE_UHR] are untouched.
+         *
+         * ⚠️ An earlier revision recorded that the post-meal arm was insensitive to this constant (0.435 at
+         * every weight) and concluded the cost function was not the cause of that error. That was an
+         * artefact of the SCORING HARNESS, which read the sweep variable in one helper only, so the
+         * post-meal arm always used the compiled default and could not move. With the harness fixed the arm
+         * runs 0.438 -> 0.418 across the same sweep and the cost function is very much implicated.
+         */
+        const val BELOW_REFERENCE_WEIGHT = 0.25
+
+        /**
+         * Extra cost multiplier on a forecast below 4.0 mmol/L. **OURS, not decoded** — §5.1 recovers only
+         * the λ ratio, never the absolute scale of the cost, and no hypo term was ever found in it.
+         *
+         * It is worth being suspicious of, because the real controller HAS a decoded mechanism for
+         * predicted lows and it is not a cost term at all: §6.4 `ModifyRateDeltaBIR` runs the model forward
+         * under an assumed occlusion and, if the minimum dips below [OCCLUSION_GLUCOSE_MMOL], CAPS the rate
+         * at the smoothed profile basal. A cap at basal, not a drive to zero — which is exactly the
+         * 1.118 × basal the binary returns in the post-meal cells this replica was suspending in.
+         */
+        const val PREDICTED_LOW_WEIGHT = 6.0
+
+        /**
+         * Exponent on the tracking error. 2 is the ordinary quadratic. **OURS** — §5.1 never recovered the
+         * absolute scale or the shape of the binary's cost, only the λ ratio.
+         *
+         * Motivation: a quadratic makes the response to a LARGE error grow without bound, and at flat
+         * glucose above 10 mmol/L that drives this replica to its ceiling (2.118 × basal from glucose 10.5
+         * upward) where the binary keeps a near-linear ramp and does not saturate until 16.5.
+         *
+         * ⛔ **MEASURED AND REJECTED — ships at 2.0.** Both large-error knobs behave the same way, and both
+         * trade the level arm against the ceiling arm:
+         * ```
+         *   exponent   level   trend  post-meal  ceiling   sum      effortWeight   level   trend  ceiling   sum
+         *     2.00     0.173   0.147      0.271    0.000  0.915           0.02     0.173   0.147    0.000  0.915
+         *     1.75     0.159   0.179      0.294    0.019  0.982           0.05     0.119   0.210    0.033  1.052
+         *     1.50     0.094   0.216      0.339    0.142  1.122           0.10     0.210   0.300    0.144  1.518
+         * ```
+         * Either one can nearly eliminate the level arm's error (0.173 → 0.094) and each does it by
+         * destroying a previously **exact** ceiling, because the ceiling family is glucose 20 rising hard —
+         * a large error where saturating is the correct answer. A single scalar cannot both saturate at 20
+         * and stay interior at 12.
+         *
+         * So this is a genuine remaining disagreement, not a knob left untuned: at flat glucose 10.5–14 the
+         * replica asks for its ceiling and the binary asks for 1.65–2.06. The likely cause is that the
+         * binary never receives ISF (its input carries weight, basal profile and TDD only), so its
+         * insulin-sensitivity is derived differently and a unit of insulin buys a different amount of
+         * glucose — which changes where the interior optimum sits without changing the cost at all.
+         */
+        const val TRACKING_EXPONENT = 2.0
+
+        /**
+         * Whether to use `Model::Optimise`'s actual algorithm — see [solveClosedForm].
+         *
+         * ⚠️ **FALSE, and that is an admission, not a conclusion.** The closed-form solve is what the
+         * binary does; the gridded search is not. But measured on the 826-point reference the decoded
+         * solver agrees with the binary WORSE:
+         * ```
+         *   solver                                   level  trend  low+fall  post-meal  recov   sum  unsafe
+         *   gridded + 3 fitted asymmetric terms       0.173  0.147     0.097      0.271  0.227  0.915     0
+         *   closed-form LQ, lambda 0.05, 6 blocks     0.219  0.142     0.240      0.332  0.258  1.191     0
+         *   closed-form LQ, lambda 0.05, 8 blocks     0.207  0.143     0.229      0.334  0.258  1.171     1
+         *   closed-form LQ, lambda 0.10, 8 blocks     0.166  0.168     0.138      0.350  0.243  1.065     2
+         * ```
+         * The comparison is not like for like, and that is the point. A closed-form LQ solve can only
+         * express a symmetric quadratic cost, so it cannot use [belowReferenceWeight],
+         * [predictedLowWeight] or [trackingExponent] — the three terms fitted against probe outputs while
+         * the optimiser was a search. Removing them makes agreement worse, which means **they were
+         * compensating for a different structural error that is still present and is now unmasked.**
+         *
+         * So this ships false for the moment: the gridded path has the better-measured behaviour and zero
+         * unsafe cells, and the plugin is not enabled either way. But the shipped controller is running an
+         * optimiser the binary does not have, and closing that is the top open item — it needs the
+         * remaining error found rather than the fudge terms restored.
+         */
+        const val USE_CLOSED_FORM_SOLVE = false
+
+        /** Default block layout for [solveClosedForm]. Not decoded — see [collocationPoints]. */
+        val BLOCK_LAYOUT = BlockLayout.UNIFORM
+
+        /**
+         * How many times [solveClosedForm] re-linearises. The binary iterates — the matrix build and
+         * `inv()` sit inside two nested backward branches — but the ITERATION COUNT is a runtime value and
+         * was not recovered, so this is fitted.
+         */
+        const val GAUSS_NEWTON_ITERATIONS = 6
+
+        /**
+         * Scale relating [effortWeight] — which was fitted for the gridded search's cost units — to the
+         * Tikhonov regularisation added to the diagonal of `S^T S`. The binary's own absolute scale is
+         * still **[?]**: §5.1 recovers only the λ ratio, so this is fitted like its predecessor.
+         */
+        const val LQ_LAMBDA_SCALE = 1.0
+
+        /**
+         * A FORECAST VALIDITY FLOOR WAS TRIED AND DOES NOT EXPLAIN THE BINARY. **[M]**
+         *
+         * The replica forecasts glucose at 0.00 mmol/L in several post-meal probes, because the decoded
+         * plant is a linearisation around normoglycaemia — `SI · I` removes glucose at a rate independent
+         * of glucose, `F01` is constant, there is no renal term (§2) — so with insulin on board it drives
+         * Q1 straight through zero. Penalised at 6x, an impossible depth outvotes everything and forces a
+         * suspend where the real controller delivers basal.
+         *
+         * The obvious hypothesis was that the binary's cost saturates, so depth beyond some point stops
+         * mattering. Implemented as a floor on the glucose fed to [trackingPenalty] and measured:
+         * ```
+         *   floor   level   trend  low+fall  post-meal  recovery   unsafe
+         *   off     0.203   0.158     0.144      0.295     0.258        0    <- shipped
+         *   2.2     0.203   0.158     0.144      0.326     0.258        0
+         *   3.0     0.203   0.158     0.144      0.338     0.258        0
+         *   3.5     0.203   0.158     0.150      0.347     0.258        1
+         *   3.9     0.203   0.158     0.160      0.351     0.260        3
+         * ```
+         * It makes the post-meal arm monotonically WORSE and starts costing safety cells at 3.5. So a
+         * saturating penalty is not what the real controller is doing, and the floor is not shipped.
+         *
+         * That leaves the two other candidates in §24.10 — the binary clamping model glucose inside the
+         * rollout (in the 7.7 KB of hand-scheduled float code that has not been read), or its optimiser
+         * horizon being effectively shorter than 180 minutes. Both are still open.
+         */
+        const val FORECAST_FLOOR_REFUTED = true
+
+        /**
+         * WHY THERE IS NO POST-HYPO HOLD HERE.
+         *
+         * `MPC::RescueCarbReduction` (0x47a70) appeared to zero the rate when recent minimum glucose was
+         * low — `min30 <= 4.2`, or `min60 <= 4.2 && min18 < 6.0`, against immediates 4.2 (0x40866666) and
+         * 6.0. That was implemented, then tested against the binary, and it is **wrong**: probed with a
+         * dip to 3.6 / 4.0 / 4.2 recovering to 7.0 mmol/L over 30–120 min, the real controller returns
+         * **1.45 U/h** — above basal — in every case. It has no post-hypo hold. The only zeroing at low
+         * glucose is §6.2's level suspend, which keys on glucose *now*, not on a recent minimum
+         * (verified: glucose still at 3.0/3.4/3.8 gives 0.00 U/h with diagnostic 'L').
+         *
+         * So either the branch decoded is not reached under these conditions, or the traced store target
+         * was wrong. Left unimplemented rather than guessed at; an implementation of it would have
+         * suspended after every recovered low.
+         */
+        const val postHypoHoldIsNotReal = true
+
+        /** `MPC::ModifyRateDeltaBIR`'s occlusion test threshold (§6.4). */
+        const val OCCLUSION_GLUCOSE_MMOL = 3.9
+
+        /**
+         * §6.5 CGM-gap threshold, in minutes. **MEASURED, not decoded.** The disassembly reads as a
+         * 20-minute test, but probing shows a 45-minute gap to the previous sample still returns a normal
+         * 1.2 U/h while a 50-minute gap falls back to profile basal with diagnostic '@'. A 20-minute
+         * threshold would revert to profile basal routinely, so the measured edge is used and the
+         * disassembly reading is presumed mis-traced.
+         */
+        const val CGM_GAP_MIN = 50.0
+
+        /** `MPC::DetermineSetPoint` immediates. Slopes are mmol/L per MINUTE. */
+        const val SLOPE_ABOVE_13 = -1.0 / 24.0          // 0xBD2AAAAB, -2.5 mmol/L/h
+        const val SLOPE_10_TO_13 = -0.028333334252238274 // 0xBCE81B4F, -1.7 mmol/L/h
+        const val SLOPE_BELOW_10 = -1.0 / 60.0          // 0xBC888889, -1.0 mmol/L/h (exp path below 10)
+        const val SETPOINT_CLAMP_MMOL = 12.0            // fmov s9, #12.0 ; fcsel .., gt
+
+        /**
+         * §4.1's prediction lead, minutes — `predictLead` = **30**, decoded.
+         *
+         * `CTimeSpanMy(0,0,30,0)` in the static constructor at 0x3b9b0. This was fitted to 60 against the
+         * probe set while the global was believed unrecoverable.
+         */
+        const val DECODED_PREDICT_LEAD_MIN = 30.0
+        /** Shipped value — fitted, see [SHIPPED_HORIZON_MIN] for why the decoded 30 is not shipped yet. */
+        const val PREDICT_LEAD_MIN = 60.0
+
+        /** `controlStep` = 25 min, decoded — `CTimeSpanMy(0,0,25,0)`. Same value as the global `dt`. */
+        const val CONTROL_STEP_MIN = 25
+
+        /** `predictionHorizonUp/Down` = 150, `controlHorizonUp/Down` = 100 — decoded. */
+        const val DECODED_HORIZON_MIN = 150
+        const val DECODED_CONTROL_HORIZON_MIN = 100
+
+        /**
+         * WHY THE DECODED HORIZONS ARE NOT SHIPPED YET.
+         *
+         * They are facts about CamAPS, read from its static constructor. But applied to this replica's
+         * RECONSTRUCTED plant and estimator they make its behaviour less like CamAPS's, not more — summed
+         * MAE 0.922 -> 1.042 — because the reconstruction's other parts (lead 60, egpHalf, qFlux, the cost
+         * weights) were co-tuned against the wrong horizon. The same happens for every decoded piece
+         * dropped into the reconstruction on its own. So the decoded values ship as a COHERENT bundle with
+         * the decoded plant and estimator, once the estimator is decoded; until then the shipped path stays
+         * on the configuration that measurably behaves most like the binary.
+         */
+        const val SHIPPED_HORIZON_MIN = 180
+        const val SHIPPED_SEGMENTS = 6
+        /**
+         * The glucose < 8.0 branch of `MPC::ModifyRateGlucoseRate` (0x472b8..0x474f0). The binary tests
+         * `GetSlope` over FOUR successive look-back windows, each x60 into mmol/L/h, each against
+         * -1.2 (immediate 0xBF99999A); only if all four are below it does it cap the command at
+         * 0.2 x `GetBIRpump(now)` (immediate 0x3E4CCCCD), downward only, and then RETURN -- skipping
+         * the attenuation entirely.
+         *
+         * That last detail matters and is easy to get backwards: where this fires, the real controller
+         * ends up with MORE insulin than [attenuationPercent] would leave, since at low glucose falling
+         * fast the attenuation reaches 100%. So this path makes the replica LESS conservative than a
+         * blanket attenuation would, not more.
+         *
+         * NOT APPLIED, on measured evidence. We have one slope estimate, not four windows, so the
+         * "sustained" precondition cannot be evaluated -- a single fast-falling sample would trigger it
+         * where the binary requires the fall to have persisted. Applying it unconditionally was tried
+         * and measured against 126 fresh probes of the real binary over glucose 5.0-8.0 x slopes 0 to
+         * -3.6 mmol/L/h: the real controller returns 0.00 U/h at EVERY point with a slope at or below
+         * -2.4, and the cap pinned the replica at 0.20 x basal across 25 of those points. That is a
+         * safety regression, so the cap is kept as documentation and the attenuation is applied at all
+         * glucose levels instead. Reinstating it needs the four-window test, i.e. a real slope history.
+         */
+        const val SUSTAINED_FALL_GLUCOSE_MMOL = 8.0
+        const val SUSTAINED_FALL_SLOPE = -1.2
+        const val SUSTAINED_FALL_CAP_FRAC = 0.2
+
+        /** Symbols `DownSlopeHalfTime` (0x22d2c) and `UpSlopeHalfTime` (0x22d30), minutes. */
+        const val DOWN_SLOPE_HALF_MIN = 60.0
+        const val UP_SLOPE_HALF_MIN = 15.0
+
+        /**
+         * `GetBIRpump`'s minimum non-zero output, U/h. **MEASURED, not decoded** — no global in the image
+         * carries it.
+         *
+         * Across all 826 reference points the binary returns 0.00 U/h 129 times and never once returns a
+         * rate in (0, 0.20): 0.05, 0.10 and 0.15 do not occur, while 0.20, 0.25, 0.30 and 0.35 each occur
+         * 4-11 times. The same 0.20 floor holds at profile basal 0.85 and at 2.40, so it is an ABSOLUTE
+         * rate and not a fraction of basal. A gap that clean in 826 samples of a continuous optimiser is a
+         * rule.
+         *
+         * It resolves the last disagreement in the reference set, which was the replica commanding one
+         * pump quantum (0.05 U/h) where the real controller suspends.
+         */
+        const val MIN_NONZERO_RATE_UHR = 0.20
+        private const val MIN_NONZERO_RATE_MU_PER_MIN = MIN_NONZERO_RATE_UHR * 1000.0 / 60.0
+
+        /** What MaximumPersonalRange assumes when GetCGMapproximate fails (immediate 5.5). */
+        const val CGM_FALLBACK_MMOL = 5.5
+
+        /**
+         * `MPC::ModifyRateGlucoseRate` (0x46f10), the glucose-slope attenuation — the real controller's
+         * ENTIRE trend response, and it sits OUTSIDE the optimiser, on its output. Returns a percentage
+         * in [0, 100] to cut the commanded rate by; 100 is a suspend.
+         *
+         * Two indices, both the same closed form with different half-lives (the immediates are 3.2 and
+         * 4.5, divided into the `ln2` symbol, hence the powers of two):
+         * ```
+         *   A9  = 2^(-1/3.2)             B9 = 2^(-(slope + 2.2)/3.2)
+         *   raw9  = 10*(B9 - A9)/(1 - A9)      idx9 = clamp(raw9, 0, 50)
+         *                                      idx10 = clamp(raw9 * 0.5, 0, 100)
+         *   A3  = 2^(-7.5/4.5)           B3 = 2^(-(cgm - 4.5)/4.5)
+         *   raw3  = 10*(B3 - A3)/(1 - A3)      idx12 = clamp(raw3, 0, 10)
+         *   att = clamp(max(idx9 * idx12, idx10), 0, 100)
+         * ```
+         * `raw9` crosses zero at slope = -1.2 mmol/L/h, so nothing is withheld until glucose is falling
+         * faster than that. `idx12` is glucose-only: 10 at 4.5 mmol/L, 0 at 12 — so the product term is
+         * inert above 12 and only `idx10` acts there.
+         *
+         * NOT YET DECODED: the chain of rules the binary runs when glucose < 8.0 (0x472b8..0x474f0),
+         * which can only ever REDUCE the rate further. This implements the >= 8.0 path only, so it is
+         * expected to be less conservative than the real controller at low glucose.
+         */
+        fun attenuationPercent(slopeMmolPerH: Double, cgmMmol: Double): Double {
+            val a9 = 2.0.pow(-1.0 / 3.2)
+            val b9 = 2.0.pow(-(slopeMmolPerH + 2.2) / 3.2)
+            val raw9 = 10.0 * (b9 - a9) / (1.0 - a9)
+            val idx9 = raw9.coerceIn(0.0, 50.0)
+            val idx10 = (raw9 * 0.5).coerceIn(0.0, 100.0)
+            val a3 = 2.0.pow(-7.5 / 4.5)
+            val b3 = 2.0.pow(-(cgmMmol - 4.5) / 4.5)
+            val raw3 = 10.0 * (b3 - a3) / (1.0 - a3)
+            val idx12 = raw3.coerceIn(0.0, 10.0)
+            return max(idx9 * idx12, idx10).coerceIn(0.0, 100.0)
+        }
+    }
+
+    data class Decision(
+        val basalUPerHr: Double,
+        val reason: String,
+        val horizonMeanUPerHr: Double,
+        val eventualMmol: Double
+    )
+
+    /** Decoded §5 ceiling on the demanded rate of fall, mmol/L per hour, by glucose zone. */
+    private fun maxFallMmolPerH(g: Double): Double = when {
+        g > 13.0 -> 2.5
+        g > 10.0 -> 1.7
+        else     -> 1.0
+    }
+
+    /**
+     * Reference trajectory: exponential approach to target, with each step clamped so the demanded fall
+     * never exceeds the zone ceiling. The clamp only ever RAISES the setpoint — it can ask for less
+     * insulin than the exponential would, never more.
+     */
+    /**
+     * `MPC::DetermineSetPoint`, vaddr 0x48b84, transcribed. This replaced an exponential approach to
+     * target with a zone-bounded ceiling on the fall, which was a plausible reading of the decoded
+     * slopes and was wrong in the one way that mattered most.
+     *
+     * ```
+     *   sp = min(setpoint0, 12.0)                       // <- the clamp; `fmov s9,#12.0; fcsel ..,gt`
+     *   each step, re-evaluated on the EVOLVING sp:
+     *     sp > 13      ->  sp += dt * -1/24             // 0xBD2AAAAB, -2.5 mmol/L/h
+     *     sp > 10      ->  sp += dt * -0.0283333        // 0xBCE81B4F, -1.7 mmol/L/h
+     *     target <= sp <= target+2 -> hold              // dead zone
+     *     otherwise    ->  exponential to target, half-life 60 min coming down / 15 min going up
+     * ```
+     *
+     * The slopes are per MINUTE, which settles the 2x ambiguity in the decoded constants: -1/24 is an
+     * absolute 2.5 mmol/L/h, not a decay constant.
+     *
+     * **The clamp is the point.** At glucose 20 the setpoint starts at 12.0, so the controller carries
+     * an 8 mmol/L tracking error from the first step and saturates — which is why the real controller
+     * needs an external ceiling at all ([maximumPersonalRange]). The old version started the reference
+     * AT current glucose and descended from there, so it never saw a large error and never asked for
+     * much insulin. That, not the cost weights, is why the replica commanded 1.00 x basal at glucose 18
+     * where the real controller commands 2.53 x.
+     *
+     * Not replicated: the real one seeds `setpoint0` by projecting the CGM forward over `predictLead`
+     * (a runtime span, the sensor-lag lead) before clamping. [predictLeadMin] defaults to 0, i.e. seed
+     * from the current estimate, because the span's runtime value is not recovered.
+     */
+    private fun referenceTrajectory(g0: Double): DoubleArray {
+        val steps = horizonMin / stepMin
+        val ref = DoubleArray(steps + 1)
+        var sp = initialSetPoint(g0)
+        ref[0] = sp
+        for (i in 1..steps) {
+            sp = advanceSetPoint(sp, stepMin.toDouble())
+            ref[i] = sp
+        }
+        return ref
+    }
+
+    /**
+     * §4.1's INITIALISATION, which is a different function from §4.2's per-step recursion — and in
+     * particular has **no dead zone**:
+     * ```
+     *   sp0 = cgm > 10 ? cgm + leadMin * zoneSlope(cgm)
+     *                  : target + (cgm - target) * 2^(-leadMin / half)
+     *   sp  = min(sp0, 12.0)
+     * ```
+     * This used to call [advanceSetPoint] with `predictLeadMin`, i.e. the recursion, which applies the
+     * `target..target+2` hold. With a lead of zero the two are identical and it never mattered; with a
+     * non-zero lead the recursion pins the reference to current glucose anywhere inside the dead zone,
+     * and the controller then has no tracking error and parks at exactly profile basal. Measured against
+     * the binary, that showed up as a flat 1.000 x basal across glucose 5.5-8.0 where the real controller
+     * ramps 0.88 -> 1.41.
+     */
+    private fun initialSetPoint(cgm: Double): Double {
+        val lead = predictLeadMin
+        val sp0 = if (cgm > 10.0) cgm + lead * zoneSlope(cgm)
+                  else targetMmol + (cgm - targetMmol) *
+                      2.0.pow(-lead / (if (cgm < targetMmol) UP_SLOPE_HALF_MIN else DOWN_SLOPE_HALF_MIN))
+        return min(sp0, SETPOINT_CLAMP_MMOL)
+    }
+
+    /** The bounded zone rate of fall at a given set-point, mmol/L per minute. */
+    private fun zoneSlope(sp: Double) = if (sp > 13.0) SLOPE_ABOVE_13 else SLOPE_10_TO_13
+
+    /** One step of the set-point recursion above. `dtMin` of 0 is a no-op, as in the binary. */
+    private fun advanceSetPoint(sp: Double, dtMin: Double): Double = when {
+        dtMin <= 0.0                              -> sp
+        sp > 13.0                                 -> sp + dtMin * SLOPE_ABOVE_13
+        sp > 10.0                                 -> sp + dtMin * SLOPE_10_TO_13
+        sp >= targetMmol && sp <= targetMmol + 2.0 -> sp          // dead zone: hold
+        else                                      -> {
+            val half = if (sp < targetMmol) UP_SLOPE_HALF_MIN else DOWN_SLOPE_HALF_MIN
+            targetMmol + (sp - targetMmol) * 2.0.pow(-dtMin / half)
+        }
+    }
+
+    /**
+     * The reference trajectory is a ONE-SIDED bound, not a setpoint, and this penalty has to say so.
+     *
+     * It used to be symmetric (`e*e`), which made the bounded reference a line the controller was
+     * rewarded for sitting exactly on -- so when the model's own glucose disposal predicted a fall
+     * FASTER than the bound, the optimiser cut insulin BELOW basal to hold glucose up on the line. The
+     * real controller does not do that: driven at BG 20 it asks for 2.55 x basal, while the replica
+     * asked for 0.67 x. Being lower than the bound is not an error to correct; only being above it is.
+     */
+    private fun trackingPenalty(g: Double, refi: Double): Double {
+        val e = g - refi
+        val mag = if (trackingExponent == 2.0) e * e else abs(e).pow(trackingExponent)
+        if (g < 4.0) return predictedLowWeight * mag      // predicted lows, either side
+        return if (e > 0.0) mag else belowReferenceWeight * mag
+    }
+
+    private fun rolloutCost(s0: DoubleArray, seq: DoubleArray, ref: DoubleArray, segLen: Int): Double {
+        var s = s0.copyOf(); var cost = 0.0
+        for (i in ref.indices) {
+            cost += trackingPenalty(model.glucoseMmol(s), ref[i])
+            val u = seq[min(seq.size - 1, i / segLen)]
+            repeat(stepMin) { s = model.step(s, u, 1.0) }
+        }
+        val lambda = effortWeight * lambdaFactor(minutesSinceMeal)
+        // TWO-SIDED. It used to read `if (du > 0.0)`, i.e. only rates ABOVE basal cost effort. Combined
+        // with a one-sided tracking bound that makes the cost perfectly FLAT across every rate from 0 to
+        // basal, so the optimiser's grid search broke the tie at whichever point it visited first -- zero.
+        // That is what put the low-and-falling arm at a -0.29 bias and made the replica suspend at
+        // glucose 7 hours after a meal where the real controller delivers 1.118 x basal, i.e. basal.
+        // Deviating below the profile is as much a deviation as deviating above it.
+        for (u in seq) { val du = u - nominalBasalMuPerMin; cost += lambda * du * du * segLen }
+        return cost
+    }
+
+    /**
+     * The minimum glucose the model reaches over the horizon if insulin delivery stopped now — the
+     * replica's stand-in for `MPC::LowestBGIfOcclusion` (0x83f00), which runs the model forward under an
+     * assumed cannula occlusion. Insulin already absorbed keeps acting; only new delivery stops.
+     */
+    private fun lowestGlucoseIfOccluded(state: DoubleArray): Double {
+        var s = state.copyOf()
+        var lo = model.glucoseMmol(s)
+        repeat(horizonMin) {
+            s = model.step(s, 0.0, 1.0)
+            lo = min(lo, model.glucoseMmol(s))
+        }
+        return lo
+    }
+
+    /**
+     * `Model::Optimise` (0x3f7b0, 7236 B), transcribed. **This is what the binary actually does**, and it
+     * is not a search.
+     *
+     * The call sequence in the disassembly settles it. A virtual call builds a sensitivity matrix `S` and
+     * its transpose, then:
+     * ```
+     *   Vector<float,8> = S * x                         ; the free response
+     *   Matrix<float,8,8> = S^T * S                     ; the Hessian
+     *   ... + lambda added on the diagonal
+     *   Matrix<float,8,8>::inv()                        ; H^-1
+     *   inline fmadd loop: result = H^-1 * g            ; ONE closed-form solve
+     * ```
+     * i.e. Tikhonov-regularised least squares, `u = (S^T S + lambda I)^-1 S^T e`, over at most EIGHT
+     * piecewise-constant control blocks — which is exactly why `CriticalErrorMPC(0x75)` fires beyond 8.
+     * The bounds are not in it at all; they are applied afterwards by the §6 output pipeline, so a suspend
+     * is the unconstrained optimum clipped at zero.
+     *
+     * ⚠️ **Correction to a first reading.** `inv()`, `operator*` and the matrix-vector multiply each appear
+     * exactly ONCE as instructions, which looked like a single closed-form solve. They are not: two
+     * backward branches span them (0x41004 -> 0x400f8 and 0x41224 -> 0x40068), so the build-and-solve
+     * EXECUTES many times. It is an iterative **Gauss-Newton** scheme that re-linearises the nonlinear
+     * predictor each pass — `ModelIMM1::PredictForOptimise` (0x603b8) calls `SubModel1::PredictStep`
+     * together with the meal machinery, so the prediction inside the optimiser is the full nonlinear
+     * model, not a linearisation. Counting instruction occurrences is not counting executions.
+     *
+     * The consequence matters more than the algorithm. A closed-form linear-quadratic solve can only
+     * express a **symmetric quadratic** cost. It cannot express an asymmetric one
+     * ([belowReferenceWeight]), a glucose-dependent one ([predictedLowWeight]) or a non-quadratic one
+     * ([trackingExponent]) — all three of which were fitted against probe outputs purely because a gridded
+     * search made them expressible. They are artefacts of the wrong optimiser, not properties of CamAPS.
+     *
+     * `S` is built here by finite differences on the plant — perturb each block by one pump quantum, roll
+     * out, record the glucose deviation at every horizon step. That is the same object the binary's
+     * virtual call produces, and it costs `nSegments + 1` rollouts against the gridded search's
+     * ~40 x nSegments x sweeps.
+     */
+    private fun solveClosedForm(state: DoubleArray, ref: DoubleArray, segLen: Int, hi: Double): DoubleArray {
+        val steps = ref.size - 1
+        val n = nSegments
+        val nominal = DoubleArray(n) { nominalBasalMuPerMin }
+
+        // COLLOCATION. `Matrix<float,8u,8u>` caps at 8x8 and the binary range-checks its runtime dims
+        // (CriticalErrorMPC(0x75) at >= 9), so `S` cannot have one row per horizon step -- 180 steps do
+        // not fit. The least-squares is collocated at one point per control block, at the END of each
+        // block, which makes S square and 8x8. The `Vector<float,180>` arrays GetDataForOptimisation
+        // fetches are the horizon DATA used to build this reduced problem, not the problem itself.
+        val check = collocationPoints(n, steps, segLen)
+        val du = 0.05 * 1000.0 / 60.0                             // one pump quantum, mU/min
+        val lambda = effortWeight * lambdaFactor(minutesSinceMeal) * LQ_LAMBDA_SCALE
+
+        // GAUSS-NEWTON. The matrix build and the solve sit inside TWO nested backward branches
+        // (0x41004 -> 0x400f8 and 0x41224 -> 0x40068), so `inv()` executes many times even though the
+        // instruction appears once: the binary re-linearises its NONLINEAR predictor
+        // (`ModelIMM1::PredictForOptimise` -> `SubModel1::PredictStep`, meal handling included) around the
+        // current sequence and takes another step. A single solve is only the first iteration of that.
+        val seq = nominal.copyOf()
+        repeat(gaussNewtonIterations) {
+            val free = rollout(state, seq, segLen, steps)
+            val e = DoubleArray(n) { ref[check[it]] - free[check[it]] }
+
+            val sMat = Array(n) { DoubleArray(n) }
+            for (j in 0 until n) {
+                val probe = seq.copyOf(); probe[j] += du
+                val resp = rollout(state, probe, segLen, steps)
+                for (i in 0 until n) sMat[i][j] = (resp[check[i]] - free[check[i]]) / du
+            }
+
+            // minimise ||e(u)||^2 + lambda ||u - nominal||^2 about the current u, so the gradient carries
+            // the effort term too: delta = (S^T S + lambda I)^-1 (S^T e - lambda (u - nominal))
+            val h = Array(n) { DoubleArray(n) }
+            val g = DoubleArray(n)
+            for (a in 0 until n) {
+                for (b in 0 until n) {
+                    var acc = 0.0
+                    for (i in 0 until n) acc += sMat[i][a] * sMat[i][b]
+                    h[a][b] = acc
+                }
+                h[a][a] += lambda
+                var acc = 0.0
+                for (i in 0 until n) acc += sMat[i][a] * e[i]
+                g[a] = acc - lambda * (seq[a] - nominalBasalMuPerMin)
+            }
+
+            val delta = solveSymmetric(h, g)
+            var moved = 0.0
+            for (k in 0 until n) {
+                val next = (seq[k] + delta[k]).coerceIn(0.0, hi)
+                moved = max(moved, abs(next - seq[k]))
+                seq[k] = next
+            }
+            if (moved < 1e-3) return seq                           // converged
+        }
+        return seq
+    }
+
+    /**
+     * Where the least-squares is collocated — one point per control block, at the block's end.
+     *
+     * UNIFORM spreads the blocks evenly over the horizon. GEOMETRIC makes the near horizon fine and the
+     * far horizon coarse, which is what most MPCs do and what `GetDataForOptimisation`'s 180-entry arrays
+     * would allow; the block LAYOUT is not decoded, only the ≤8 count is.
+     *
+     * It matters because the layout decides which part of the horizon dominates the fit. With uniform
+     * blocks the late checkpoints dominate, and a forecast that keeps falling drags the solution to a
+     * suspend on mild falls; weighting the near horizon lets the current error matter more.
+     */
+    private fun collocationPoints(n: Int, steps: Int, segLen: Int): IntArray = when (blockLayout) {
+        BlockLayout.UNIFORM -> IntArray(n) { min(steps, (it + 1) * segLen) }
+        BlockLayout.GEOMETRIC -> {
+            // cumulative fractions of the horizon, doubling: 1,2,4,8,... normalised
+            val w = DoubleArray(n) { 2.0.pow(it.toDouble()) }
+            val tot = w.sum()
+            var acc = 0.0
+            IntArray(n) { i -> acc += w[i]; max(1, min(steps, Math.round(steps * acc / tot).toInt())) }
+        }
+    }
+
+    /** Glucose at every horizon step under a piecewise-constant control sequence. */
+    private fun rollout(state: DoubleArray, seq: DoubleArray, segLen: Int, steps: Int): DoubleArray {
+        var s = state.copyOf()
+        val out = DoubleArray(steps + 1)
+        for (i in 0..steps) {
+            out[i] = model.glucoseMmol(s)
+            if (i < steps) {
+                val u = seq[min(seq.size - 1, i / segLen)]
+                repeat(stepMin) { s = model.step(s, u, 1.0) }
+            }
+        }
+        return out
+    }
+
+    /** Gauss-Jordan solve of the small symmetric system — the replica's `Matrix<float,8,8>::inv()`. */
+    private fun solveSymmetric(a: Array<DoubleArray>, b: DoubleArray): DoubleArray {
+        val n = b.size
+        val m = Array(n) { i -> DoubleArray(n + 1) { j -> if (j < n) a[i][j] else b[i] } }
+        for (c in 0 until n) {
+            var piv = c
+            for (r in c + 1 until n) if (abs(m[r][c]) > abs(m[piv][c])) piv = r
+            if (abs(m[piv][c]) < 1e-12) continue                  // singular column: leave that move at 0
+            val t = m[c]; m[c] = m[piv]; m[piv] = t
+            val d = m[c][c]
+            for (j in c..n) m[c][j] /= d
+            for (r in 0 until n) if (r != c) {
+                val f = m[r][c]
+                if (f != 0.0) for (j in c..n) m[r][j] -= f * m[c][j]
+            }
+        }
+        return DoubleArray(n) { m[it][n] }
+    }
+
+    /** The gridded search this replica used before `Model::Optimise` was read. Kept for comparison. */
+    private fun searchGridded(state: DoubleArray, ref: DoubleArray, segLen: Int, hi: Double): DoubleArray {
+        val seq = DoubleArray(nSegments) { nominalBasalMuPerMin }
+        val grid = max(0.05 * 1000.0 / 60.0, hi / 40.0)
+        repeat(sweeps) {
+            for (j in 0 until nSegments) {
+                var best = seq[j]; var bestCost = Double.MAX_VALUE
+                var u = 0.0
+                while (u <= hi + 1e-9) {
+                    seq[j] = u
+                    val c = rolloutCost(state, seq, ref, segLen)
+                    if (c < bestCost) { bestCost = c; best = u }
+                    u += grid
+                }
+                var lo = max(0.0, best - grid); var hh = min(hi, best + grid); val gr = 0.618
+                repeat(12) {
+                    val aa = hh - gr * (hh - lo); val bb = lo + gr * (hh - lo)
+                    seq[j] = aa; val ca = rolloutCost(state, seq, ref, segLen)
+                    seq[j] = bb; val cb = rolloutCost(state, seq, ref, segLen)
+                    if (ca < cb) hh = bb else lo = aa
+                }
+                seq[j] = 0.5 * (lo + hh)
+            }
+        }
+        return seq
+    }
+
+    /** One control decision. Mirrors MPC::Optimise -> GetBIR -> GetBIRpump. */
+    fun decide(stateEstimate: DoubleArray): Decision {
+        val g0 = model.glucoseMmol(stateEstimate)
+        val ref = referenceTrajectory(g0)
+        val steps = ref.size - 1
+        // CONTROL HORIZON. Each block is one `controlStep` (25 min) long, so the nSegments blocks cover
+        // controlHorizon (100 min) and the LAST block's value is held for the rest of the prediction
+        // horizon -- `seq[min(seq.size-1, i/segLen)]` in the rollout does the holding. This used to be
+        // `steps / nSegments`, which stretched the blocks across the whole prediction horizon and made
+        // the control horizon a no-op.
+        val segLen = if (controlStepMin > 0) max(1, controlStepMin / stepMin) else max(1, steps / nSegments)
+        // AAPS's own maxBasal still applies; the controller's own ceiling is usually the binding one
+        val hi = if (maxRateMuPerMin > 0.0) min(maxBasalMuPerMin, maxRateMuPerMin) else maxBasalMuPerMin
+        val seq = if (useClosedFormSolve) solveClosedForm(stateEstimate, ref, segLen, hi)
+                  else searchGridded(stateEstimate, ref, segLen, hi)
+
+        // --- §4 GetBIR: floor the command at 70% of the PLANNED horizon mean ---
+        val horizonMean = seq.average()
+        var finalU = min(hi, seq[0])                                // GetBIR is not a floor; see above
+
+        // §5 MPC::ModifyRateGlucoseRate -- the trend stage, on the optimiser's OUTPUT, before the
+        // ceiling and the deadband, which is the order the binary uses. Two mutually exclusive paths.
+        // The binary's sub-8 branch ([SUSTAINED_FALL_CAP_FRAC]) is deliberately NOT applied here; see
+        // that constant for the measurement that rules it out. Attenuation is applied at every glucose.
+        val attenuation = if (observedSlopeMmolPerH != 0.0) attenuationPercent(observedSlopeMmolPerH, g0) else 0.0
+        finalU *= (100.0 - attenuation) / 100.0
+
+        // §6.4 MPC::ModifyRateDeltaBIR -- occlusion-aware cap. LowestBGIfOcclusion is approximated by
+        // free-running the model with NO insulin over the horizon and taking the minimum, which is what
+        // "if this cannula were occluded" means. The binary also requires sm + modelBIR > sm*f; we do not
+        // have its modelBIR, so only the glucose test and the rate test are applied -- strictly a subset
+        // of its conditions, so this can only fire where the binary would.
+        val sm = if (smoothedBasalMuPerMin > 0.0) smoothedBasalMuPerMin else nominalBasalMuPerMin
+        if (finalU > sm && lowestGlucoseIfOccluded(stateEstimate) < OCCLUSION_GLUCOSE_MMOL)
+            finalU = sm
+
+        // §6.6 MPC::ModifyExercise -- during or around exercise, suspend entirely at or below 8.0 mmol/L.
+        // Far more conservative than the ordinary suspend at target-1.3; `noInsulinDuringExercise` is a
+        // GLUCOSE threshold in mmol/L, not a duration, which the name invites you to misread.
+        if (exercising && g0 <= NO_INSULIN_DURING_EXERCISE_MMOL) finalU = 0.0
+
+        // §6.5 MPC::ModifyEnoughGlucoseMeasurements -- a long enough gap in CGM data means fall back to
+        // profile basal. The threshold is MEASURED, not taken from the disassembly: see [CGM_GAP_MIN].
+        if (!cgmGapMin.isNaN() && cgmGapMin >= CGM_GAP_MIN) finalU = nominalBasalMuPerMin
+
+        // §6.7 is NOT implemented -- measurement shows the real controller has no post-hypo hold.
+        // See [postHypoHoldIsNotReal].
+
+        if (finalU > 0.0 && abs(finalU - nominalBasalMuPerMin) < deadbandFrac * nominalBasalMuPerMin)
+            finalU = nominalBasalMuPerMin                                   // integration: no TBR churn
+        if (g0 < hypoSuspendThreshold(targetMmol, mealWithinLastHour)) finalU = 0.0   // §5 ModifyRateGlucoseLevel
+
+        // GetBIRpump's minimum non-zero output: anything under 0.20 U/h is sent as a suspend.
+        if (finalU > 0.0 && finalU < MIN_NONZERO_RATE_MU_PER_MIN) finalU = 0.0
+
+        var es = stateEstimate.copyOf()
+        for (i in 0 until steps) {
+            val u = seq[min(seq.size - 1, i / segLen)]
+            repeat(stepMin) { es = model.step(es, u, 1.0) }
+        }
+        val reason = ("CamAPS | G=%.1f→%.1f | ref[+30m]=%.1f (max fall %.1f mmol/L/h) | " +
+            "BIR[%s] mean %.2f | floor %.2f | → %.2f U/hr").format(
+            g0, targetMmol, ref[min(ref.size - 1, 30 / stepMin)], maxFallMmolPerH(g0),
+            seq.joinToString(",") { "%.2f".format(it * 60 / 1000) }, horizonMean * 60 / 1000,
+            unusedBirFloorFrac * horizonMean * 60 / 1000, finalU * 60 / 1000) +
+            " att=%.0f%%@%.1fmmol/L/h".format(attenuation, observedSlopeMmolPerH)
+        return Decision(finalU * 60.0 / 1000.0, reason, horizonMean * 60.0 / 1000.0, model.glucoseMmol(es))
+    }
+}

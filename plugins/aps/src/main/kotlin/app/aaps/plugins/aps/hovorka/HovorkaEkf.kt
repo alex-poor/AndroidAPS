@@ -17,7 +17,19 @@ class HovorkaEkf(
     val model: HovorkaModel,
     initialState: DoubleArray,
     private val measNoiseVar: Double = 0.5,          // R: CGM variance (mmol/L)^2
-    processNoiseScale: Double = 1e-3                 // Q diagonal scale
+    processNoiseScale: Double = 1e-3,                // Q diagonal scale
+    // --- optional DISTURBANCE state support (EgpDisturbanceReplay) ---------------------------------
+    // A model may carry an extra state that is an unmodelled FLUX rather than a mass/concentration:
+    // it is a random walk (no deterministic drift), it may go NEGATIVE, and it needs its own noise
+    // settings. Naming it here keeps that entirely inert for every existing caller: leave
+    // [unclampedState] at -1 and this class behaves exactly as before.
+    //
+    // With initVar = 0 and processVar = 0 the state is PROVABLY frozen: row/col u of P start at zero,
+    // F[u][*] = 0 except F[u][u] = 1, so (F P F^T)[u][*] stays zero and the gain K[u] is zero forever.
+    // That is what makes the no-disturbance arm of an A/B bit-identical to the current controller.
+    private val unclampedState: Int = -1,
+    distInitVar: Double = 0.0,
+    distProcessNoiseVar: Double = 0.0
 ) : GlucoseEstimator {
     val n = model.nStates
     override var x = initialState.copyOf(); private set
@@ -26,6 +38,10 @@ class HovorkaEkf(
 
     init { // meal/insulin compartments start uncertain
         P[8][8] = 5.0; P[9][9] = 5.0; P[5][5] = 2.0; P[6][6] = 2.0
+        if (unclampedState in 0 until n) {            // disturbance state: its own prior + random-walk noise
+            P[unclampedState][unclampedState] = distInitVar
+            Q[unclampedState][unclampedState] = distProcessNoiseVar
+        }
     }
 
     override fun glucoseMmol() = model.glucoseMmol(x)
@@ -82,7 +98,12 @@ class HovorkaEkf(
         val s = P[0][0] * hInv * hInv + measNoiseVar
         // K = P H^T / S  (column vector)
         val k = DoubleArray(n) { P[it][0] * hInv / s }
-        for (i in 0 until n) x[i] = max(0.0, x[i] + k[i] * yInnov)
+        // masses and concentrations cannot go negative; a disturbance FLUX can (glucose falling faster
+        // than the model explains is as real as it rising faster), so [unclampedState] is exempt.
+        for (i in 0 until n) {
+            val v = x[i] + k[i] * yInnov
+            x[i] = if (i == unclampedState) v else max(0.0, v)
+        }
         // P = (I - K H) P
         val newP = Array(n) { DoubleArray(n) }
         for (i in 0 until n) for (j in 0 until n) {
