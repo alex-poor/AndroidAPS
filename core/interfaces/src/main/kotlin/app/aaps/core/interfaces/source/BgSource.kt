@@ -26,4 +26,14 @@ interface BgSource {
      * not this hook's.
      */
     fun onManualBg(timeMs: Long, glucoseMgdl: Int): String? = null
+
+    /**
+     * This source's authoritative sensor lifecycle (warming up / active / expired), or **null** if it
+     * cannot report one. When non-null the Overview drives the sensor pill, the warm-up hero line and
+     * the loop pill from it directly, instead of reconstructing them from the latest SENSOR_CHANGE
+     * event and the generic warm-up preference. See [SensorLifecycle] for why that fallback misreads a
+     * freshly applied sensor as "Expired" / "No recent reading".
+     */
+    val sensorLifecycle: SensorLifecycle?
+        get() = null
 }

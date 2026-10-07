@@ -49,6 +49,7 @@ import app.aaps.core.interfaces.overview.Overview
 import app.aaps.core.interfaces.overview.OverviewData
 import app.aaps.core.interfaces.plugin.ActivePlugin
 import app.aaps.core.interfaces.plugin.PluginBase
+import app.aaps.core.interfaces.source.SensorLifecycle
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.core.interfaces.profile.ProfileUtil
 import app.aaps.core.interfaces.protection.ProtectionCheck
@@ -464,10 +465,18 @@ class OverviewFragment : DaggerFragment() {
             else                  -> AapsTone.InRange // green
         }
 
+        // Sensor lifecycle, when the active CGM source can report it authoritatively (native Libre 3).
+        // Drives the sensor pill, the warm-up hero line and the loop pill below from ONE source of
+        // truth — the sensor's real activation time — instead of a stale therapy event + a generic
+        // preference. Null for sources that can't report it (Dexcom/xDrip), which keep the old path.
+        val sensorLifecycle = activePlugin.activeBgSource.sensorLifecycle
+        val warmingUp = sensorLifecycle as? SensorLifecycle.WarmingUp
+
         // Loop mode → pill label / color / looping
         val mode = loop.runningMode
         val loopActive = mode == RM.Mode.CLOSED_LOOP || mode == RM.Mode.CLOSED_LOOP_LGS || mode == RM.Mode.SUPER_BOLUS
         val loopTone = when {
+            warmingUp != null                   -> AapsTone.High  // looping, but no CGM to act on yet
             loopActive                          -> AapsTone.InRange
             mode == RM.Mode.OPEN_LOOP           -> AapsTone.High
             mode == RM.Mode.DISABLED_LOOP ||
@@ -483,7 +492,8 @@ class OverviewFragment : DaggerFragment() {
             RM.Mode.SUPER_BOLUS       -> rh.gs(app.aaps.core.ui.R.string.superbolus)
             else                      -> rh.gs(app.aaps.core.ui.R.string.pumpsuspended)
         }
-        val loopSub = if (loopActive) "· looping"
+        val loopSub = if (warmingUp != null) "· warming up ${warmingUp.minutesRemaining}m"
+        else if (loopActive) "· looping"
         else if (mode == RM.Mode.SUSPENDED_BY_USER || mode == RM.Mode.DISCONNECTED_PUMP || mode == RM.Mode.SUSPENDED_BY_DST)
             dateUtil.age(loop.minutesToEndOfSuspend() * 60000L, true, rh) else ""
 
@@ -530,6 +540,31 @@ class OverviewFragment : DaggerFragment() {
             // Sensor: a depleting countdown to EXPIRY (not elapsed age), with the warm-up window drawn
             // as a FILLING ring instead. Expiry = last SENSOR_CHANGE + life.
             //
+            // When the active CGM source reports its own lifecycle (native Libre 3, from the real
+            // activation time), that is authoritative — it is right the instant a sensor is applied,
+            // before any SENSOR_CHANGE event or reading exists, so a warming-up sensor never reads as
+            // "Expired". Sources that can't report one (Dexcom/xDrip) fall through to the event path.
+            when (val lc = sensorLifecycle) {
+                is SensorLifecycle.WarmingUp ->
+                    add(HomeUiState.Supply("Sensor", "Warming up ${lc.minutesRemaining}m", AapsTone.High, fraction = lc.fractionElapsed))
+
+                is SensorLifecycle.Active    ->
+                    add(
+                        HomeUiState.Supply(
+                            "Sensor", lc.label,
+                            when {
+                                lc.remainingHours < 12 -> AapsTone.Low
+                                lc.remainingHours < 48 -> AapsTone.High
+                                else                   -> AapsTone.InRange
+                            },
+                            fraction = lc.fractionRemaining
+                        )
+                    )
+
+                SensorLifecycle.Expired      ->
+                    add(HomeUiState.Supply("Sensor", "Expired", AapsTone.Low, fraction = 0f))
+
+                null                         ->
             // Life and warm-up come from preferences because they are per-sensor-family facts that
             // cannot be inferred from a BG broadcast. This used to hardcode 10 d ("Dexcom G6"), which
             // silently misreports every other sensor: on a 15-day Libre 3+ the ring went amber on day
@@ -569,6 +604,7 @@ class OverviewFragment : DaggerFragment() {
                     add(HomeUiState.Supply("Sensor", label, tone, fraction = fraction))
                 }
             }
+            }
             // Reservoir. This used to be drawn ONLY when `> 0`, so the pill quietly VANISHED at exactly
             // the moment it mattered — an empty cartridge looked identical to a screen that had never
             // shown one. Draw it whenever the pump has been read, and say "Empty" out loud. Thresholds
@@ -597,12 +633,13 @@ class OverviewFragment : DaggerFragment() {
         // A stale reading must never render as if live: during warm-up (or any signal gap) the hero
         // shows no value and says why, instead of the last number from hours ago. Warm-up is detected
         // from the sensor-start event + the warm-up preference — the same source as the Sensor pill.
-        val warmupLeftMin = persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.SENSOR_CHANGE)?.let { te ->
-            val warmupMs = TimeUnit.MINUTES.toMillis(preferences.get(IntKey.OverviewSensorWarmupMinutes).toLong())
-            val elapsed = now - te.timestamp
-            if (warmupMs > 0 && elapsed in 0 until warmupMs)
-                TimeUnit.MILLISECONDS.toMinutes(warmupMs - elapsed) + 1 else null
-        }
+        val warmupLeftMin = warmingUp?.minutesRemaining?.toLong()
+            ?: persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.SENSOR_CHANGE)?.let { te ->
+                val warmupMs = TimeUnit.MINUTES.toMillis(preferences.get(IntKey.OverviewSensorWarmupMinutes).toLong())
+                val elapsed = now - te.timestamp
+                if (warmupMs > 0 && elapsed in 0 until warmupMs)
+                    TimeUnit.MILLISECONDS.toMinutes(warmupMs - elapsed) + 1 else null
+            }
 
         homeState.value = HomeUiState(
             loopStateLabel = loopLabel,

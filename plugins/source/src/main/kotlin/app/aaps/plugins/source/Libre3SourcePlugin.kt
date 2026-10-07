@@ -19,6 +19,7 @@ import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.plugin.PluginDescription
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.source.BgSource
+import app.aaps.core.interfaces.source.SensorLifecycle
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.libre3.Libre3BleClient
 import app.aaps.libre3.Libre3GlucoseRecord
@@ -147,6 +148,36 @@ class Libre3SourcePlugin @Inject constructor(
             listValues = listOf(ValueWithUnit.Timestamp(startedMs), ValueWithUnit.TEType(TE.Type.SENSOR_CHANGE))
         ).subscribe({ }, { aapsLogger.error(LTag.BGSOURCE, "Libre3: sensor-start record failed", it) })
     }
+
+    /**
+     * The authoritative lifecycle the Overview reads (warm-up / active / expired). Derived from the
+     * credentials onboarding wrote immediately — real activation time, the sensor's own warm-up
+     * window and its life — so it is correct the moment a sensor is applied, before any BLE reading
+     * or SENSOR_CHANGE therapy event exists. Returns null when no sensor is configured.
+     */
+    override val sensorLifecycle: SensorLifecycle?
+        get() {
+            val c = credentials.load() ?: return null
+            val elapsedMin = ((dateUtil.now() - c.startedEpochMs) / 60_000L).toInt()
+            val lifeMin = c.lifeDays * 24 * 60
+            return when {
+                elapsedMin < 0               -> null
+                elapsedMin < c.warmupMinutes -> SensorLifecycle.WarmingUp(
+                    minutesRemaining = c.warmupMinutes - elapsedMin,
+                    fractionElapsed = (elapsedMin.toFloat() / c.warmupMinutes).coerceIn(0f, 1f)
+                )
+                elapsedMin >= lifeMin        -> SensorLifecycle.Expired
+                else                         -> {
+                    val remMin = lifeMin - elapsedMin
+                    val h = (remMin / 60).toLong()
+                    SensorLifecycle.Active(
+                        remainingHours = h,
+                        fractionRemaining = remMin.toFloat() / lifeMin,
+                        label = if (h >= 24) "${h / 24}d ${h % 24}h" else "${h}h"
+                    )
+                }
+            }
+        }
 
     /**
      * Recompute lifecycle from the credentials' activation time. Derived rather than stored, so
