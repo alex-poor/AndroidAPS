@@ -315,6 +315,12 @@ class Libre3SourcePlugin @Inject constructor(
             update {
                 it.copy(
                     connection = Libre3SensorState.Connection.Connecting,
+                    // Recompute the (time-derived) lifecycle on every disconnect. Otherwise the Sensor
+                    // tab freezes on whatever it last showed — e.g. a disconnect-backoff loop during a
+                    // failed first connection left it reading "Warming up Nm" long after warm-up ended,
+                    // disagreeing with the Overview (which recomputes live). Disconnects fire ~every
+                    // 60s, so this keeps the tab advancing without a dedicated ticker.
+                    lifecycle = lifecycleNow(),
                     signalDbm = null
                 )
             }
