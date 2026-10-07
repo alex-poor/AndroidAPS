@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
 import android.content.Context
+import android.util.Log
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -174,6 +175,7 @@ class Libre3BleClient(
     // --- lifecycle ----------------------------------------------------------
 
     override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+        Log.d(TAG, "onConnectionStateChange status=$status newState=$newState")
         when (newState) {
             BluetoothProfile.STATE_CONNECTED    -> {
                 reconnectAttempt = 0
@@ -212,30 +214,55 @@ class Libre3BleClient(
 
         // The security channel must be listening before any command is sent, otherwise the
         // sensor's reply is dropped and the handshake stalls with no error anywhere.
+        //
+        // ORDER IS LOAD-BEARING. Abbott's firmware gates the certificate exchange on the three
+        // security CCCDs being enabled in exactly this order — COMMAND_RESPONSE, then CERT_DATA,
+        // then CHALLENGE_DATA — and only then accepting the BEGIN_PAIRING command. With CERT and
+        // CHALLENGE swapped (as this was until 2026-10-07) the sensor ACKs BEGIN_PAIRING but never
+        // sends its certificate, so fresh pairing silently never completes. Matches Juggluco's
+        // getservices()/handleonDescriptorWrite chain (Libre3GattCallback.java): CommandResponse ->
+        // CertificateData -> ChallengeData -> handleMSLibre3SecurityNotificationsEnabledEvent().
+        handshakeStarted = false
         enableNotifications(Libre3Gatt.SEC_CHAR_COMMAND_RESPONSE)
-        enableNotifications(Libre3Gatt.SEC_CHAR_CHALLENGE_DATA)
         enableNotifications(Libre3Gatt.SEC_CHAR_CERT_DATA)
+        enableNotifications(Libre3Gatt.SEC_CHAR_CHALLENGE_DATA)
+        // Start the handshake from a TERMINAL queued op, not from recognising the last descriptor's
+        // write callback. The old trigger (`if uuid == SEC_CHAR_CERT_DATA in onDescriptorWrite`) was
+        // skipped whenever that final writeDescriptor returned false synchronously — enableNotifications
+        // then calls opDone() but never beginHandshake(), so pairing silently never started and the
+        // sensor dropped the untrusted link after ~10 s, forever. A queued op runs once all three CCCD
+        // writes have drained regardless of how each completed, so the handshake always begins.
+        enqueue {
+            if (!handshakeStarted) { handshakeStarted = true; beginHandshake() }
+            opDone()
+        }
     }
 
+    /** Guards the one-shot handshake start enqueued at the end of [onServicesDiscovered]. */
+    private var handshakeStarted = false
+
     private fun enableNotifications(uuid: UUID) {
-        val ch = chars[uuid] ?: return
+        val ch = chars[uuid] ?: run { Log.w(TAG, "enableNotifications: char $uuid missing"); return }
         enqueue {
             val g = gatt
             if (g == null) { opDone(); return@enqueue }
             g.setCharacteristicNotification(ch, true)
             val cccd = ch.getDescriptor(Libre3Gatt.CCC_DESCRIPTOR)
-            if (cccd == null) { opDone(); return@enqueue }
+            if (cccd == null) { Log.w(TAG, "enableNotifications: no CCCD on $uuid"); opDone(); return@enqueue }
             @Suppress("DEPRECATION")
             cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             @Suppress("DEPRECATION")
-            if (!g.writeDescriptor(cccd)) opDone()
+            val ok = g.writeDescriptor(cccd)
+            Log.d(TAG, "writeDescriptor CCCD $uuid -> $ok")
+            // writeDescriptor returning false means the write was never issued, so no onDescriptorWrite
+            // will arrive — advance the queue now, otherwise it stalls here forever.
+            if (!ok) opDone()
         }
     }
 
     override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-        val wasLast = d.characteristic.uuid == Libre3Gatt.SEC_CHAR_CERT_DATA
+        Log.d(TAG, "onDescriptorWrite ${d.characteristic.uuid} status=$status")
         opDone()
-        if (wasLast) beginHandshake()
     }
 
     /** Caller decides resume vs pairing by whether it has a stored kAuth. */
@@ -243,7 +270,9 @@ class Libre3BleClient(
 
     private fun beginHandshake() {
         val kAuth = storedKAuth
+        Log.d(TAG, "beginHandshake: ${if (kAuth != null) "resume" else "pairing"}")
         val step = if (kAuth != null) session.startResume(kAuth) else session.startPairing()
+        Log.d(TAG, "beginHandshake step=${step.javaClass.simpleName}")
         apply(step)
     }
 
@@ -278,14 +307,17 @@ class Libre3BleClient(
     }
 
     private fun sendCommand(opcode: Int) {
-        val ch = chars[Libre3Gatt.SEC_CHAR_COMMAND_RESPONSE] ?: return
+        val ch = chars[Libre3Gatt.SEC_CHAR_COMMAND_RESPONSE]
+            ?: run { Log.w(TAG, "sendCommand 0x${opcode.toString(16)}: COMMAND_RESPONSE char missing"); return }
         enqueue {
             val g = gatt
             if (g == null) { opDone(); return@enqueue }
             @Suppress("DEPRECATION")
             ch.value = byteArrayOf(opcode.toByte())
             @Suppress("DEPRECATION")
-            if (!g.writeCharacteristic(ch)) opDone()
+            val ok = g.writeCharacteristic(ch)
+            Log.d(TAG, "sendCommand 0x${opcode.toString(16)} props=0x${ch.properties.toString(16)} wt=${ch.writeType} -> $ok")
+            if (!ok) opDone()
         }
     }
 
@@ -318,6 +350,7 @@ class Libre3BleClient(
     }
 
     override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+        Log.d(TAG, "onCharacteristicWrite ${ch.uuid} status=$status")
         opDone()
         if (status != BluetoothGatt.GATT_SUCCESS) {
             listener.onError("write failed on ${ch.uuid}: $status")
@@ -353,6 +386,7 @@ class Libre3BleClient(
     }
 
     private fun onNotify(uuid: UUID, value: ByteArray) {
+        Log.d(TAG, "onNotify $uuid len=${value.size}")
         when (uuid) {
             Libre3Gatt.SEC_CHAR_COMMAND_RESPONSE -> onAnnouncement(value)
             Libre3Gatt.SEC_CHAR_CHALLENGE_DATA,
@@ -463,6 +497,7 @@ class Libre3BleClient(
     }
 
     companion object {
+        private const val TAG = "Libre3Ble"
         /** How long a connect+handshake may take before we give up and retry. */
         private const val CONNECT_WATCHDOG_MS = 45_000L
         private const val RECONNECT_BASE_DELAY_MS = 2_000L

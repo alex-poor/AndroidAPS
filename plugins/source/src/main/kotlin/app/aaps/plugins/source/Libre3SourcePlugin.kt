@@ -530,6 +530,12 @@ class Libre3SourcePlugin @Inject constructor(
          * activation, confirm the value (e.g. set it to the id Juggluco used, captured by hooking
          * `getlibreAccountIDnumber`) — a rejected activation costs a physical sensor.
          */
-        const val LIBRE3_ACCOUNT_ID: Long = 0x41415053L // "AAPS"
+        // The Libre account id baked into the sensor at NFC activation. The pairing crypto is tied to
+        // it, so this MUST match the account every sensor was activated under in Juggluco — otherwise
+        // the sensor ACKs BEGIN_PAIRING but withholds its certificate and never pairs. Was the leftover
+        // placeholder 0x41415053 ("AAPS"), which silently broke every AAPS-native activation; the real
+        // account (Juggluco "Write down!" value) is 4935647751. uint32LE-truncated in activationData,
+        // exactly as the faithful Juggluco port does.
+        const val LIBRE3_ACCOUNT_ID: Long = 4935647751L
     }
 }
