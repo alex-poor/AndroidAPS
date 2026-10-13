@@ -99,7 +99,12 @@ class WizardDialog : DaggerDialogFragment() {
                         compute = ::compute,
                         onDeliver = ::deliver,
                         onCancel = { dismiss() },
-                        initialInputs = WizardInputs(carbs = initialCarbs)
+                        initialInputs = WizardInputs(carbs = initialCarbs),
+                        quickIncrements = listOf(
+                            preferences.get(IntKey.OverviewCarbsButtonIncrement1),
+                            preferences.get(IntKey.OverviewCarbsButtonIncrement2),
+                            preferences.get(IntKey.OverviewCarbsButtonIncrement3)
+                        )
                     )
                 }
             }

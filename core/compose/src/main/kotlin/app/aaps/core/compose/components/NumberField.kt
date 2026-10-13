@@ -49,10 +49,16 @@ fun NumberField(
 ) {
     val colors = AapsTheme.colors
     fun fmt(v: Double) = String.format(Locale.getDefault(), "%.${decimals}f", v)
-    fun parse(s: String) = s.replace(',', '.').toDoubleOrNull() ?: 0.0
+    // Null = not a number yet (empty box, a lone "-" or ".") — distinct from 0. `committed` is what this
+    // text would push upstream once coerced, so we can tell "user is mid-edit" apart from "an external
+    // chip/stepper changed the value".
+    fun parseOrNull(s: String) = s.replace(',', '.').toDoubleOrNull()
+    fun committed(s: String) = parseOrNull(s)?.coerceIn(min, max)
     var text by remember { mutableStateOf(fmt(value)) }
-    // Reflect external changes (buttons / chips) without clobbering an in-progress edit.
-    LaunchedEffect(value) { if (parse(text) != value) text = fmt(value) }
+    // Reflect external changes (buttons / chips) without clobbering an in-progress edit. Comparing the
+    // *coerced* value means a digit that is transiently below `min` (e.g. the "1" while typing "120" mg/dL)
+    // isn't snapped up and rewritten under the cursor; an emptied box is left empty to type into.
+    LaunchedEffect(value) { if (committed(text) != value) text = fmt(value) }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (label.isNotBlank()) Text(label.uppercase(Locale.getDefault()), style = AapsTheme.type.label, color = colors.textSecondary)
@@ -72,7 +78,9 @@ fun NumberField(
                         value = text,
                         onValueChange = {
                             text = it
-                            onValue(parse(it).coerceIn(min, max))
+                            // Only push a real number; an empty/partial buffer leaves the value untouched so
+                            // backspacing to empty doesn't snap the field back to `min`.
+                            parseOrNull(it)?.let { v -> onValue(v.coerceIn(min, max)) }
                         },
                         singleLine = true,
                         textStyle = AapsTheme.type.cardValue.copy(color = colors.textPrimary),

@@ -55,7 +55,7 @@ fun WizardScreen(
     onDeliver: (WizardInputs) -> Unit,
     onCancel: () -> Unit,
     initialInputs: WizardInputs = WizardInputs(),
-    quickChips: List<Int> = listOf(10, 20, 40, 60)
+    quickIncrements: List<Int> = listOf(10, 20, 40)
 ) {
     val colors = AapsTheme.colors
     var inputs by remember { mutableStateOf(initialInputs) }
@@ -94,7 +94,7 @@ fun WizardScreen(
             label = "wizard-step",
             modifier = Modifier.weight(1f)
         ) { onConfirm ->
-            if (!onConfirm) InputStep(inputs, result, quickChips, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
+            if (!onConfirm) InputStep(inputs, result, quickIncrements, colors, onInputs = { inputs = it }, onContinue = { confirming = true })
             else ConfirmStep(inputs, result, colors, onDeliver = { onDeliver(inputs) }, onCancel = { confirming = false })
         }
     }
@@ -104,7 +104,7 @@ fun WizardScreen(
 private fun InputStep(
     inputs: WizardInputs,
     result: WizardResult,
-    quickChips: List<Int>,
+    quickIncrements: List<Int>,
     colors: app.aaps.core.compose.theme.AapsColors,
     onInputs: (WizardInputs) -> Unit,
     onContinue: () -> Unit
@@ -182,19 +182,21 @@ private fun InputStep(
                             onInputs(inputs.copy(carbs = inputs.carbs + 5))
                         }
                     }
+                    // Additive increments (not absolute presets): each tap adds to the running total, so large
+                    // meals (80–100 g) are a couple of taps rather than being capped at the biggest preset. Same
+                    // behaviour and shared increment prefs as the Carbs dialog.
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        quickChips.forEach { g ->
-                            val active = inputs.carbs == g
+                        quickIncrements.forEach { inc ->
                             Text(
-                                "$g",
+                                if (inc > 0) "+$inc" else "$inc",
                                 style = AapsTheme.type.listTitle,
-                                color = if (active) colors.accentOnLight else colors.textSecondary,
+                                color = colors.textSecondary,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .weight(1f)
                                     .clip(AapsTheme.shape.pill)
-                                    .clickable { onInputs(inputs.copy(carbs = g)) }
-                                    .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                    .clickable { onInputs(inputs.copy(carbs = (inputs.carbs + inc).coerceAtLeast(0))) }
+                                    .background(colors.controlFill)
                                     .padding(vertical = 10.dp)
                             )
                         }
