@@ -35,14 +35,22 @@ object Optimiser {
      * (The FastingAndGlucoseStable "hold at f13" branch and a small always-0 term are folded into the inputs.)
      */
     fun targetGlucose(finalTarget: Float, offset: Float, meanGlu3h: Float, estGlu: Float,
-                      predSD: Float, exerciseAdj: Float, fastingStable: Boolean = false): Float {
+                      predSD: Float, exerciseAdj: Float, fastingStable: Boolean = false,
+                      aggressive: Boolean = false): Float {
         val f13 = finalTarget + offset
         val gLow = minOf(meanGlu3h, estGlu)
+        // Low-glucose protection (raise target after recent lows) is KEPT even when aggressive — it is the
+        // hypo-safety term, and a reversible basal lever must still respect it.
         var tgt = f13 + (if (f13 - 0.5f <= gLow) 0f else (f13 - gLow - 0.5f) * 0.5f + 0.5f)
         if (fastingStable) tgt = f13
-        if (offset + 8f < meanGlu3h) tgt += (meanGlu3h - (offset + 8f)) * 0.5f
-        tgt += predSD * 0.5f
-        val cap = finalTarget + offset + 2f
+        if (!aggressive) {
+            // The sustained-high de-escalation: raise the target when the 3-h mean runs high, so the loop
+            // backs off. This is exactly what makes it "stick" at 11-12. AGGRESSIVE mode drops it (and the
+            // prediction-uncertainty bump) so the loop keeps aiming at finalTarget under highs.
+            if (offset + 8f < meanGlu3h) tgt += (meanGlu3h - (offset + 8f)) * 0.5f
+            tgt += predSD * 0.5f
+        }
+        val cap = finalTarget + offset + (if (aggressive) 0.5f else 2f)
         if (cap < tgt) tgt = cap
         tgt += exerciseAdj
         return tgt

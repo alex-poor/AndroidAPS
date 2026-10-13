@@ -106,9 +106,13 @@ object OutputPipeline {
      * sanity run (glucose ≈14 → mult 3, `3·max(0.463,0.9)=2.7`), matching the driven rate-sweep clip.
      */
     fun modifyMaximumPersonalRange(rate: Float, glucose: Float, profile48: FloatArray, tddC: Float, tddC10: Float,
-                                   birPump: Float, calcTDD: Float, minsSinceMeal: Float): Float {
+                                   birPump: Float, calcTDD: Float, minsSinceMeal: Float, aggressive: Boolean = false, aggroCap: Float = 1.5f): Float {
         var r = if (rate < 0f) 0f else rate
-        val mult = if (glucose <= 8f) 2.0f else if (glucose <= 12f) 2.5f else 3.0f
+        // AGGRESSIVE lifts the glucose-scaled cap multiplier (2.0/2.5/3.0 -> 3.0/4.0/5.0) so the basal ceiling
+        // is high enough to actually correct a high on a small profile basal. Still bounded downstream by the
+        // AAPS maxBasal pref + the suspend/trend-brake rules, and reversible every tick.
+        val baseMult = if (glucose <= 8f) 2.0f else if (glucose <= 12f) 2.5f else 3.0f
+        val mult = if (aggressive) baseMult * aggroCap else baseMult
         var sum = 0f; for (x in profile48) sum += x
         val floor1 = (tddC * 0.48f) / 24f
         var fVar10 = (sum / 48f) * 0.7f

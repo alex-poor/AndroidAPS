@@ -140,6 +140,12 @@ class CamapsPlugin @Inject constructor(
                 )
             )
             // (No TDD-adaptation toggle: the engine's own ModifyTDD is intrinsic; the old gated approximation is gone.)
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.CamapsAggressiveBasal,
+                    summary = R.string.camaps_aggressive_basal_summary, title = R.string.camaps_aggressive_basal_title
+                )
+            )
         }
     }
 
@@ -200,7 +206,8 @@ class CamapsPlugin @Inject constructor(
             nowMs = now, windowH = windowH, tzOffsetMs = tz, weightKg = weightKg.toFloat(),
             targetMmol = controlTargetMmol.toFloat(),
             basalAtLocalSec = { sec -> profile.getBasalTimeFromMidnight(sec).toFloat() },
-            cgm = cgmList, boluses = bolusList, carbs = carbList, tbrs = tbrList
+            cgm = cgmList, boluses = bolusList, carbs = carbList, tbrs = tbrList,
+            aggressive = preferences.get(BooleanKey.CamapsAggressiveBasal)
         )
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.rateUhr.toDouble() * 100.0) / 100.0))
         val rawCgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL

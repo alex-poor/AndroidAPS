@@ -29,6 +29,9 @@ object Tick {
         val controlStep: Int, val dtInt: Int, val totalMinutes: Int, val nSteps: Int,
         val p1: Int, val p2: Int, val bolus: Int, val mealActive: Int,
         val p9: Float, val w24: Float, val w2c: Float, val optBir: Float, val tau0: Float, val anchor: Float,
+        val aggressive: Boolean = false,
+        val boostFactor: Float = 1.0f,     // demanded-rate multiplier when aggroActive (CamAPS "Boost" = 1.35)
+        val aggroCap: Float = 1.5f,        // aggressive cap-mult = normal mult x this (lifts the ~1.6 U/hr ceiling)
     )
 
     /** The result of one tick: the delivered basal rate + the intermediate solve (for logging / diffing). */

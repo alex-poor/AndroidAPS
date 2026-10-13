@@ -11,19 +11,21 @@ package app.aaps.plugins.aps.camapsfx
  */
 object CamapsFxEngine {
     /** The default GetRate control config (p1=4 control blocks, p2=7 prediction, 25-min steps) — the binary's. */
-    private fun defaultCfg(mealActive: Int) = Tick.Config(0f, 30f, 0f, 25, 25, 150, 6, p1 = 4, p2 = 7, bolus = 0,
-        mealActive = mealActive, 0f, 0f, 0f, 0f, 0f, 0f)
+    private fun defaultCfg(mealActive: Int, aggressive: Boolean) = Tick.Config(0f, 30f, 0f, 25, 25, 150, 6, p1 = 4, p2 = 7, bolus = 0,
+        mealActive = mealActive, 0f, 0f, 0f, 0f, 0f, 0f, aggressive = aggressive,
+        boostFactor = if (aggressive) 1.8f else 1.0f, aggroCap = 1.5f)
 
     fun decide(
         nowMs: Long, windowH: Float, tzOffsetMs: Long, weightKg: Float, targetMmol: Float?,
         basalAtLocalSec: (Int) -> Float,
-        cgm: List<AapsInput.Cgm>, boluses: List<AapsInput.Bolus>, carbs: List<AapsInput.Carb>, tbrs: List<AapsInput.Tbr>
+        cgm: List<AapsInput.Cgm>, boluses: List<AapsInput.Bolus>, carbs: List<AapsInput.Carb>, tbrs: List<AapsInput.Tbr>,
+        aggressive: Boolean = false
     ): Result {
         val p = AapsInput.buildTick(nowMs, windowH, tzOffsetMs, weightKg, targetMmol, basalAtLocalSec, cgm, boluses, carbs, tbrs)
         val mealActive = if (p.meals.any { it.minute > p.nowMinute - 720 }) 1 else 0
         val r = Controller.runTick(
             p, basalUday = if (p.basalUday > 0f) p.basalUday else 10.8f,
-            coldInit = { CamapsColdInit.coldInit(p.weightKg) }, cfg = defaultCfg(mealActive),
+            coldInit = { CamapsColdInit.coldInit(p.weightKg) }, cfg = defaultCfg(mealActive, aggressive),
             mealProb = { _, _ -> 1f }, longUpdate = { false }, mealDb = MealPriorDb()
         )
         return Result(r.rate, p.cgm.size, p.boluses.size, p.meals.size, r.conv, r.target, r.predEventualMmol)

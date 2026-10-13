@@ -140,7 +140,15 @@ object Controller {
         val mealActive = if (mealSum >= 0.015f) 1 else 0
         val predSD = bank.getPredGlucSD()             // ModelIMM1::GetPredGlucSD → target += ½·predSD
         val progGlu = bank.progressGlucose(gdfo.bir[0], gdfo.dt[0], weight)   // ProgressModel 2-min prediction (trend brake)
-        val target = Optimiser.targetGlucose(profTgt, offset, meanGlu3h, p9, predSD, 0f, fastingStable = fasting)
+        // AGGRESSIVE engages ONLY for genuine, non-falling highs, judged on the RAW CGM (not just the EKF
+        // estimate, which lags on sharp drops): current CGM ≥ 10, the model estimate ≥ 10, the model 2-min
+        // trend not dropping, AND the raw CGM not falling over the last ~15 min. Elsewhere it is a no-op, so
+        // the suspend/brake safety rules stand untouched where they matter.
+        val cgmNowRaw = reducedCgm.lastOrNull()?.v ?: p9
+        val cgm15Ago = reducedCgm.lastOrNull { it.t <= p.nowMinute - 15 }?.v ?: cgmNowRaw
+        val aggroActive = cfg.aggressive && p9 >= 10f && cgmNowRaw >= 10f &&
+            (progGlu - p9) * 30f > -2.0f && (cgmNowRaw - cgm15Ago) > -0.8f
+        val target = Optimiser.targetGlucose(profTgt, offset, meanGlu3h, p9, predSD, 0f, fastingStable = fasting, aggressive = aggroActive)
         val optBir = bank.getModifiedBIR(gdfo.bir[0])   // move-penalty BIR = GetModifiedBIR (adapted), not raw profile bir[0]
         val rollTrans = ImmBank.buildTransition(gdfo.dt[1])
         // A meal entered just before `now` is stored +10 min → lands AFTER now, so the estimation (GDFL ends at now)
@@ -180,6 +188,11 @@ object Controller {
         // derived, and dormant here): #1 cap (calcTDD/exact glucose), #4 occlusion ΔBIR, #7 hypo-rescue min-BG.
         val block = if (cfg.bolus == 0) 1 else 0
         var r = solve.optimisedU[block]
+        // BOOST: scale the demanded basal when aggroActive (genuine non-falling high). This is the real
+        // "Boost" lever — it raises what the optimiser ASKS for, not just the ceiling (which rarely binds).
+        // Bounded downstream by the raised max-rate cap and, in the plugin, by the AAPS maxBasal pref;
+        // reversible every tick, so a larger factor still self-cancels the moment glucose turns.
+        if (aggroActive && cfg.boostFactor > 1.0f) r *= cfg.boostFactor
         val prevCgm = reducedCgm.lastOrNull()?.let { if (p.nowMinute - it.t <= 90) it.v else 5.5f } ?: 5.5f
         val modGlu = minOf(p9, prevCgm)                                   // min(estGlu, prevCGM) — level/exercise/brake glucose
         val roc = (progGlu - p9) * 30f
@@ -192,7 +205,7 @@ object Controller {
         // min glucose over windows for the hypo-rescue (decimated CGM as both CGM and BG source)
         fun minGlu(win: Int) = reducedCgm.filter { it.t > p.nowMinute - win && it.t <= p.nowMinute }.minOfOrNull { it.v } ?: 999f
         val (mn2h, mn1h, mn30, mn18) = listOf(minGlu(120), minGlu(60), minGlu(30), minGlu(18))
-        r = OutputPipeline.modifyMaximumPersonalRange(r, p9, prof, c, c, birPumpNow, 0f, tau0)   // #1 max-rate cap
+        r = OutputPipeline.modifyMaximumPersonalRange(r, p9, prof, c, c, birPumpNow, 0f, tau0, aggressive = aggroActive, aggroCap = cfg.aggroCap)   // #1 max-rate cap
         r = OutputPipeline.modifyRateGlucoseLevel(r, modGlu, profTgt, recentMeal)          // #2 suspend on low
         r = OutputPipeline.modifyRateGlucoseRate(r, roc, modGlu, false, 0f)                // #3 trend brake
         // #4 occlusion guard: clamp to profile when even an occluded pump would let IOB crash glucose < 3.9

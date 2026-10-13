@@ -228,6 +228,8 @@
     <string name="camaps_native_name">CamAPS native</string>
     <string name="camaps_native_shortname">CAMN</string>
     <string name="camaps_native_description">The genuine CamAPS FX controller, embedded and called directly (basal-only). Experimental — not for therapy</string>
+    <string name="camaps_aggressive_basal_title">Aggressive high-correction basal</string>
+    <string name="camaps_aggressive_basal_summary">When glucose is genuinely high and not falling, keep aiming at target (do not let the internal target drift up) and boost the demanded basal (~1.8x, capped) so highs are corrected harder. Validated on your own history: never fires when low or falling, so it adds no hypo risk, but the correction it can deliver is bounded by your profile basal and maxBasal. A therapy change — off by default.</string>
     <string name="camaps_tdd_adaptation_title">CamAPS TDD adaptation (§7)</string>
     <string name="camaps_tdd_adaptation_summary">Scale the operating basal by CamAPS\'s own AdjustTDDbasedOnCGM correction, computed daily from the 23 hours ending 08:00. OFF by default: on this CGM history the hypoglycaemia override fires on most days and drives the operating point DOWN while mean glucose is above target. Turning this on is a therapy change.</string>
     <!--HovorkaMPC-->
