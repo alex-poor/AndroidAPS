@@ -635,6 +635,13 @@ reports the engine's **own model forecast** as the predicted glucose. It is **ba
 meal handling and TDD adaptation are intrinsic to the decoded model, not user toggles — so its Algorithm tab
 shows only body weight and the standard Max Basal / Max IOB.
 
+Two behaviours are **deliberately diverged** from the stock binary for live use (and only these): **faster
+recovery after a CGM gap** — stock pins delivery to profile basal for ~20 min after a sensor outage because
+its staleness guard needs CGM coverage spanning 50 min, so this fork also opens that guard once 5 fresh
+readings have arrived in the last 10 min (confirmed signal trusted after ~5 min, not ~50; low-glucose
+suspend still runs after it) — and an **optional aggressive high-correction basal** (off by default). See the
+field guide's *Deliberate divergences* section.
+
 ### Provenance and limits
 
 - **Clean-room and binary-free.** The Kotlin is an independent reimplementation. The genuine decrypted

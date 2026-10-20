@@ -77,6 +77,19 @@ object Controller {
     /** Fixed reference TDD (the newPatient default fed to ModifyTDD; also the conv numerator). */
     const val REF_TDD = 45.0f
 
+    // --- Post-CGM-gap recovery (fork divergence from stock CamAPS) ---
+    // Stock CamAPS's "enough glucose measurements" gate (#6) requires continuous coverage SPANNING ~50 min
+    // (a reading in the last 20 min AND one in the 20-50-min-ago window). After a CGM outage that older window
+    // stays empty for ~20 min, so delivery is pinned to profile basal through a rising high the whole time —
+    // exactly when you most need a correction, since a sensor that was dark for a while typically comes back
+    // high. We additionally OPEN the gate once the sensor has streamed [MIN_CONTINUOUS_CGM_TICKS] readings
+    // within the last [CONTINUOUS_CGM_WINDOW_MIN] minutes (≈ that many minutes of 1-min CGM): a confirmed,
+    // dense fresh signal is trusted after ~5 min instead of ~50. This is purely ADDITIVE — it can only open
+    // the gate sooner, never clamp something stock would have passed — and the low-glucose suspend (#2) and
+    // hypo-rescue (#7) run AFTER this gate, so fresh readings that show a LOW still suspend normally.
+    const val MIN_CONTINUOUS_CGM_TICKS = 5
+    const val CONTINUOUS_CGM_WINDOW_MIN = 10
+
     /**
      * The whole control tick from a parsed input file — the reusable replay entry (mirrors `oneRun`). Derives
      * the operating point (conv = REF_TDD/Basal, profile×conv, x14 = mean, c = [TddAdapt.modifyTDD]), assembles
@@ -199,8 +212,10 @@ object Controller {
         val recentMeal = p.meals.any { it.minute + 10 > p.nowMinute - 60 && it.minute + 10 <= p.nowMinute }
         val exerciseActive = p.exercise.any { it.minute <= p.nowMinute + 60 && it.minute + it.a.toInt() >= p.nowMinute - 60 }
         val birPumpNow = Optimiser.getBIRpump(prof, p.localMinuteOfDay / 60, p.localMinuteOfDay % 60)
-        val recentContinuous = reducedCgm.any { it.t > p.nowMinute - 20 && it.t <= p.nowMinute } &&
-                               reducedCgm.any { it.t > p.nowMinute - 50 && it.t <= p.nowMinute - 20 }
+        val freshTicks = p.cgm.count { it.minute > p.nowMinute - CONTINUOUS_CGM_WINDOW_MIN && it.minute <= p.nowMinute }
+        val recentContinuous = (reducedCgm.any { it.t > p.nowMinute - 20 && it.t <= p.nowMinute } &&
+                                reducedCgm.any { it.t > p.nowMinute - 50 && it.t <= p.nowMinute - 20 }) ||
+                               freshTicks >= MIN_CONTINUOUS_CGM_TICKS
         val cgmWithin180 = reducedCgm.any { it.t > p.nowMinute - 180 && it.t <= p.nowMinute }
         // min glucose over windows for the hypo-rescue (decimated CGM as both CGM and BG source)
         fun minGlu(win: Int) = reducedCgm.filter { it.t > p.nowMinute - win && it.t <= p.nowMinute }.minOfOrNull { it.v } ?: 999f

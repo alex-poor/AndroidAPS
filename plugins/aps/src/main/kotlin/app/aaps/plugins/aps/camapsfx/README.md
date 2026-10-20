@@ -90,6 +90,29 @@ enabled by default and must be selected deliberately.
 
 ---
 
+## Deliberate divergences from stock CamAPS
+
+The replica is bit-exact to the genuine binary, but a small number of behaviours are **intentionally changed**
+in this fork for live use. These are the only places `Controller`/`OutputPipeline` depart from the decoded
+original:
+
+- **Faster recovery after a CGM gap.** Stock modifier #6 (`modifyEnoughGlucoseMeasurements`, the "enough
+  glucose measurements" / staleness guard) only trusts the optimiser's rate when CGM coverage **spans ~50 min**
+  — a reading in the last 20 min **and** one in the 20-to-50-min-ago window. After a sensor outage the older
+  window stays empty for ~20 min, so delivery is pinned to **profile basal** the whole time even if glucose is
+  high and rising (the optimiser is asking for a correction; the gate discards it). Since a sensor that has been
+  dark typically comes back high, this fork **additionally opens the gate once the sensor has streamed
+  `MIN_CONTINUOUS_CGM_TICKS` (5) readings within the last `CONTINUOUS_CGM_WINDOW_MIN` (10) minutes** — i.e. a
+  confirmed, dense, fresh signal is trusted after ~5 min instead of ~50. The change is **purely additive**: it
+  can only open the gate *sooner*, never clamp a tick stock would have passed, so normal continuous operation is
+  unchanged. Crucially, suspend-on-low (#2) and hypo-rescue (#7) run **after** this gate, so a fresh signal that
+  shows a *low* still suspends normally. Constants live at the top of `Controller`. Verified by replaying a real
+  156-min-gap event from `live.db`: correction delivered 16 min sooner, base still held for the first ~4 min.
+- **Optional aggressive high-correction basal** (`CamapsAggressiveBasal` pref, **off** by default) — raises what
+  the optimiser is allowed to ask for on genuine, non-falling highs; self-cancels the moment glucose turns.
+
+---
+
 ## Files
 
 | File | Role |
