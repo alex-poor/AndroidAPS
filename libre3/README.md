@@ -214,8 +214,15 @@ Pure‑JVM, no device:
   credentials write, and the existing BLE fresh‑pairing that mints the kAuth. Reader‑mode is armed
   from the sensor screen behind a confirmation; `readInfo` (safe) and `activate` (the irreversible
   `02 A0` write) are separate methods.
-- ⏳ **One live validation outstanding.** Activating a fresh sensor is irreversible, so the NFC path
-  is so far proven only off‑device — unit tests against a real 2026‑09‑22 capture (`nfc2` MAC and
+- ✅ **Fresh‑pairing send sequence completed.** The earlier fresh‑pairing attempt stalled because the
+  client never presented the **app certificate**: the real sequence is `BEGIN_PAIRING → REQUEST_CERT →
+  write the app certificate → accept the patch certificate → write our ephemeral pubkey (`0x04‖64B`) →
+  `BEGIN_RESUME` → challenge`. `Libre3AppCertificate` now carries the two Abbott app certificates (indexed
+  by security version), `Libre3SecuritySession` emits the cert/ephemeral writes off each command‑response
+  ack, and `Libre3BleClient` drives them. Resume is byte‑identical/unchanged (the extra sends are skipped
+  unless pairing). Unit‑tested green.
+- ⏳ **One live validation outstanding.** Activating a fresh sensor is irreversible, so the NFC + fresh‑pairing
+  path is so far proven only off‑device — unit tests against a real 2026‑09‑22 capture (`nfc2` MAC and
   activation time parse byte‑exact) and against the transcribed Juggluco command sequence. The first
   real activation, and pinning the account id (`LIBRE3_ACCOUNT_ID`), wait for the next sensor change.
   Until then the Juggluco import path stays as the fallback. Full plan lives in the private RE
