@@ -306,9 +306,13 @@ class Libre3BleClient(
         }
     }
 
+    /** Opcode of the most recent security command written, so its write-ack can drive the next step. */
+    private var lastCommandOpcode: Int = -1
+
     private fun sendCommand(opcode: Int) {
         val ch = chars[Libre3Gatt.SEC_CHAR_COMMAND_RESPONSE]
             ?: run { Log.w(TAG, "sendCommand 0x${opcode.toString(16)}: COMMAND_RESPONSE char missing"); return }
+        lastCommandOpcode = opcode
         enqueue {
             val g = gatt
             if (g == null) { opDone(); return@enqueue }
@@ -370,7 +374,14 @@ class Libre3BleClient(
             }
             return
         }
-        if (writeTarget == ch.uuid) writeNextFrame()
+        if (writeTarget == ch.uuid) {
+            writeNextFrame()
+        } else if (ch.uuid == Libre3Gatt.SEC_CHAR_COMMAND_RESPONSE) {
+            // A fresh pairing has sends that follow a command's write-ack (send REQUEST_CERT,
+            // write the app certificate, write our ephemeral key). Resume returns null here and
+            // is unchanged. See Libre3SecuritySession.onCommandWritten.
+            session.onCommandWritten(lastCommandOpcode)?.let { apply(it) }
+        }
     }
 
     // --- notifications ------------------------------------------------------

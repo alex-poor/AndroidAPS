@@ -39,6 +39,7 @@ class Libre3SecuritySession(
         fun beginHandshake(context: Long): Long
         fun selectAppKey(context: Long, version: Int, savedAuthorization: ByteArray?): Int
         fun acceptPatchCertificate(context: Long, cert: ByteArray): Int
+        fun createEphemeralPublicKey(context: Long): ByteArray?
         fun deriveAuthorizationRoot(context: Long, patchEphemeralPublic: ByteArray): Int
         fun encryptChallengeReply(context: Long, nonce: ByteArray, plaintext: ByteArray): ByteArray?
         fun decryptChallengeResponse(context: Long, nonce: ByteArray, ciphertext: ByteArray): ByteArray?
@@ -56,6 +57,8 @@ class Libre3SecuritySession(
             Libre3Native.selectAppKeyAndSavedAuthorization(context, version, savedAuthorization)
         override fun acceptPatchCertificate(context: Long, cert: ByteArray) =
             Libre3Native.acceptPatchCertificate(context, cert)
+        override fun createEphemeralPublicKey(context: Long) =
+            Libre3Native.createEphemeralPublicKey(context)
         override fun deriveAuthorizationRoot(context: Long, patchEphemeralPublic: ByteArray) =
             Libre3Native.deriveAuthorizationRoot(context, patchEphemeralPublic)
         override fun encryptChallengeReply(context: Long, nonce: ByteArray, plaintext: ByteArray) =
@@ -95,6 +98,11 @@ class Libre3SecuritySession(
     private var r1 = ByteArray(0)
     private var r2 = ByteArray(0)
 
+    /** True between [startPairing] and authorisation; gates the extra pairing sends. */
+    private var pairing = false
+    /** Security version selected at [startPairing]; picks the matching app certificate. */
+    private var pairingVersion = 1
+
     private fun begin(): Boolean {
         contextHandle = crypto.beginHandshake(contextHandle)
         return contextHandle != 0L
@@ -107,6 +115,7 @@ class Libre3SecuritySession(
     fun startResume(kAuth: ByteArray, securityVersion: Int = 1): Step {
         if (kAuth.size != Libre3Native.LEN_SAVED_AUTHORIZATION)
             return Step.Failed("kAuth must be ${Libre3Native.LEN_SAVED_AUTHORIZATION} bytes, got ${kAuth.size}")
+        pairing = false
         if (!begin()) return Step.Failed("beginSecurityHandshake failed")
         val rc = crypto.selectAppKey(contextHandle, securityVersion, kAuth)
         if (rc != Libre3Native.OK) return Step.Failed("selectAppKeyAndSavedAuthorization rc=$rc")
@@ -115,10 +124,53 @@ class Libre3SecuritySession(
 
     /** Fresh pairing: no stored authorisation. */
     fun startPairing(securityVersion: Int = 1): Step {
+        pairing = true
+        pairingVersion = securityVersion
         if (!begin()) return Step.Failed("beginSecurityHandshake failed")
         val rc = crypto.selectAppKey(contextHandle, securityVersion, null)
         if (rc != Libre3Native.OK) return Step.Failed("selectAppKeyAndSavedAuthorization rc=$rc")
         return Step.Command(Libre3Gatt.SecurityCommand.BEGIN_PAIRING)
+    }
+
+    /**
+     * The sends that a fresh pairing must make right after a security command's WRITE is
+     * acknowledged — the part AAPS was missing, which left the sensor silent after BEGIN_PAIRING.
+     * Returns null when nothing follows the command (resume, or a command whose reply is a
+     * notification we wait for). Mirrors Juggluco's `Libre3GattCallback` state machine (R0):
+     *
+     *   BEGIN_PAIRING(1)  →  REQUEST_CERT(2)
+     *   REQUEST_CERT(2)   →  write our 162-byte app certificate to CERT_DATA, then await the
+     *                        sensor's patch certificate
+     *   EPHEMERAL_EXCHANGE(13) → write our own ephemeral public key (0x04 ‖ 64 B) to CERT_DATA,
+     *                        then await the sensor's patch ephemeral key
+     *
+     * Everything else (BEGIN_RESUME, CHALLENGE_SENT, and the whole resume path) returns null and
+     * is driven by the sensor's notifications exactly as before.
+     */
+    fun onCommandWritten(opcode: Int): Step? {
+        if (!pairing) return null
+        return when (opcode) {
+            Libre3Gatt.SecurityCommand.BEGIN_PAIRING ->
+                Step.Command(Libre3Gatt.SecurityCommand.REQUEST_CERT)
+
+            Libre3Gatt.SecurityCommand.REQUEST_CERT -> {
+                val cert = Libre3AppCertificate.forVersion(pairingVersion)
+                    ?: return Step.Failed("no app certificate for securityVersion $pairingVersion")
+                Step.Write(Libre3Gatt.SEC_CHAR_CERT_DATA, cert, thenCommand = null)
+            }
+
+            Libre3Gatt.SecurityCommand.EPHEMERAL_EXCHANGE -> {
+                val pub = crypto.createEphemeralPublicKey(contextHandle)
+                    ?: return Step.Failed("createEphemeralPublicKey returned null")
+                // Prepend the 0x04 uncompressed-EC-point tag, as Juggluco does.
+                val framed = ByteArray(pub.size + 1)
+                framed[0] = 0x04
+                pub.copyInto(framed, 1)
+                Step.Write(Libre3Gatt.SEC_CHAR_CERT_DATA, framed, thenCommand = null)
+            }
+
+            else -> null
+        }
     }
 
     /** Patch certificate (140 B) received on SEC_CHAR_CERT_DATA during a fresh pairing. */
@@ -190,6 +242,7 @@ class Libre3SecuritySession(
         cipherHandle = crypto.initSessionCipher(cipherHandle, kEnc, ivEnc)
         if (cipherHandle == 0L) return Step.Failed("initSessionCipher failed")
 
+        pairing = false
         return Step.Authorized(kAuth, kEnc, ivEnc)
     }
 
