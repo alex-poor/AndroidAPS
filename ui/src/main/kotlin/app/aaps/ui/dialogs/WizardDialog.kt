@@ -130,6 +130,8 @@ class WizardDialog : DaggerDialogFragment() {
         // so an at-target BG (7.1 vs target 7.0) would read "high", which is useless for bolusing. Display only.
         val inRange = bgMgdl > 0 &&
             bgDisplay in preferences.get(UnitDoubleKey.OverviewLowMark)..preferences.get(UnitDoubleKey.OverviewHighMark)
+        // Distinguish a LOW from a HIGH out-of-range reading, so a hypo isn't mislabelled/mis-coloured as "high".
+        val isLow = bgMgdl > 0 && bgDisplay < preferences.get(UnitDoubleKey.OverviewLowMark)
         val delta = w.glucoseStatus?.delta ?: 0.0
         val mmol = units == GlucoseUnit.MMOL
         return WizardResult(
@@ -146,6 +148,7 @@ class WizardDialog : DaggerDialogFragment() {
             bgEntryDecimals = if (mmol) 1 else 0,
             bgUnitsLabel = if (mmol) "mmol/L" else "mg/dL",
             bgInRange = inRange,
+            bgIsLow = isLow,
             carbsInsulin = signed(w.insulinFromCarbs),
             bgInsulin = signed(w.insulinFromBG),
             iobInsulin = signed(-w.insulinFromBolusIOB - w.insulinFromBasalIOB),

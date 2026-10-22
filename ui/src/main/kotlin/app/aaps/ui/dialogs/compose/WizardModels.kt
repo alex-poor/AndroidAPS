@@ -53,6 +53,8 @@ data class WizardResult(
     val bgEntryDecimals: Int = 1,
     val bgUnitsLabel: String = "",
     val bgInRange: Boolean = true,
+    /** Out-of-range AND below the low mark — a hypo. Drives the low (not high) colour/label. */
+    val bgIsLow: Boolean = false,
     val carbsInsulin: String = "+0.00 U",
     val bgInsulin: String = "+0.00 U",
     val iobInsulin: String = "0.00 U",

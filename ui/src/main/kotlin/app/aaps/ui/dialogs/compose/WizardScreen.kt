@@ -131,17 +131,19 @@ private fun InputStep(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.clickable { editingBg = !editingBg }
                     ) {
+                        // Colour/label by range: in-range (green), low/hypo (low colour), else high.
+                        val bgColor = if (result.bgInRange) colors.inRange else if (result.bgIsLow) colors.low else colors.high
                         Column(Modifier.weight(1f)) {
                             Text(result.bgFromText.ifBlank { "From CGM" }, style = AapsTheme.type.caption, color = colors.textTertiary)
                             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(result.bgText, style = AapsTheme.type.cardValue, color = if (result.bgInRange) colors.inRange else colors.high)
+                                Text(result.bgText, style = AapsTheme.type.cardValue, color = bgColor)
                                 if (result.bgTrendArrow.isNotBlank())
-                                    Text(result.bgTrendArrow, style = AapsTheme.type.listTitle, color = if (result.bgInRange) colors.inRange else colors.high, modifier = Modifier.padding(bottom = 2.dp))
+                                    Text(result.bgTrendArrow, style = AapsTheme.type.listTitle, color = bgColor, modifier = Modifier.padding(bottom = 2.dp))
                             }
                         }
                         StatusPill(
-                            if (result.bgIsManual) "manual" else if (result.bgInRange) "in range" else "high",
-                            dotColor = if (result.bgIsManual) colors.textSecondary else if (result.bgInRange) colors.inRange else colors.high
+                            if (result.bgIsManual) "manual" else if (result.bgInRange) "in range" else if (result.bgIsLow) "low" else "high",
+                            dotColor = if (result.bgIsManual) colors.textSecondary else bgColor
                         )
                     }
                     if (editingBg) {
