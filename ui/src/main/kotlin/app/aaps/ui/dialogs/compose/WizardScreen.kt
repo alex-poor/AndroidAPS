@@ -311,6 +311,71 @@ private fun InputStep(
                         FactorRow("Superbolus", "2 h basal now", result.superBolusInsulin, colors, on = inputs.useSuperBolus, onToggle = { onInputs(inputs.copy(useSuperBolus = it)) })
                 }
             }
+
+            // Split dose: deliver part now, schedule the rest. Only meaningful when there's insulin to give,
+            // so it follows the dose breakdown and hides for a carbs-only entry. Carbs are always logged now;
+            // only the insulin is split. The second dose is a REMINDER the user confirms — never autonomous.
+            if (result.deliverable) {
+                val splitOn = inputs.splitNowPercent in 10..90
+                val doseNow = if (splitOn) result.total * inputs.splitNowPercent / 100.0 else result.total
+                val doseLater = if (splitOn) result.total - doseNow else 0.0
+                AapsCard {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("SPLIT DOSE", style = AapsTheme.type.label, color = colors.textSecondary)
+                                Text("Deliver part now, schedule the rest", style = AapsTheme.type.caption, color = colors.textTertiary)
+                            }
+                            Switch(
+                                checked = splitOn,
+                                onCheckedChange = { on -> onInputs(inputs.copy(splitNowPercent = if (on) 60 else 100, splitOffsetMin = if (on) (if (inputs.splitOffsetMin == 0) 45 else inputs.splitOffsetMin) else 0)) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = colors.onAccent, checkedTrackColor = colors.accent,
+                                    uncheckedTrackColor = colors.controlFill, uncheckedThumbColor = colors.textSecondary, uncheckedBorderColor = colors.hairline
+                                )
+                            )
+                        }
+                        if (splitOn) {
+                            Text("DELIVER NOW", style = AapsTheme.type.label, color = colors.textSecondary)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                StepperButton(AapsIcons.Remove, "minus", colors.controlFill, colors.textPrimary) {
+                                    onInputs(inputs.copy(splitNowPercent = (inputs.splitNowPercent - 10).coerceAtLeast(10)))
+                                }
+                                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${inputs.splitNowPercent}%", style = AapsTheme.type.bigValue, color = colors.textPrimary)
+                                    Text("now · rest later", style = AapsTheme.type.caption, color = colors.textTertiary)
+                                }
+                                StepperButton(Icons.Rounded.Add, "plus", colors.accentTint, colors.accentOnLight) {
+                                    onInputs(inputs.copy(splitNowPercent = (inputs.splitNowPercent + 10).coerceAtMost(90)))
+                                }
+                            }
+                            Text("SECOND DOSE IN", style = AapsTheme.type.label, color = colors.textSecondary)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                listOf(30, 45, 60, 90).forEach { m ->
+                                    val active = inputs.splitOffsetMin == m
+                                    Text(
+                                        "+${m}m",
+                                        style = AapsTheme.type.listTitle,
+                                        color = if (active) colors.accentOnLight else colors.textSecondary,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(AapsTheme.shape.pill)
+                                            .clickable { onInputs(inputs.copy(splitOffsetMin = m)) }
+                                            .background(if (active) colors.accentTintStrong else colors.controlFill)
+                                            .padding(vertical = 10.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                "Now: ${String.format(java.util.Locale.getDefault(), "%.2f", doseNow)} U · " +
+                                    "in ${inputs.splitOffsetMin} min: ${String.format(java.util.Locale.getDefault(), "%.2f", doseLater)} U (you'll confirm it)",
+                                style = AapsTheme.type.caption, color = colors.accent
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // bottom bar
@@ -398,6 +463,15 @@ private fun ConfirmStep(
                     "Carbs eaten ${-inputs.carbTime} min ago",
                 style = AapsTheme.type.body, color = colors.accent, textAlign = TextAlign.Center
             )
+        val splitOn = inputs.splitNowPercent in 10..90 && result.deliverable
+        val doseNow = if (splitOn) result.total * inputs.splitNowPercent / 100.0 else result.total
+        val doseLater = if (splitOn) result.total - doseNow else 0.0
+        if (splitOn)
+            Text(
+                "Split: delivering ${String.format(java.util.Locale.getDefault(), "%.2f", doseNow)} U now — " +
+                    "${String.format(java.util.Locale.getDefault(), "%.2f", doseLater)} U reminder in ${inputs.splitOffsetMin} min",
+                style = AapsTheme.type.body, color = colors.accent, textAlign = TextAlign.Center
+            )
         if (result.note.isNotBlank()) Text(result.note, style = AapsTheme.type.caption, color = colors.textTertiary)
         // Max-bolus cap — previously surfaced by the legacy confirm dialog we no longer show. Warn in red.
         if (result.cappedWarning.isNotBlank())
@@ -408,7 +482,7 @@ private fun ConfirmStep(
             Text(result.siteWarning, style = AapsTheme.type.body, color = colors.high, textAlign = TextAlign.Center)
 
         HoldToConfirmButton(
-            label = "Hold to deliver · ${result.totalText}",
+            label = if (splitOn) "Hold to deliver now · ${String.format(java.util.Locale.getDefault(), "%.2f", doseNow)} U" else "Hold to deliver · ${result.totalText}",
             onConfirm = onDeliver,
             enabled = result.deliverable || result.carbsOnly
         )

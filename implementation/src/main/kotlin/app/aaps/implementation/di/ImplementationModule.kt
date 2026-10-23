@@ -1,6 +1,8 @@
 package app.aaps.implementation.di
 
 import app.aaps.core.interfaces.alerts.LocalAlertUtils
+import app.aaps.core.interfaces.bolus.ScheduledBolusScheduler
+import app.aaps.implementation.bolus.ScheduledBolusSchedulerImpl
 import app.aaps.core.interfaces.lifecycle.AppLifecycle
 import app.aaps.core.interfaces.aps.APSResult
 import app.aaps.core.interfaces.aps.AutosensData
@@ -109,6 +111,7 @@ class ImplementationModule {
         @Binds fun bindProcessedTbrEbData(pProcessedTbrEbData: ProcessedTbrEbDataImpl): ProcessedTbrEbData
         @Binds fun bindUserEntryLogger(userEntryLoggerImpl: UserEntryLoggerImpl): UserEntryLogger
         @Binds fun bindDetailedBolusInfoStorage(detailedBolusInfoStorageImpl: DetailedBolusInfoStorageImpl): DetailedBolusInfoStorage
+        @Binds fun bindScheduledBolusScheduler(scheduledBolusSchedulerImpl: ScheduledBolusSchedulerImpl): ScheduledBolusScheduler
         @Binds fun bindTemporaryBasalStorage(temporaryBasalStorageImpl: TemporaryBasalStorageImpl): TemporaryBasalStorage
         @Binds fun bindTranslator(translatorImpl: TranslatorImpl): Translator
         @Binds fun bindProtectionCheck(protectionCheckImpl: ProtectionCheckImpl): ProtectionCheck

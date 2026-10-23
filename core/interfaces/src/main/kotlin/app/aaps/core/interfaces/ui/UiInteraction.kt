@@ -54,7 +54,7 @@ interface UiInteraction {
     fun runProfileSwitchDialog(fragmentManager: FragmentManager, profileName: String? = null)
     fun runTempBasalDialog(fragmentManager: FragmentManager)
     fun runTreatmentDialog(fragmentManager: FragmentManager)
-    fun runInsulinDialog(fragmentManager: FragmentManager)
+    fun runInsulinDialog(fragmentManager: FragmentManager, prefillAmount: Double? = null)
     fun runCalibrationDialog(fragmentManager: FragmentManager)
     fun runCarbsDialog(fragmentManager: FragmentManager)
     fun runTempTargetDialog(fragmentManager: FragmentManager)
@@ -107,6 +107,14 @@ interface UiInteraction {
      * @message Dialog body
      */
     fun addNotificationWithDialogResponse(id: Int, text: String, level: Int, @StringRes buttonText: Int, title: String, message: String, validityCheck: (() -> Boolean)?)
+
+    /**
+     * Raise the "second half of a split bolus is due" reminder: a sound-backed notification whose single
+     * action opens the Insulin dialog pre-filled with [units] (the user's hold-to-confirm then delivers).
+     * [id] is the pending dose's id (also the notification id), [note] a short label, [validTo] the epoch-ms
+     * after which the reminder stops nagging.
+     */
+    fun addScheduledBolusDeliverNotification(id: Int, units: Double, note: String, validTo: Long)
 
     /**
      * Add notification that executes [Runnable] after clicking button

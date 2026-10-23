@@ -237,7 +237,11 @@ class WizardDialog : DaggerDialogFragment() {
             // Trend is a CGM property. If the user overrode the CGM, its slope is not evidence about the
             // number they typed — so the trend contribution is withheld rather than silently reused.
             useTrend = inputs.useTrend && inputs.manualBg == null,
-            useAlarm = false
+            useAlarm = false,
+            // Split bolus: does NOT change the calculated total — only how executeCommon delivers it
+            // (part now, remainder scheduled as a confirm-reminder).
+            splitNowPercent = inputs.splitNowPercent,
+            splitOffsetMin = inputs.splitOffsetMin
         )
 
     private fun signed(v: Double): String {

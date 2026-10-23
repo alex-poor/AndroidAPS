@@ -107,8 +107,13 @@ class UiInteractionImpl @Inject constructor(
             .show(fragmentManager, "TreatmentDialog")
     }
 
-    override fun runInsulinDialog(fragmentManager: FragmentManager) {
+    override fun runInsulinDialog(fragmentManager: FragmentManager, prefillAmount: Double?) {
         InsulinDialog()
+            .also { dialog ->
+                prefillAmount?.let { amount ->
+                    dialog.arguments = Bundle().also { it.putDouble("prefill_amount", amount) }
+                }
+            }
             .show(fragmentManager, "InsulinDialog")
     }
 
@@ -226,6 +231,33 @@ class UiInteractionImpl @Inject constructor(
                 notificationWithActionProvider.get().with(id, text, level, validityCheck).apply {
                     action(actionButtonId, action)
                 })
+        )
+    }
+
+    override fun addScheduledBolusDeliverNotification(id: Int, units: Double, note: String, validTo: Long) {
+        val label = if (note.isBlank()) "" else "$note — "
+        rxBus.send(
+            EventNewNotification(
+                notificationWithActionProvider.get()
+                    .with(
+                        id = id,
+                        text = "${label}second dose due: ${String.format(java.util.Locale.getDefault(), "%.2f", units)} U. Tap to review and confirm.",
+                        level = Notification.NORMAL,
+                        validityCheck = null
+                    )
+                    .also { n ->
+                        n.validTo = validTo
+                        n.soundId = app.aaps.core.ui.R.raw.alarm
+                        // The action runs with contextForAction set to the current activity (see NotificationStore):
+                        // open the Insulin dialog pre-filled so the user's own hold-to-confirm delivers it. The
+                        // dose is never injected without that confirmation.
+                        n.action(app.aaps.core.ui.R.string.bolus) {
+                            (n.contextForAction as? androidx.fragment.app.FragmentActivity)?.let {
+                                runInsulinDialog(it.supportFragmentManager, units)
+                            }
+                        }
+                    }
+            )
         )
     }
 

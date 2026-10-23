@@ -35,7 +35,14 @@ data class WizardInputs(
     val useBg: Boolean = true,
     val useIob: Boolean = true,
     val useTrend: Boolean = false,
-    val useSuperBolus: Boolean = false
+    val useSuperBolus: Boolean = false,
+    /**
+     * Split bolus: percent of the calculated insulin to deliver NOW (100 = no split). The remainder is
+     * scheduled as a second dose the user confirms at [splitOffsetMin]. Carbs are always logged now.
+     */
+    val splitNowPercent: Int = 100,
+    /** Minutes from now the scheduled remainder fires. Ignored when [splitNowPercent] == 100. */
+    val splitOffsetMin: Int = 0
 )
 
 /** Computed result of running [WizardInputs] through the existing BolusWizard (strings pre-formatted). */

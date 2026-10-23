@@ -16,5 +16,8 @@ enum class StringNonKey(
     ActivePumpType(key = "active_pump_type", defaultValue = ""),
     ActivePumpSerialNumber(key = "active_pump_serial_number", defaultValue = ""),
     SmsOtpSecret("smscommunicator_otp_secret", defaultValue = ""),
-    TotalBaseBasal("TBB", defaultValue = "10.00")
+    TotalBaseBasal("TBB", defaultValue = "10.00"),
+
+    /** JSON array of pending split-bolus second doses awaiting their due-time reminder. */
+    ScheduledBoluses(key = "scheduled_boluses", defaultValue = "[]")
 }

@@ -14,6 +14,7 @@ import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.aps.GlucoseStatus
 import app.aaps.core.interfaces.aps.Loop
+import app.aaps.core.interfaces.bolus.ScheduledBolusScheduler
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -75,7 +76,8 @@ class BolusWizard @Inject constructor(
     private val uiInteraction: UiInteraction,
     private val persistenceLayer: PersistenceLayer,
     private val decimalFormatter: DecimalFormatter,
-    private val processedDeviceStatusData: ProcessedDeviceStatusData
+    private val processedDeviceStatusData: ProcessedDeviceStatusData,
+    private val scheduledBolusScheduler: ScheduledBolusScheduler
 ) {
 
     var timeStamp = dateUtil.now()
@@ -156,6 +158,12 @@ class BolusWizard @Inject constructor(
     var usePercentage: Boolean = false
     var positiveIOBOnly: Boolean = false
 
+    /** Split bolus: percent of the delivered dose to give NOW (100 = no split). See [executeCommon]. */
+    private var splitNowPercent: Int = 100
+
+    /** Minutes from now to schedule the split remainder's confirm-reminder. Ignored when [splitNowPercent] == 100. */
+    private var splitOffsetMin: Int = 0
+
     fun doCalc(
         profile: Profile,
         profileName: String,
@@ -179,7 +187,9 @@ class BolusWizard @Inject constructor(
         usePercentage: Boolean = false,
         totalPercentage: Double = 100.0,
         quickWizard: Boolean = false,
-        positiveIOBOnly: Boolean = false
+        positiveIOBOnly: Boolean = false,
+        splitNowPercent: Int = 100,
+        splitOffsetMin: Int = 0
     ): BolusWizard {
 
         this.profile = profile
@@ -205,6 +215,8 @@ class BolusWizard @Inject constructor(
         this.usePercentage = usePercentage
         this.totalPercentage = totalPercentage
         this.positiveIOBOnly = positiveIOBOnly
+        this.splitNowPercent = splitNowPercent
+        this.splitOffsetMin = splitOffsetMin
 
         // Insulin from BG
         sens = profileUtil.fromMgdlToUnits(profile.getIsfMgdlForCarbs(dateUtil.now(), "BolusWizard", config, processedDeviceStatusData))
@@ -500,6 +512,12 @@ class BolusWizard @Inject constructor(
     @SuppressLint("CheckResult")
     private fun executeCommon(ctx: Context, profile: Profile, now: Long, quickWizardEntry: QuickWizardEntry? = null) {
         val pump = activePlugin.activePump
+        // Split bolus: deliver [deliverNow] immediately, schedule [deliverLater] as a confirm-reminder.
+        // Carbs are always logged now (on the first dose); only the insulin is split. The remainder is
+        // never injected autonomously — the reminder opens the Insulin dialog for the user to confirm.
+        val splitting = insulinAfterConstraints > 0 && splitNowPercent in 10..90 && splitOffsetMin > 0
+        val deliverNow = if (splitting) Round.roundTo(insulinAfterConstraints * splitNowPercent / 100.0, pump.pumpDescription.bolusStep) else insulinAfterConstraints
+        val deliverLater = if (splitting) insulinAfterConstraints - deliverNow else 0.0
             if (insulinAfterConstraints > 0 || carbs > 0) {
                 if (useSuperBolus) {
                     if (loop.allowedNextModes().contains(RM.Mode.SUPER_BOLUS)) {
@@ -533,7 +551,7 @@ class BolusWizard @Inject constructor(
                 }
                 DetailedBolusInfo().apply {
                     eventType = TE.Type.BOLUS_WIZARD
-                    insulin = insulinAfterConstraints
+                    insulin = deliverNow
                     carbs = this@BolusWizard.carbs.toDouble()
                     context = ctx
                     mgdlGlucose = profileUtil.convertToMgdl(bg, profile.units)
@@ -554,7 +572,7 @@ class BolusWizard @Inject constructor(
                             note = notes,
                             listValues = listOfNotNull(
                                 ValueWithUnit.TEType(eventType),
-                                ValueWithUnit.Insulin(insulinAfterConstraints).takeIf { insulinAfterConstraints != 0.0 },
+                                ValueWithUnit.Insulin(deliverNow).takeIf { deliverNow != 0.0 },
                                 ValueWithUnit.Gram(this@BolusWizard.carbs).takeIf { this@BolusWizard.carbs != 0 },
                                 ValueWithUnit.Minute(carbTime).takeIf { carbTime != 0 }
                             )
@@ -565,6 +583,13 @@ class BolusWizard @Inject constructor(
                                     uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
                             }
                         })
+                        if (splitting && deliverLater > 0) {
+                            scheduledBolusScheduler.schedule(
+                                dueAt = dateUtil.now() + T.mins(splitOffsetMin.toLong()).msecs(),
+                                units = deliverLater,
+                                note = "Split 2/2"
+                            )
+                        }
                     }
                     bolusCalculatorResult?.let { persistenceLayer.insertOrUpdateBolusCalculatorResult(it).blockingGet() }
                 }

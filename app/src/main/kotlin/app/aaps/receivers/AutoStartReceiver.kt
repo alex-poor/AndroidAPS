@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import androidx.annotation.VisibleForTesting
+import app.aaps.core.interfaces.bolus.ScheduledBolusScheduler
 import app.aaps.plugins.main.general.persistentNotification.DummyServiceHelper
 import dagger.android.DaggerBroadcastReceiver
 import javax.inject.Inject
@@ -11,6 +12,7 @@ import javax.inject.Inject
 class AutoStartReceiver : DaggerBroadcastReceiver() {
 
     @Inject lateinit var dummyServiceHelper: DummyServiceHelper
+    @Inject lateinit var scheduledBolusScheduler: ScheduledBolusScheduler
 
     @SuppressLint("UnsafeProtectedBroadcastReceiver")
     override fun onReceive(context: Context, intent: Intent) {
@@ -20,7 +22,10 @@ class AutoStartReceiver : DaggerBroadcastReceiver() {
 
     @VisibleForTesting
     fun processIntent(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED)
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             dummyServiceHelper.startService(context)
+            // AlarmManager alarms do not survive a reboot — re-arm any pending split-bolus reminders.
+            scheduledBolusScheduler.rescheduleAll()
+        }
     }
 }

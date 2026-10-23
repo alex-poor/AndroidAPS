@@ -19,6 +19,7 @@ import app.aaps.core.data.ue.Action
 import app.aaps.core.data.ue.Sources
 import app.aaps.core.data.ue.ValueWithUnit
 import app.aaps.core.interfaces.aps.Loop
+import app.aaps.core.interfaces.bolus.ScheduledBolusScheduler
 import app.aaps.core.interfaces.configuration.Config
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -85,6 +86,7 @@ class InsulinDialog : DaggerDialogFragment() {
     @Inject lateinit var dateUtil: DateUtil
     @Inject lateinit var loop: Loop
     @Inject lateinit var pumpReadyGate: PumpReadyGate
+    @Inject lateinit var scheduledBolusScheduler: ScheduledBolusScheduler
 
     private var queryingProtection = false
     private val disposable = CompositeDisposable()
@@ -115,7 +117,9 @@ class InsulinDialog : DaggerDialogFragment() {
                 preferences.get(DoubleKey.OverviewInsulinButtonIncrement3)
             ),
             forceRecordOnly = config.AAPSCLIENT || suspended,
-            suspendedWarning = suspended
+            suspendedWarning = suspended,
+            // Opened from the "scheduled second dose" reminder with the dose pre-filled.
+            initialAmount = arguments?.getDouble("prefill_amount", 0.0) ?: 0.0
         )
         return ComposeView(requireContext()).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
@@ -132,6 +136,12 @@ class InsulinDialog : DaggerDialogFragment() {
         val pumpDescription = activePlugin.activePump.pumpDescription
         val insulin = inputs.amount
         val insulinAfterConstraints = constraintChecker.applyBolusConstraints(ConstraintObject(insulin, aapsLogger)).value()
+        // Split bolus: deliver part now, schedule the rest. Only when actually delivering to the pump.
+        val splitting = !inputs.recordOnly && insulinAfterConstraints > 0 && inputs.splitNowPercent in 10..90 && inputs.splitOffsetMin > 0
+        val deliverNow = if (splitting)
+            kotlin.math.round((insulinAfterConstraints * inputs.splitNowPercent / 100.0) / pumpDescription.bolusStep) * pumpDescription.bolusStep
+        else insulinAfterConstraints
+        val deliverLater = if (splitting) insulinAfterConstraints - deliverNow else 0.0
         val actions: LinkedList<String?> = LinkedList()
         val units = profileFunction.getUnits()
         val unitLabel = if (units == GlucoseUnit.MMOL) rh.gs(app.aaps.core.ui.R.string.mmol) else rh.gs(app.aaps.core.ui.R.string.mgdl)
@@ -140,9 +150,14 @@ class InsulinDialog : DaggerDialogFragment() {
 
         if (insulinAfterConstraints > 0) {
             actions.add(
-                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolus(insulinAfterConstraints, pumpDescription.bolusStep)
+                rh.gs(app.aaps.core.ui.R.string.bolus) + ": " + decimalFormatter.toPumpSupportedBolus(deliverNow, pumpDescription.bolusStep)
                     .formatColor(context, rh, app.aaps.core.ui.R.attr.bolusColor)
             )
+            if (splitting)
+                actions.add(
+                    ("Second dose: " + decimalFormatter.toPumpSupportedBolus(deliverLater, pumpDescription.bolusStep) + " in " + inputs.splitOffsetMin + " min (you'll confirm it)")
+                        .formatColor(context, rh, app.aaps.core.ui.R.attr.infoColor)
+                )
             if (recordOnlyChecked)
                 actions.add(rh.gs(app.aaps.core.ui.R.string.bolus_recorded_only).formatColor(context, rh, app.aaps.core.ui.R.attr.warningColor))
             if (abs(insulinAfterConstraints - insulin) > pumpDescription.pumpType.determineCorrectBolusStepSize(insulinAfterConstraints))
@@ -191,7 +206,7 @@ class InsulinDialog : DaggerDialogFragment() {
                     if (insulinAfterConstraints > 0) {
                         val detailedBolusInfo = DetailedBolusInfo()
                         detailedBolusInfo.eventType = TE.Type.CORRECTION_BOLUS
-                        detailedBolusInfo.insulin = insulinAfterConstraints
+                        detailedBolusInfo.insulin = deliverNow
                         detailedBolusInfo.context = context
                         detailedBolusInfo.notes = notes
                         detailedBolusInfo.timestamp = time
@@ -203,13 +218,21 @@ class InsulinDialog : DaggerDialogFragment() {
                                 note = rh.gs(app.aaps.core.ui.R.string.record) + if (notes.isNotEmpty()) ": $notes" else ""
                             ).subscribe()
                         } else {
-                            uel.log(Action.BOLUS, Sources.InsulinDialog, notes, ValueWithUnit.Insulin(insulinAfterConstraints))
+                            uel.log(Action.BOLUS, Sources.InsulinDialog, notes, ValueWithUnit.Insulin(deliverNow))
                             commandQueue.bolus(detailedBolusInfo, object : Callback() {
                                 override fun run() {
                                     if (!result.success)
                                         uiInteraction.runAlarm(result.comment, rh.gs(app.aaps.core.ui.R.string.treatmentdeliveryerror), app.aaps.core.ui.R.raw.boluserror)
                                 }
                             })
+                            if (splitting && deliverLater > 0) {
+                                scheduledBolusScheduler.schedule(
+                                    dueAt = dateUtil.now() + T.mins(inputs.splitOffsetMin.toLong()).msecs(),
+                                    units = deliverLater,
+                                    note = "Split 2/2"
+                                )
+                                ToastUtils.okToast(context, "Second dose of ${decimalFormatter.toPumpSupportedBolus(deliverLater, activePlugin.activePump.pumpDescription.bolusStep)} scheduled in ${inputs.splitOffsetMin} min")
+                            }
                         }
                     }
                 })
