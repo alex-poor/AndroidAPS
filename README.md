@@ -675,6 +675,13 @@ under-recording corrected by decoding pump status and reconciling against pump h
 own 28-day session-key expiry identified and surfaced (`0x8C NO_SHARED_KEY`) rather than presenting as a
 generic connection failure.
 
+**Split bolus.** From the bolus wizard or the manual insulin dialog, deliver part of a dose now and
+schedule the remainder for later — the carbs are logged at the meal while the insulin is split. At the
+chosen offset the second dose arrives as a notification and is delivered by the same hold-to-confirm as
+any manual bolus; nothing is injected autonomously. Pending doses are stored locally only (never synced
+to Nightscout) and re-armed across a reboot. Built for the recurring dinner pattern of bolusing part now
+and the rest once the meal lands. Reminder path not yet validated on hardware.
+
 ---
 
 ## Building
