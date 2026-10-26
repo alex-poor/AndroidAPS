@@ -385,6 +385,18 @@
         <item name="android:textSize">15sp</item>
     </style>
 
+    <!-- Overflow / popup menus, matched to the Compose design system: a rounded
+         surface-2 panel with the design's primary text colour, instead of the
+         default Material popup that clashed with the dark app. Applied via
+         app:popupTheme on the toolbar. -->
+    <style name="AppPopupOverlay" parent="ThemeOverlay.MaterialComponents.Dark">
+        <item name="android:popupBackground">@drawable/aaps_popup_bg</item>
+        <item name="android:colorBackground">@color/aaps_design_surface2</item>
+        <item name="android:textColorPrimary">@color/aaps_design_text_primary</item>
+        <item name="android:textColorSecondary">@color/aaps_design_text_primary</item>
+        <item name="android:textColor">@color/aaps_design_text_primary</item>
+    </style>
+
     <!-- Alert Dialogs -->
     <style name="DialogTheme" parent="ThemeOverlay.MaterialComponents.Dialog.Alert">
         <item name="buttonBarNegativeButtonStyle">@style/DialogOkCancelButtonStyle</item>

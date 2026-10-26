@@ -1,8 +1,8 @@
 package app.aaps.plugins.configuration.maintenance.cloud
 
-import android.widget.LinearLayout
-import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.FragmentActivity
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ConfigSheetDialog
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ImportSourceSheet
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.resources.ResourceHelper
@@ -65,29 +65,26 @@ class ImportSourceDialog @Inject constructor(
         onSourceSelected: (ImportSource) -> Unit
     ) {
         aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} ImportSourceDialog: Showing import source selection dialog")
-        
-        val dialogView = activity.layoutInflater.inflate(R.layout.dialog_import_source, null)
-        
-        val localStorageRow = dialogView.findViewById<LinearLayout>(R.id.local_storage_row)
-        val cloudStorageRow = dialogView.findViewById<LinearLayout>(R.id.cloud_storage_row)
-        
-        val dialog = AlertDialog.Builder(activity)
-            .setView(dialogView)
-            .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.cancel), null)
-            .create()
-        
-        localStorageRow.setOnClickListener {
-            aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} ImportSourceDialog: User selected LOCAL")
-            dialog.dismiss()
-            onSourceSelected(ImportSource.LOCAL)
+
+        ConfigSheetDialog.show(activity, "importSource") { dismiss ->
+            ImportSourceSheet(
+                title = rh.gs(R.string.select_import_source),
+                localTitle = rh.gs(R.string.import_from_local),
+                localSub = rh.gs(R.string.import_source_local_description),
+                cloudTitle = rh.gs(R.string.import_from_cloud),
+                cloudSub = rh.gs(R.string.import_source_cloud_description),
+                onLocal = {
+                    aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} ImportSourceDialog: User selected LOCAL")
+                    dismiss()
+                    onSourceSelected(ImportSource.LOCAL)
+                },
+                onCloud = {
+                    aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} ImportSourceDialog: User selected CLOUD")
+                    dismiss()
+                    onSourceSelected(ImportSource.CLOUD)
+                },
+                onClose = dismiss
+            )
         }
-        
-        cloudStorageRow.setOnClickListener {
-            aapsLogger.info(LTag.CORE, "${CloudConstants.LOG_PREFIX} ImportSourceDialog: User selected CLOUD")
-            dialog.dismiss()
-            onSourceSelected(ImportSource.CLOUD)
-        }
-        
-        dialog.show()
     }
 }

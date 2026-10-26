@@ -1,16 +1,15 @@
 package app.aaps.plugins.configuration.maintenance.cloud
 
-import android.content.Context
-import android.widget.CheckBox
-import android.widget.Switch
-import androidx.appcompat.app.AlertDialog
-import androidx.fragment.app.FragmentActivity
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.sharedPreferences.SP
 import app.aaps.core.ui.toast.ToastUtils
 import app.aaps.plugins.configuration.R
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ConfigSheetDialog
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ExportOptionsLabels
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ExportOptionsSheet
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ExportOptionsState
 import app.aaps.plugins.configuration.activities.DaggerAppCompatActivityWithResult
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,167 +42,58 @@ class ExportOptionsDialog @Inject constructor(
         activity: DaggerAppCompatActivityWithResult,
         onSettingsChanged: () -> Unit = {}
     ) {
-        val dialogView = activity.layoutInflater.inflate(R.layout.dialog_export_options, null)
-        
-        val allCloudSwitch = dialogView.findViewById<Switch>(R.id.all_cloud_switch)
-        val logEmailSwitch = dialogView.findViewById<Switch>(R.id.log_email_switch)
-        val logCloudSwitch = dialogView.findViewById<Switch>(R.id.log_cloud_switch)
-        val settingsLocalCheckbox = dialogView.findViewById<CheckBox>(R.id.settings_local_checkbox)
-        val settingsCloudCheckbox = dialogView.findViewById<CheckBox>(R.id.settings_cloud_checkbox)
-        val csvLocalSwitch = dialogView.findViewById<Switch>(R.id.csv_local_switch)
-        val csvCloudSwitch = dialogView.findViewById<Switch>(R.id.csv_cloud_switch)
-        
-        // Load current settings
-        allCloudSwitch.isChecked = sp.getBoolean(PREF_ALL_CLOUD_ENABLED, false)
-        logEmailSwitch.isChecked = sp.getBoolean(PREF_LOG_EMAIL_ENABLED, true) // Default to email
-        logCloudSwitch.isChecked = sp.getBoolean(PREF_LOG_CLOUD_ENABLED, false)
-        settingsLocalCheckbox.isChecked = sp.getBoolean(PREF_SETTINGS_LOCAL_ENABLED, true) // Default to local
-        settingsCloudCheckbox.isChecked = sp.getBoolean(PREF_SETTINGS_CLOUD_ENABLED, false)
-        csvLocalSwitch.isChecked = sp.getBoolean(PREF_CSV_LOCAL_ENABLED, true) // Default to local
-        csvCloudSwitch.isChecked = sp.getBoolean(PREF_CSV_CLOUD_ENABLED, false)
-        
-        // Check if cloud directory is configured
         val isCloudConfigured = cloudStorageManager.isCloudStorageActive()
-        
-        // Disable cloud options if not configured
+
+        var allCloud = sp.getBoolean(PREF_ALL_CLOUD_ENABLED, false)
+        var logEmail = sp.getBoolean(PREF_LOG_EMAIL_ENABLED, true)
+        var logCloud = sp.getBoolean(PREF_LOG_CLOUD_ENABLED, false)
+        var settingsLocal = sp.getBoolean(PREF_SETTINGS_LOCAL_ENABLED, true)
+        var settingsCloud = sp.getBoolean(PREF_SETTINGS_CLOUD_ENABLED, false)
+        var csvLocal = sp.getBoolean(PREF_CSV_LOCAL_ENABLED, true)
+        var csvCloud = sp.getBoolean(PREF_CSV_CLOUD_ENABLED, false)
+
+        // Same initial adjustments the legacy dialog made before showing.
         if (!isCloudConfigured) {
-            logCloudSwitch.isEnabled = false
-            settingsCloudCheckbox.isEnabled = false
-            csvCloudSwitch.isEnabled = false
-            
-            // Force disable cloud options and enable local/email options
-            logCloudSwitch.isChecked = false
-            settingsCloudCheckbox.isChecked = false
-            csvCloudSwitch.isChecked = false
-            
-            if (!logEmailSwitch.isChecked && !logCloudSwitch.isChecked) {
-                logEmailSwitch.isChecked = true
-            }
-            if (!settingsLocalCheckbox.isChecked && !settingsCloudCheckbox.isChecked) {
-                settingsLocalCheckbox.isChecked = true
-            }
-            if (!csvLocalSwitch.isChecked && !csvCloudSwitch.isChecked) {
-                csvLocalSwitch.isChecked = true
-            }
+            logCloud = false; settingsCloud = false; csvCloud = false
+            if (!logEmail && !logCloud) logEmail = true
+            if (!settingsLocal && !settingsCloud) settingsLocal = true
+            if (!csvLocal && !csvCloud) csvLocal = true
         }
-        
-        // Set up mutual exclusivity for log and csv rows (they still use switches)
-        setupMutualExclusivity(logEmailSwitch, logCloudSwitch)
-        setupMutualExclusivity(csvLocalSwitch, csvCloudSwitch)
-        
-        // Set up at-least-one-selected logic for settings checkboxes
-        setupAtLeastOneSelected(settingsLocalCheckbox, settingsCloudCheckbox)
-        
-        // Apply master All-Cloud behavior - shared logic for both initialization and user interaction
-        val applyAllCloudState: (Boolean) -> Unit = { enabled ->
-            if (enabled) {
-                // Require cloud for all rows, but preserve local settings checkbox state
-                logCloudSwitch.isChecked = true
-                settingsCloudCheckbox.isChecked = true
-                csvCloudSwitch.isChecked = true
-                logEmailSwitch.isChecked = false
-                // settingsLocalCheckbox - keep current state, don't force uncheck
-                csvLocalSwitch.isChecked = false
-
-                // Disable per-row toggles when master is on (except settings local which can be toggled)
-                logEmailSwitch.isEnabled = false
-                logCloudSwitch.isEnabled = false
-                // settingsLocalCheckbox stays enabled - user can choose to have both local+cloud
-                settingsCloudCheckbox.isEnabled = false
-                csvLocalSwitch.isEnabled = false
-                csvCloudSwitch.isEnabled = false
-            } else {
-                // Re-enable per-row toggles (cloud options depend on configuration)
-                // Don't reset values - just allow user to change them
-                logEmailSwitch.isEnabled = true
-                logCloudSwitch.isEnabled = isCloudConfigured
-                settingsLocalCheckbox.isEnabled = true
-                settingsCloudCheckbox.isEnabled = isCloudConfigured
-                csvLocalSwitch.isEnabled = true
-                csvCloudSwitch.isEnabled = isCloudConfigured
-            }
-        }
-        
-        // Apply initial state based on saved preferences
-        if (allCloudSwitch.isChecked && isCloudConfigured) {
-            applyAllCloudState(true)
+        if (allCloud && isCloudConfigured) {
+            logCloud = true; settingsCloud = true; csvCloud = true; logEmail = false; csvLocal = false
         }
 
-        allCloudSwitch.setOnCheckedChangeListener { _, isChecked ->
-            // If cloud not configured, block enabling master switch
-            val cloudConfigured = cloudStorageManager.isCloudStorageActive()
-            if (isChecked && !cloudConfigured) {
-                ToastUtils.warnToast(activity, rh.gs(R.string.cloud_connection_failed))
-                allCloudSwitch.isChecked = false
-                return@setOnCheckedChangeListener
-            }
-            applyAllCloudState(isChecked)
-        }
-        
-        val dialog = AlertDialog.Builder(activity)
-            .setTitle(rh.gs(R.string.export_options))
-            .setView(dialogView)
-            .setPositiveButton(rh.gs(app.aaps.core.ui.R.string.ok)) { _, _ ->
-                // Save settings
-                sp.putBoolean(PREF_ALL_CLOUD_ENABLED, allCloudSwitch.isChecked)
-                sp.putBoolean(PREF_LOG_EMAIL_ENABLED, logEmailSwitch.isChecked)
-                sp.putBoolean(PREF_LOG_CLOUD_ENABLED, logCloudSwitch.isChecked)
-                sp.putBoolean(PREF_SETTINGS_LOCAL_ENABLED, settingsLocalCheckbox.isChecked)
-                sp.putBoolean(PREF_SETTINGS_CLOUD_ENABLED, settingsCloudCheckbox.isChecked)
-                sp.putBoolean(PREF_CSV_LOCAL_ENABLED, csvLocalSwitch.isChecked)
-                sp.putBoolean(PREF_CSV_CLOUD_ENABLED, csvCloudSwitch.isChecked)
-                
-                onSettingsChanged()
-                ToastUtils.infoToast(activity, rh.gs(R.string.export_options_updated))
-            }
-            .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.cancel), null)
-            .create()
-        
-        dialog.show()
-    }
-    
-    /**
-     * Set up mutual exclusivity between two switches - when one is turned on, the other is turned off
-     */
-    private fun setupMutualExclusivity(switch1: Switch, switch2: Switch) {
-        switch1.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && switch2.isChecked) {
-                switch2.isChecked = false
-            }
-            // Ensure at least one is checked
-            if (!isChecked && !switch2.isChecked) {
-                switch1.isChecked = true
-            }
-        }
-        
-        switch2.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && switch1.isChecked) {
-                switch1.isChecked = false
-            }
-            // Ensure at least one is checked
-            if (!isChecked && !switch1.isChecked) {
-                switch2.isChecked = true
-            }
-        }
-    }
-    
-    /**
-     * Set up at-least-one-selected logic for two checkboxes
-     * Both can be selected, but at least one must be selected
-     */
-    private fun setupAtLeastOneSelected(checkbox1: CheckBox, checkbox2: CheckBox) {
-        checkbox1.setOnCheckedChangeListener { _, isChecked ->
-            // Ensure at least one is checked
-            if (!isChecked && !checkbox2.isChecked) {
-                checkbox1.isChecked = true
-            }
-        }
-        
-        checkbox2.setOnCheckedChangeListener { _, isChecked ->
-            // Ensure at least one is checked
-            if (!isChecked && !checkbox1.isChecked) {
-                checkbox2.isChecked = true
-            }
+        ConfigSheetDialog.show(activity, "exportOptions") { dismiss ->
+            ExportOptionsSheet(
+                labels = ExportOptionsLabels(
+                    title = rh.gs(R.string.export_options),
+                    allCloud = rh.gs(R.string.export_all_cloud),
+                    logSection = rh.gs(R.string.log_export_option),
+                    email = rh.gs(R.string.email_option),
+                    cloud = rh.gs(R.string.cloud_storage_option),
+                    settingsSection = rh.gs(R.string.user_settings_export_option),
+                    local = rh.gs(R.string.local_storage_option),
+                    csvSection = rh.gs(R.string.user_entries_csv_export_option),
+                    ok = rh.gs(app.aaps.core.ui.R.string.ok),
+                    cancel = rh.gs(app.aaps.core.ui.R.string.cancel),
+                    cloudNotConfigured = rh.gs(R.string.cloud_connection_failed)
+                ),
+                isCloudConfigured = isCloudConfigured,
+                initial = ExportOptionsState(allCloud, logEmail, logCloud, settingsLocal, settingsCloud, csvLocal, csvCloud),
+                onWarn = { ToastUtils.warnToast(activity, it) },
+                onSave = { s ->
+                    sp.putBoolean(PREF_ALL_CLOUD_ENABLED, s.allCloud)
+                    sp.putBoolean(PREF_LOG_EMAIL_ENABLED, s.logEmail)
+                    sp.putBoolean(PREF_LOG_CLOUD_ENABLED, s.logCloud)
+                    sp.putBoolean(PREF_SETTINGS_LOCAL_ENABLED, s.settingsLocal)
+                    sp.putBoolean(PREF_SETTINGS_CLOUD_ENABLED, s.settingsCloud)
+                    sp.putBoolean(PREF_CSV_LOCAL_ENABLED, s.csvLocal)
+                    sp.putBoolean(PREF_CSV_CLOUD_ENABLED, s.csvCloud)
+                    onSettingsChanged()
+                    ToastUtils.infoToast(activity, rh.gs(R.string.export_options_updated))
+                },
+                onClose = dismiss
+            )
         }
     }
     

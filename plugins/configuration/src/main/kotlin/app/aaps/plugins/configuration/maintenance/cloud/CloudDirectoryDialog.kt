@@ -19,8 +19,9 @@ import app.aaps.core.interfaces.plugin.ActivePlugin
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import app.aaps.core.ui.dialogs.AlertDialogHelper
+import app.aaps.core.ui.dialogs.AppDialog
+import app.aaps.plugins.configuration.maintenance.cloud.compose.CloudDirectorySheet
+import app.aaps.plugins.configuration.maintenance.cloud.compose.ConfigSheetDialog
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.net.toUri
 
@@ -53,79 +54,61 @@ class CloudDirectoryDialog @Inject constructor(
         onCloudSelected: () -> Unit = {},
         onStorageChanged: () -> Unit = {}
     ) {
-        val dialogView = activity.layoutInflater.inflate(R.layout.dialog_cloud_directory, null)
-        
-        // UI elements
-        val googleDriveRow = dialogView.findViewById<LinearLayout>(R.id.google_drive_row)
-        val googleDriveRadio = dialogView.findViewById<RadioButton>(R.id.google_drive_radio)
-        val clearAction = dialogView.findViewById<TextView>(R.id.clear_action)
-        
-        // Authorization status section UI elements
-        val authStatusSection = dialogView.findViewById<LinearLayout>(R.id.authorization_status_section)
-        val authStatusText = dialogView.findViewById<TextView>(R.id.authorization_status_text)
-        val authCheckIcon = dialogView.findViewById<ImageView>(R.id.authorization_check_icon)
-        val cloudPathText = dialogView.findViewById<TextView>(R.id.cloud_path_text)
-        
-        val currentType = cloudStorageManager.getActiveStorageType()
-        val isCloudSelected = currentType == StorageTypes.GOOGLE_DRIVE
-
-        // Initial state: set radio button based on current settings
-        googleDriveRadio.isChecked = isCloudSelected
-        
-        // Update authorization status section
-        updateAuthorizationStatusSection(
-            activity,
-            authStatusSection,
-            authStatusText,
-            authCheckIcon,
-            cloudPathText
-        )
-
-        // Use MaterialAlertDialogBuilder with DialogTheme to match project style
-        // Title is now in the layout itself, so we don't use setCustomTitle
-        val dialog = MaterialAlertDialogBuilder(activity, app.aaps.core.ui.R.style.DialogTheme)
-            .setView(dialogView)
-            .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.cancel), null)
-            .create()
-        
-        // Top-right clear: equivalent to the original local storage clear action
-        clearAction.setOnClickListener {
-            val wasCloud = cloudStorageManager.isCloudStorageActive()
-            val proceedClear: () -> Unit = {
-                cloudStorageManager.clearAllCredentials()
-                cloudStorageManager.setActiveStorageType(StorageTypes.LOCAL)
-                cloudStorageManager.clearConnectionError()
-                // Reset export destination settings to local/email mode
-                exportOptionsDialog.resetToLocalSettings()
-                onLocalSelected()
-                onStorageChanged()
-                ToastUtils.infoToast(activity, rh.gs(app.aaps.core.ui.R.string.success))
-                // Reflect selection state on UI
-                googleDriveRadio.isChecked = false
-                dialog.dismiss()
-            }
-            if (wasCloud) {
-                MaterialAlertDialogBuilder(activity, app.aaps.core.ui.R.style.DialogTheme)
-                    .setCustomTitle(AlertDialogHelper.buildCustomTitle(activity, rh.gs(R.string.clear_cloud_settings)))
-                    .setMessage(rh.gs(R.string.clear_cloud_settings_message))
-                    .setPositiveButton(rh.gs(app.aaps.core.ui.R.string.yes)) { _, _ -> proceedClear() }
-                    .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.no), null)
-                    .show()
-            } else {
-                proceedClear()
-            }
+        // The same content as the legacy custom layout — the provider row, its
+        // authorisation state and a clear action — now a design-system sheet.
+        val provider = cloudStorageManager.getProvider(StorageTypes.GOOGLE_DRIVE)
+        val hasCredentials = provider?.hasValidCredentials() == true
+        val hasConnectionError = cloudStorageManager.hasConnectionError()
+        val isCloudSelected = cloudStorageManager.getActiveStorageType() == StorageTypes.GOOGLE_DRIVE
+        val authLine: String? = when {
+            !hasCredentials    -> null
+            hasConnectionError -> rh.gs(provider!!.reAuthRequiredTextResId)
+            else               -> rh.gs(provider!!.authorizedTextResId)
         }
-        
-        // Google Drive row click
-        val handleGoogleDriveClick = {
-            googleDriveRadio.isChecked = true
-            dialog.dismiss()
-            handleCloudSelection(activity, StorageTypes.GOOGLE_DRIVE, onCloudSelected, onStorageChanged)
+        val cloudPath = if (hasCredentials) CloudConstants.CLOUD_PATH_EXPORT else null
+
+        ConfigSheetDialog.show(activity, "cloudDirectory") { dismiss ->
+            CloudDirectorySheet(
+                title = rh.gs(R.string.select_storage_type),
+                driveTitle = rh.gs(R.string.storage_google_drive),
+                driveSub = rh.gs(R.string.backup_to_google_drive),
+                selected = isCloudSelected,
+                authLine = authLine,
+                authWarning = hasCredentials && hasConnectionError,
+                cloudPath = cloudPath,
+                clearLabel = rh.gs(R.string.clear_action),
+                cancelLabel = rh.gs(app.aaps.core.ui.R.string.cancel),
+                onDrive = {
+                    dismiss()
+                    handleCloudSelection(activity, StorageTypes.GOOGLE_DRIVE, onCloudSelected, onStorageChanged)
+                },
+                onClear = {
+                    val wasCloud = cloudStorageManager.isCloudStorageActive()
+                    val proceedClear: () -> Unit = {
+                        cloudStorageManager.clearAllCredentials()
+                        cloudStorageManager.setActiveStorageType(StorageTypes.LOCAL)
+                        cloudStorageManager.clearConnectionError()
+                        exportOptionsDialog.resetToLocalSettings()
+                        onLocalSelected()
+                        onStorageChanged()
+                        ToastUtils.infoToast(activity, rh.gs(app.aaps.core.ui.R.string.success))
+                        dismiss()
+                    }
+                    if (wasCloud) {
+                        AppDialog.show(
+                            activity,
+                            rh.gs(R.string.clear_cloud_settings),
+                            rh.gs(R.string.clear_cloud_settings_message),
+                            listOf(
+                                AppDialog.Button(rh.gs(app.aaps.core.ui.R.string.yes), primary = true, onClick = { proceedClear() }),
+                                AppDialog.Button(rh.gs(app.aaps.core.ui.R.string.no))
+                            )
+                        )
+                    } else proceedClear()
+                },
+                onClose = dismiss
+            )
         }
-        googleDriveRow.setOnClickListener { handleGoogleDriveClick() }
-        googleDriveRadio.setOnClickListener { handleGoogleDriveClick() }
-        
-        dialog.show()
     }
     
     /** Handle cloud storage selection */
@@ -173,20 +156,23 @@ class CloudDirectoryDialog @Inject constructor(
         onStorageChanged: () -> Unit
     ) {
         activity.runOnUiThread {
-            MaterialAlertDialogBuilder(activity, app.aaps.core.ui.R.style.DialogTheme)
-                .setCustomTitle(AlertDialogHelper.buildCustomTitle(activity, rh.gs(R.string.enable_cloud_export_title)))
-                .setMessage(rh.gs(R.string.enable_cloud_export_message))
-                .setPositiveButton(rh.gs(app.aaps.core.ui.R.string.yes)) { _, _ ->
-                    exportOptionsDialog.enableAllCloud()
-                    onStorageChanged()
-                    ToastUtils.longInfoToast(activity, rh.gs(R.string.can_change_in_export_settings))
-                }
-                .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.no)) { _, _ ->
-                    // Still enable local storage even when user declines cloud export
-                    exportOptionsDialog.enableLocalStorage()
-                    ToastUtils.longInfoToast(activity, rh.gs(R.string.can_change_in_export_settings))
-                }
-                .show()
+            AppDialog.show(
+                activity,
+                rh.gs(R.string.enable_cloud_export_title),
+                rh.gs(R.string.enable_cloud_export_message),
+                listOf(
+                    AppDialog.Button(rh.gs(app.aaps.core.ui.R.string.yes), primary = true, onClick = {
+                        exportOptionsDialog.enableAllCloud()
+                        onStorageChanged()
+                        ToastUtils.longInfoToast(activity, rh.gs(R.string.can_change_in_export_settings))
+                    }),
+                    AppDialog.Button(rh.gs(app.aaps.core.ui.R.string.no), onClick = {
+                        // Still enable local storage even when user declines cloud export
+                        exportOptionsDialog.enableLocalStorage()
+                        ToastUtils.longInfoToast(activity, rh.gs(R.string.can_change_in_export_settings))
+                    })
+                )
+            )
         }
     }
     
@@ -291,25 +277,12 @@ class CloudDirectoryDialog @Inject constructor(
         providerName: String,
         onResult: (cancelled: Boolean) -> Unit
     ) {
-        val dialog = MaterialAlertDialogBuilder(activity, app.aaps.core.ui.R.style.DialogTheme)
-            .setCustomTitle(AlertDialogHelper.buildCustomTitle(
-                activity, 
-                rh.gs(R.string.cloud_authorization_title, providerName)
-            ))
-            .setMessage(rh.gs(R.string.cloud_authorization_message, providerName))
-            .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.cancel)) { _, _ ->
-                onResult(true)
-            }
-            .setCancelable(false)
-            .create()
-        
-        dialog.show()
-        
-        // Immediately signal waiting started (dialog stays until flow finishes externally)
+        // The legacy version created an alert, showed it, and dismissed it in the
+        // same breath — it never stayed on screen. The only thing it did was
+        // signal that waiting had started, which is preserved here.
         onResult(false)
-        dialog.dismiss()
     }
-    
+
     /** Reauthorize dialog */
     private fun showReauthorizeDialog(
         activity: DaggerAppCompatActivityWithResult,
@@ -317,25 +290,26 @@ class CloudDirectoryDialog @Inject constructor(
         onSuccess: () -> Unit,
         onStorageChanged: () -> Unit
     ) {
-        MaterialAlertDialogBuilder(activity, app.aaps.core.ui.R.style.DialogTheme)
-            .setCustomTitle(AlertDialogHelper.buildCustomTitle(
-                activity, 
-                rh.gs(R.string.cloud_connection_failed)
-            ))
-            .setMessage(rh.gs(R.string.cloud_reauthorize_message))
-            .setPositiveButton(rh.gs(R.string.reauthorize)) { _, _ ->
-                cloudStorageManager.clearAllCredentials()
-                activity.lifecycleScope.launch {
-                    startAuthFlow(activity, storageType, onSuccess, onStorageChanged)
-                }
-            }
-            .setNegativeButton(rh.gs(app.aaps.core.ui.R.string.cancel), null)
-            .show()
+        AppDialog.show(
+            activity,
+            rh.gs(R.string.cloud_connection_failed),
+            rh.gs(R.string.cloud_reauthorize_message),
+            listOf(
+                AppDialog.Button(rh.gs(R.string.reauthorize), primary = true, onClick = {
+                    cloudStorageManager.clearAllCredentials()
+                    activity.lifecycleScope.launch {
+                        startAuthFlow(activity, storageType, onSuccess, onStorageChanged)
+                    }
+                }),
+                AppDialog.Button(rh.gs(app.aaps.core.ui.R.string.cancel))
+            )
+        )
     }
-    
+
     /**
-     * Update authorization status section based on current cloud storage state
+     * Unused legacy status-section updater, kept out of the sheet path.
      */
+    @Suppress("unused", "UNUSED_PARAMETER")
     private fun updateAuthorizationStatusSection(
         activity: DaggerAppCompatActivityWithResult,
         authStatusSection: LinearLayout,
@@ -346,11 +320,11 @@ class CloudDirectoryDialog @Inject constructor(
         val provider = cloudStorageManager.getProvider(StorageTypes.GOOGLE_DRIVE)
         val hasCredentials = provider?.hasValidCredentials() == true
         val hasConnectionError = cloudStorageManager.hasConnectionError()
-        
+
         if (hasCredentials) {
             // Show authorization status section
             authStatusSection.visibility = View.VISIBLE
-            
+
             if (hasConnectionError) {
                 // Need re-authorization - use provider's resource ID
                 authStatusText.text = rh.gs(provider.reAuthRequiredTextResId)
@@ -364,7 +338,7 @@ class CloudDirectoryDialog @Inject constructor(
                 authCheckIcon.setImageResource(R.drawable.ic_meta_ok)
                 authCheckIcon.setColorFilter(activity.getColor(R.color.cloud_status_success))
             }
-            
+
             // Set cloud path
             cloudPathText.text = CloudConstants.CLOUD_PATH_EXPORT
         } else {

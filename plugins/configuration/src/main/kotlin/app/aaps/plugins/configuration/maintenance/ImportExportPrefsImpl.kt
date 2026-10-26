@@ -85,7 +85,8 @@ import javax.inject.Inject
 
 // Added for dialog callback explicit types
 import android.content.DialogInterface
-import androidx.appcompat.app.AlertDialog
+import app.aaps.core.ui.dialogs.AlertDialogHelper
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
  * Created by mike on 03.07.2016.
@@ -717,12 +718,11 @@ class ImportExportPrefsImpl @Inject constructor(
     }
 
     private fun importFromCloud(activity: FragmentActivity) {
-        // Show loading indicator
-        val progressDialog = AlertDialog.Builder(activity)
-            .setTitle(rh.gs(R.string.import_from_cloud))
-            .setMessage(rh.gs(R.string.loading_from_cloud))
-            .setCancelable(false)
-            .create()
+        // Show loading indicator — a design-system progress sheet that keeps the
+        // setMessage/dismiss surface the flow below relies on.
+        val progressDialog = app.aaps.plugins.configuration.maintenance.cloud.compose.ProgressSheetController(
+            activity, rh.gs(R.string.import_from_cloud), rh.gs(R.string.loading_from_cloud)
+        )
         progressDialog.show()
         
         activity.lifecycleScope.launch {

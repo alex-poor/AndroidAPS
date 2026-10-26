@@ -6,10 +6,16 @@ plugins {
     id("all-open-dependencies")
     id("test-module-dependencies")
     id("jacoco-module-dependencies")
+    // Compose, for the password prompt sheet (design system).
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
     namespace = "app.aaps.implementation"
+
+    buildFeatures {
+        compose = true
+    }
 }
 
 dependencies {
@@ -19,6 +25,16 @@ dependencies {
     implementation(project(":core:objects"))
     implementation(project(":core:ui"))
     implementation(project(":core:utils"))
+    // Compose design system for the password sheet.
+    implementation(project(":core:compose"))
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    debugImplementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.foundation)
 
     testImplementation(project(":shared:tests"))
     testImplementation(project(":plugins:aps"))

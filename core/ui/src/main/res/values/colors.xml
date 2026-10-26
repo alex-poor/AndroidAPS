@@ -382,4 +382,9 @@
     <!--    Automations-->
     <color name="actionColor">#FF8B00</color>
 
+    <!-- Mirrors of the Compose design palette (AapsPalette dark), for the XML
+         surfaces that cannot read it — the overflow / popup menus. -->
+    <color name="aaps_design_surface2">#FF171C24</color>
+    <color name="aaps_design_text_primary">#FFEDF0F4</color>
+
 </resources>

@@ -196,23 +196,23 @@ class MainActivity : DaggerAppCompatActivityWithResult() {
                         message += rh.gs(app.aaps.core.ui.R.string.about_link_urls)
                         val messageSpanned = SpannableString(message)
                         Linkify.addLinks(messageSpanned, Linkify.WEB_URLS)
-                        MaterialAlertDialogBuilder(this@MainActivity, app.aaps.core.ui.R.style.DialogTheme)
-                            .setTitle(rh.gs(R.string.app_name) + " " + config.VERSION)
-                            .setIcon(iconsProvider.getIcon())
-                            .setMessage(messageSpanned)
-                            .setPositiveButton(rh.gs(app.aaps.core.ui.R.string.ok), null)
-                            .setNeutralButton(rh.gs(app.aaps.core.ui.R.string.cta_dont_kill_my_app_info)) { _, _ ->
-                                startActivity(
-                                    Intent(
-                                        Intent.ACTION_VIEW,
-                                        Uri.parse("https://dontkillmyapp.com/" + Build.MANUFACTURER.lowercase().replace(" ", "-"))
+                        app.aaps.dialogs.compose.AppSheetDialog.show(this@MainActivity, "about") { dismiss ->
+                            app.aaps.dialogs.compose.AboutSheet(
+                                title = rh.gs(R.string.app_name) + " " + config.VERSION,
+                                message = messageSpanned,
+                                dontKillLabel = rh.gs(app.aaps.core.ui.R.string.cta_dont_kill_my_app_info),
+                                okLabel = rh.gs(app.aaps.core.ui.R.string.ok),
+                                onDontKill = {
+                                    startActivity(
+                                        Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://dontkillmyapp.com/" + Build.MANUFACTURER.lowercase().replace(" ", "-"))
+                                        )
                                     )
-                                )
-                            }
-                            .create().apply {
-                                show()
-                                findViewById<TextView>(android.R.id.message)?.movementMethod = LinkMovementMethod.getInstance()
-                            }
+                                },
+                                onClose = dismiss
+                            )
+                        }
                         true
                     }
 

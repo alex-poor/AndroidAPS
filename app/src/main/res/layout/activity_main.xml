@@ -38,6 +38,7 @@
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:elevation="2dp"
+        app:popupTheme="@style/AppPopupOverlay"
         app:contentInsetEndWithActions="48dp"
         app:contentInsetStartWithNavigation="48dp">
 
