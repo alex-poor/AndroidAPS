@@ -71,7 +71,13 @@ data class HomeUiState(
     // Active notifications (pump unreachable, NS alarms, profile failures...). The legacy overview
     // showed these in a RecyclerView under the graph; nothing displayed them after that hierarchy
     // was hidden, so they live on the hero now.
-    val notifications: List<Alert> = emptyList()
+    val notifications: List<Alert> = emptyList(),
+
+    // Hypo-context nudges (2026-10-26 crash analysis). [advisory] = a short contextual line, e.g. the
+    // morning after an overnight low; [patternCard] = a standing one-line insight. Both render BELOW the
+    // graph so they never push it off-screen.
+    val advisory: String = "",
+    val patternCard: String = ""
 ) {
 
     /** One active notification, already resolved to presentation strings. */

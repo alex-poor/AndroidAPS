@@ -442,6 +442,21 @@ class OverviewFragment : DaggerFragment() {
 
     /** Map the current Overview providers into [HomeUiState]. Runs on the UI thread. */
     @SuppressLint("SetTextI18n")
+    /**
+     * Morning-after-an-overnight-low advisory (#3; advisory only). The invisible chain: an overnight low
+     * → the loop suspends for hours → by dawn little basal is on board → an unopposed dawn rise → the
+     * breakfast spike. Surfaced 05:00–11:00 only when the trailing 8 h actually hit a low (<70 mg/dL ≈ 3.9).
+     */
+    private fun morningAfterLowAdvisory(): String {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (hour < 5 || hour > 11) return ""
+        val now = dateUtil.now()
+        val min = persistenceLayer.getBgReadingsDataFromTimeToTime(now - 8 * 60 * 60 * 1000L, now, false)
+            .minByOrNull { it.value }?.value ?: return ""
+        if (min >= 70.0) return ""
+        return "Overnight low (${profileUtil.fromMgdlToStringInUnits(min)}) — expect a dawn rise with little insulin on board. Pre-bolus breakfast earlier/smaller; don't chase the spike."
+    }
+
     private fun buildHomeState() {
         if (!config.appInitialized) return
         val ctx = context ?: return
@@ -677,6 +692,8 @@ class OverviewFragment : DaggerFragment() {
             profileName = profileFunction.getProfileName(),
             tempTarget = null,
             ready = true,
+            advisory = morningAfterLowAdvisory(),
+            patternCard = "Your lows usually follow a meal; morning highs follow overnight lows — pre-treat gently and dose at the meal, not before.",
             notifications = notificationStore.snapshot().map {
                 HomeUiState.Alert(
                     id = it.id,

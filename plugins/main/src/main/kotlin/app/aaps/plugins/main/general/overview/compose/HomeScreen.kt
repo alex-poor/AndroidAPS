@@ -86,7 +86,10 @@ fun HomeScreen(
                 HeroCard(state, actions, onCobClick = { showCarbs = true }, onIobClick = { showInsulin = true })
                 if (state.supplies.isNotEmpty()) SuppliesStrip(state.supplies)
                 GraphCard(state.graphRangeHours, actions.onRange, graph)
+                // Hypo-context nudges — placed BELOW the graph so they never reflow it (compact lines).
+                if (state.advisory.isNotBlank()) AdvisoryLine(state.advisory)
                 DetailsHandle { showDetails = true }
+                if (state.patternCard.isNotBlank()) PatternCard(state.patternCard)
                 Box(Modifier.padding(bottom = 4.dp))
             }
             ActionBar(actions)
@@ -106,7 +109,10 @@ fun HomeScreen(
 private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.Alert) -> Unit) {
     val colors = AapsTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(AapsSpacing.rowGapSmall)) {
-        alerts.forEach { alert ->
+        // Cap the visible alerts so a burst of notifications can't push the graph/details off-screen
+        // (the reflow bug): show the first MAX_OVERVIEW_ALERTS, summarise the rest in one line.
+        val shown = alerts.take(MAX_OVERVIEW_ALERTS)
+        shown.forEach { alert ->
             val tint = when (alert.level) {
                 Notification.URGENT -> colors.low
                 Notification.NORMAL -> colors.high
@@ -137,6 +143,39 @@ private fun AlertsCard(alerts: List<HomeUiState.Alert>, onDismiss: (HomeUiState.
                     )
                 }
             }
+        }
+        if (alerts.size > shown.size)
+            Text(
+                "+${alerts.size - shown.size} more alert${if (alerts.size - shown.size > 1) "s" else ""}",
+                style = AapsTheme.type.caption, color = colors.textTertiary,
+                modifier = Modifier.padding(start = 13.dp)
+            )
+    }
+}
+
+private const val MAX_OVERVIEW_ALERTS = 2
+
+/** Compact one-line hypo-context advisory (amber). Rendered below the graph so it never reflows it. */
+@Composable
+private fun AdvisoryLine(text: String) {
+    val colors = AapsTheme.colors
+    Text(text, style = AapsTheme.type.caption, color = colors.high, modifier = Modifier.padding(horizontal = 4.dp))
+}
+
+/** Standing one-line pattern insight (from the crash analysis). Small accent-tinted card, below details. */
+@Composable
+private fun PatternCard(text: String) {
+    val colors = AapsTheme.colors
+    AapsCard(shape = AapsTheme.shape.cardSmall) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .padding(end = 10.dp)
+                    .size(width = 3.dp, height = 30.dp)
+                    .clip(AapsTheme.shape.pill)
+                    .background(colors.accent)
+            )
+            Text(text, style = AapsTheme.type.caption, color = colors.textSecondary, modifier = Modifier.weight(1f))
         }
     }
 }

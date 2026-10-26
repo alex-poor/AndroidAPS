@@ -166,8 +166,39 @@ class WizardDialog : DaggerDialogFragment() {
                 String.format(Locale.getDefault(), "Capped by max bolus: %.2f U → %.2f U", w.calculatedTotalInsulin, w.insulinAfterConstraints)
             else "",
             siteWarning = freshSiteWarning(w.insulinAfterConstraints),
+            hypoAdvisory = hypoAdvisory(isLow, delta, w.insulinAfterConstraints),
             superBolusAvailable = false
         )
+    }
+
+    /**
+     * Hypo-context advisory (advisory ONLY — never blocks or alters the dose). From the user's own
+     * crash analysis (2026-10-26, report in memory `oscillation-is-fine-margin-not-a-big-lever`).
+     *
+     *  #2 recent rescue: a small carb (≤20 g) logged in the last 90 min means BG is being lifted by fast
+     *     sugar that peaks ~56 min out — not food. Dosing a meal onto it, with a correction or the loop's
+     *     negative basal-IOB add-back, is exactly what crashed the 2026-10-25 dinner. Advise carbs-only.
+     *  #1 low/falling: a full meal dosed at low or falling BG ran low afterward ~67% of the time. Suggest
+     *     a smaller dose / dosing at the meal.
+     * [deltaMgdl] is the CGM delta (mg/dL per 5 min); falling ≤ −3 matches the ↘ trend arrow.
+     */
+    private fun hypoAdvisory(isLow: Boolean, deltaMgdl: Double, insulin: Double): String {
+        val since = dateUtil.now() - T.mins(90).msecs()
+        val rescue = persistenceLayer.getCarbsFromTimeNotExpanded(since, false).blockingGet()
+            .filter { it.amount in 0.1..20.0 }.maxByOrNull { it.timestamp }
+        if (rescue != null) {
+            val agoMin = (dateUtil.now() - rescue.timestamp) / T.mins(1).msecs()
+            return String.format(
+                Locale.getDefault(),
+                "Low treated ~%dm ago — BG is rising on rescue sugar, not food. Dose for carbs only: no pre-bolus, and ignore the IOB/correction here.",
+                agoMin
+            )
+        }
+        if (insulin < 1.0) return ""
+        val falling = deltaMgdl <= -3.0
+        if (!isLow && !falling) return ""
+        return (if (isLow) "BG low" else "BG falling") +
+            " — meals dosed here often run low afterward. Consider a smaller dose, or dose at the meal rather than before."
     }
 
     /**

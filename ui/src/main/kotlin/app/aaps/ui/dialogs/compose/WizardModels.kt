@@ -85,5 +85,14 @@ data class WizardResult(
      * this is the only place the finding can actually reach the decision.
      */
     val siteWarning: String = "",
+    /**
+     * Hypo-context advisory, from the user's own crash analysis (2026-10-26). Two triggers, advisory
+     * ONLY (never blocks or changes the dose):
+     *  - a meal dosed at low/falling BG ran low afterward ~67% of the time;
+     *  - dosing onto a just-treated low (rescue sugar still rising, peaks ~56 min) together with the
+     *    loop's negative basal-IOB add-back is what crashed the 2026-10-25 dinner — so there, dose for
+     *    carbs only and ignore the IOB/correction term.
+     */
+    val hypoAdvisory: String = "",
     val superBolusAvailable: Boolean = false
 )

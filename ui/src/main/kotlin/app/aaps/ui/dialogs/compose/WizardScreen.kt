@@ -168,6 +168,10 @@ private fun InputStep(
                 }
             }
 
+            // Hypo-context advisory (from the user's crash analysis) — small amber line, advisory only.
+            if (result.hypoAdvisory.isNotBlank())
+                Text(result.hypoAdvisory, style = AapsTheme.type.caption, color = colors.high)
+
             // Carbs stepper + chips
             AapsCard {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -480,6 +484,8 @@ private fun ConfirmStep(
         // constraint on it — `low` is reserved for urgent/hypo in the semantic palette.
         if (result.siteWarning.isNotBlank())
             Text(result.siteWarning, style = AapsTheme.type.body, color = colors.high, textAlign = TextAlign.Center)
+        if (result.hypoAdvisory.isNotBlank())
+            Text(result.hypoAdvisory, style = AapsTheme.type.caption, color = colors.high, textAlign = TextAlign.Center)
 
         HoldToConfirmButton(
             label = if (splitOn) "Hold to deliver now · ${String.format(java.util.Locale.getDefault(), "%.2f", doseNow)} U" else "Hold to deliver · ${result.totalText}",
