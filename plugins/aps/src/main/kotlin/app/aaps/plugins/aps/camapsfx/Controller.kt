@@ -89,6 +89,10 @@ object Controller {
     // hypo-rescue (#7) run AFTER this gate, so fresh readings that show a LOW still suspend normally.
     const val MIN_CONTINUOUS_CGM_TICKS = 5
     const val CONTINUOUS_CGM_WINDOW_MIN = 10
+    // FIX A (meal anti-suspend): gut mass (avg st7..10) above which carbs are "still absorbing". Validated on the
+    // user's real history: at BG≥6.0 this fires on 0/24 near-low-falling meal ticks (safe) and fixes 9/14 of the
+    // spurious post-meal suspends (CompareFixEnd). The BG floor is a Config field (default 6.0).
+    const val MEAL_GUT_MASS_MIN = 10f
 
     /**
      * The whole control tick from a parsed input file — the reusable replay entry (mirrors `oneRun`). Derives
@@ -238,6 +242,18 @@ object Controller {
         val infThresh = if (c >= 30f) 0.02f else 0.01f
         val bumpThresh = if (c >= 30f) 0.05f else 0.04f
         if (inf68 < infThresh && deliveredRate <= bumpThresh) deliveredRate = 0.2f
+        // FIX A — MEAL ANTI-SUSPEND (default OFF): the plant over-clears glucose vs the modeled meal appearance,
+        // so ~1h post-meal the rollout projects a spurious crash and the optimiser suspends while the user is
+        // still absorbing (glucose then rises unopposed). When carbs were announced in the last 5h, substantial
+        // gut mass remains, and glucose is not actually low, lift a TRUE suspend to profile basal. Safe: never
+        // fires below the BG floor and never touches a tick the model already dosed (gate is <0.05).
+        if (cfg.mealAntiSuspend) {
+            var gutMassNow = 0f; for (i in 0 until 8) gutMassNow += (bank.models[i].st[7] + bank.models[i].st[8] + bank.models[i].st[9] + bank.models[i].st[10])
+            gutMassNow /= 8f
+            val recentMeal5h = p.meals.any { it.minute + 10 > p.nowMinute - 300 && it.minute + 10 <= p.nowMinute }
+            if (deliveredRate < 0.05f && gutMassNow > MEAL_GUT_MASS_MIN && modGlu >= cfg.mealAntiSuspendBg && recentMeal5h)
+                deliveredRate = birPumpNow
+        }
         return TickResult(deliveredRate, conv, c, x14, target, g.n, solve.rawRate,
             p9 = p9, tau0 = tau0, w24 = floorBase, optBir = optBir, anchor = anchor, startG = startGlucose,
             e = solve.setpoint, u = solve.optimisedU, u0 = solve.warmStart, rollout0 = solve.rollout0,

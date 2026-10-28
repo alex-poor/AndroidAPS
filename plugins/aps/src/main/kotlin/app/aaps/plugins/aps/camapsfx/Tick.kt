@@ -32,6 +32,8 @@ object Tick {
         val aggressive: Boolean = false,
         val boostFactor: Float = 1.0f,     // demanded-rate multiplier when aggroActive (CamAPS "Boost" = 1.35)
         val aggroCap: Float = 1.5f,        // aggressive cap-mult = normal mult x this (lifts the ~1.6 U/hr ceiling)
+        val mealAntiSuspend: Boolean = false,  // FIX A: lift a spurious post-meal suspend to profile basal (default OFF)
+        val mealAntiSuspendBg: Float = 6.0f,   // FIX A: BG floor below which a suspend is never overridden
     )
 
     /** The result of one tick: the delivered basal rate + the intermediate solve (for logging / diffing). */
