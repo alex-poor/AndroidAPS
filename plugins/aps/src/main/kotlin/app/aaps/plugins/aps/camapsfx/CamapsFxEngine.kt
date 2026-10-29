@@ -11,21 +11,32 @@ package app.aaps.plugins.aps.camapsfx
  */
 object CamapsFxEngine {
     /** The default GetRate control config (p1=4 control blocks, p2=7 prediction, 25-min steps) — the binary's. */
-    private fun defaultCfg(mealActive: Int, aggressive: Boolean, mealAntiSuspend: Boolean) = Tick.Config(0f, 30f, 0f, 25, 25, 150, 6, p1 = 4, p2 = 7, bolus = 0,
-        mealActive = mealActive, 0f, 0f, 0f, 0f, 0f, 0f, aggressive = aggressive,
-        boostFactor = if (aggressive) 1.8f else 1.0f, aggroCap = 1.5f, mealAntiSuspend = mealAntiSuspend)
+    // BURST correction (the monitored-trial bundle): supersedes plain aggressive — forces the aggressive path,
+    // gates it on the RAW CGM (holds through a stuck high), lifts the hard ceiling (~2.25→~3.5 U/h, still under
+    // maxBasal), and adds a 30-min fall taper so the correction self-limits and never stacks into an overnight
+    // crater. Tuned on 14 days of the user's own data (boost 2.5 / aggroCap 2.0 / taper 1.5). Default OFF.
+    private fun defaultCfg(mealActive: Int, aggressive: Boolean, mealAntiSuspend: Boolean, burst: Boolean): Tick.Config {
+        val aggr = aggressive || burst
+        return Tick.Config(0f, 30f, 0f, 25, 25, 150, 6, p1 = 4, p2 = 7, bolus = 0,
+            mealActive = mealActive, 0f, 0f, 0f, 0f, 0f, 0f, aggressive = aggr,
+            boostFactor = if (burst) 2.5f else if (aggr) 1.8f else 1.0f,
+            aggroCap = if (burst) 2.0f else 1.5f,
+            mealAntiSuspend = mealAntiSuspend,
+            rawCgmAggro = burst,
+            fallTaperK = if (burst) 1.5f else 0f)
+    }
 
     fun decide(
         nowMs: Long, windowH: Float, tzOffsetMs: Long, weightKg: Float, targetMmol: Float?,
         basalAtLocalSec: (Int) -> Float,
         cgm: List<AapsInput.Cgm>, boluses: List<AapsInput.Bolus>, carbs: List<AapsInput.Carb>, tbrs: List<AapsInput.Tbr>,
-        aggressive: Boolean = false, mealAntiSuspend: Boolean = false
+        aggressive: Boolean = false, mealAntiSuspend: Boolean = false, burst: Boolean = false
     ): Result {
         val p = AapsInput.buildTick(nowMs, windowH, tzOffsetMs, weightKg, targetMmol, basalAtLocalSec, cgm, boluses, carbs, tbrs)
         val mealActive = if (p.meals.any { it.minute > p.nowMinute - 720 }) 1 else 0
         val r = Controller.runTick(
             p, basalUday = if (p.basalUday > 0f) p.basalUday else 10.8f,
-            coldInit = { CamapsColdInit.coldInit(p.weightKg) }, cfg = defaultCfg(mealActive, aggressive, mealAntiSuspend),
+            coldInit = { CamapsColdInit.coldInit(p.weightKg) }, cfg = defaultCfg(mealActive, aggressive, mealAntiSuspend, burst),
             mealProb = { _, _ -> 1f }, longUpdate = { false }, mealDb = MealPriorDb()
         )
         return Result(r.rate, p.cgm.size, p.boluses.size, p.meals.size, r.conv, r.target, r.predEventualMmol)

@@ -22,6 +22,7 @@ enum class BooleanKey(
     CamapsTddAdaptation("camaps_tdd_adaptation", false),
     CamapsAggressiveBasal("camaps_aggressive_basal", false),
     CamapsMealAntiSuspend("camaps_meal_anti_suspend", false),
+    CamapsBurstCorrection("camaps_burst_correction", false),
     HovorkaImmBank("hovorka_imm_bank", false),
     HovorkaEnableSmb("hovorka_enable_smb", false),
     HovorkaMealDetection("hovorka_meal_detection", false),

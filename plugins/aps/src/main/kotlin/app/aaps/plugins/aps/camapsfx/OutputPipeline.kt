@@ -106,7 +106,8 @@ object OutputPipeline {
      * sanity run (glucose ≈14 → mult 3, `3·max(0.463,0.9)=2.7`), matching the driven rate-sweep clip.
      */
     fun modifyMaximumPersonalRange(rate: Float, glucose: Float, profile48: FloatArray, tddC: Float, tddC10: Float,
-                                   birPump: Float, calcTDD: Float, minsSinceMeal: Float, aggressive: Boolean = false, aggroCap: Float = 1.5f): Float {
+                                   birPump: Float, calcTDD: Float, minsSinceMeal: Float, aggressive: Boolean = false, aggroCap: Float = 1.5f,
+                                   liftHardCeiling: Boolean = false): Float {
         var r = if (rate < 0f) 0f else rate
         // AGGRESSIVE lifts the glucose-scaled cap multiplier (2.0/2.5/3.0 -> 3.0/4.0/5.0) so the basal ceiling
         // is high enough to actually correct a high on a small profile basal. Still bounded downstream by the
@@ -126,10 +127,15 @@ object OutputPipeline {
         var fVar10b = (sum / 48f) * 0.7f
         if (minsSinceMeal >= 120f || cap <= fVar13) cap = fVar13   // bVar3 || bVar2!=bVar4
         if (fVar10b <= floor2) fVar10b = floor2
-        if (fVar10b * 5f < cap) {
+        // The stock hard ceiling is 5×(0.7·mean basal) — ~2.25 U/h here — which overrides the aggressive
+        // multiplier and is why a high correction cannot exceed ~2.25 however high `mult` goes. When aggressive,
+        // lift it to 5·aggroCap so the demanded burst gets through. Still bounded downstream by the AAPS maxBasal
+        // pref (5.0) and the suspend/trend-brake/fall-taper rules, and reversible every tick.
+        val hiMult = if (aggressive && liftHardCeiling) 5f * aggroCap else 5f
+        if (fVar10b * hiMult < cap) {
             var f = (sum / 48f) * 0.7f
             if (f <= floor2) f = floor2
-            cap = f * 5f
+            cap = f * hiMult
         }
         if (cap < r) r = cap
         return r

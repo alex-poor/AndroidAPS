@@ -34,6 +34,8 @@ object Tick {
         val aggroCap: Float = 1.5f,        // aggressive cap-mult = normal mult x this (lifts the ~1.6 U/hr ceiling)
         val mealAntiSuspend: Boolean = false,  // FIX A: lift a spurious post-meal suspend to profile basal (default OFF)
         val mealAntiSuspendBg: Float = 6.0f,   // FIX A: BG floor below which a suspend is never overridden
+        val rawCgmAggro: Boolean = false,      // FIX B1: gate aggression on RAW CGM trend (stay on through a stuck high)
+        val fallTaperK: Float = 0f,            // FIX B2: >0 ⇒ cut delivery as raw CGM falls (taper, no overnight stack)
     )
 
     /** The result of one tick: the delivered basal rate + the intermediate solve (for logging / diffing). */

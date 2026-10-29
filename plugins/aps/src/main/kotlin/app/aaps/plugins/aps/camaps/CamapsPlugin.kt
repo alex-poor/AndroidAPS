@@ -152,6 +152,12 @@ class CamapsPlugin @Inject constructor(
                     summary = R.string.camaps_meal_anti_suspend_summary, title = R.string.camaps_meal_anti_suspend_title
                 )
             )
+            addPreference(
+                AdaptiveSwitchPreference(
+                    ctx = context, booleanKey = BooleanKey.CamapsBurstCorrection,
+                    summary = R.string.camaps_burst_correction_summary, title = R.string.camaps_burst_correction_title
+                )
+            )
         }
     }
 
@@ -214,7 +220,8 @@ class CamapsPlugin @Inject constructor(
             basalAtLocalSec = { sec -> profile.getBasalTimeFromMidnight(sec).toFloat() },
             cgm = cgmList, boluses = bolusList, carbs = carbList, tbrs = tbrList,
             aggressive = preferences.get(BooleanKey.CamapsAggressiveBasal),
-            mealAntiSuspend = preferences.get(BooleanKey.CamapsMealAntiSuspend)
+            mealAntiSuspend = preferences.get(BooleanKey.CamapsMealAntiSuspend),
+            burst = preferences.get(BooleanKey.CamapsBurstCorrection)
         )
         var rateUhr = max(0.0, min(maxBasalUhr, round(decision.rateUhr.toDouble() * 100.0) / 100.0))
         val rawCgmMmol = glucoseStatus.glucose / MGDL_PER_MMOL

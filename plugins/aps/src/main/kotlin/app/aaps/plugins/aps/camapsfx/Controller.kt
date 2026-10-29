@@ -163,8 +163,12 @@ object Controller {
         // the suspend/brake safety rules stand untouched where they matter.
         val cgmNowRaw = reducedCgm.lastOrNull()?.v ?: p9
         val cgm15Ago = reducedCgm.lastOrNull { it.t <= p.nowMinute - 15 }?.v ?: cgmNowRaw
-        val aggroActive = cfg.aggressive && p9 >= 10f && cgmNowRaw >= 10f &&
-            (progGlu - p9) * 30f > -2.0f && (cgmNowRaw - cgm15Ago) > -0.8f
+        val cgm30Ago = reducedCgm.lastOrNull { it.t <= p.nowMinute - 30 }?.v ?: cgm15Ago
+        // FIX B1 (rawCgmAggro): the model's forecast roc wrongly disables aggression at a STUCK high (it predicts
+        // a fall that isn't happening — the plant over-clears). Gate on the RAW CGM trend instead, so the
+        // correction stays on while glucose is genuinely high and not falling. Default path unchanged.
+        val aggroActive = cfg.aggressive && p9 >= 10f && cgmNowRaw >= 10f && (cgmNowRaw - cgm15Ago) > -0.8f &&
+            (cfg.rawCgmAggro || (progGlu - p9) * 30f > -2.0f)
         val target = Optimiser.targetGlucose(profTgt, offset, meanGlu3h, p9, predSD, 0f, fastingStable = fasting, aggressive = aggroActive)
         val optBir = bank.getModifiedBIR(gdfo.bir[0])   // move-penalty BIR = GetModifiedBIR (adapted), not raw profile bir[0]
         val rollTrans = ImmBank.buildTransition(gdfo.dt[1])
@@ -224,7 +228,7 @@ object Controller {
         // min glucose over windows for the hypo-rescue (decimated CGM as both CGM and BG source)
         fun minGlu(win: Int) = reducedCgm.filter { it.t > p.nowMinute - win && it.t <= p.nowMinute }.minOfOrNull { it.v } ?: 999f
         val (mn2h, mn1h, mn30, mn18) = listOf(minGlu(120), minGlu(60), minGlu(30), minGlu(18))
-        r = OutputPipeline.modifyMaximumPersonalRange(r, p9, prof, c, c, birPumpNow, 0f, tau0, aggressive = aggroActive, aggroCap = cfg.aggroCap)   // #1 max-rate cap
+        r = OutputPipeline.modifyMaximumPersonalRange(r, p9, prof, c, c, birPumpNow, 0f, tau0, aggressive = aggroActive, aggroCap = cfg.aggroCap, liftHardCeiling = cfg.rawCgmAggro)   // #1 max-rate cap (ceiling lifted only in the burst bundle)
         r = OutputPipeline.modifyRateGlucoseLevel(r, modGlu, profTgt, recentMeal)          // #2 suspend on low
         r = OutputPipeline.modifyRateGlucoseRate(r, roc, modGlu, false, 0f)                // #3 trend brake
         // #4 occlusion guard: clamp to profile when even an occluded pump would let IOB crash glucose < 3.9
@@ -253,6 +257,14 @@ object Controller {
             val recentMeal5h = p.meals.any { it.minute + 10 > p.nowMinute - 300 && it.minute + 10 <= p.nowMinute }
             if (deliveredRate < 0.05f && gutMassNow > MEAL_GUT_MASS_MIN && modGlu >= cfg.mealAntiSuspendBg && recentMeal5h)
                 deliveredRate = birPumpNow
+        }
+        // FIX B2 (fallTaperK): taper delivery as the RAW CGM falls, so a hard correction self-limits the moment
+        // glucose turns and nothing stacks into an overnight crater. Uses a 30-min raw delta (smooth, vs the noisy
+        // 15-min that flickered): linear from no-cut at −1.0 mmol/30min to full cut at −(1.0+fallTaperK). Applied
+        // LAST so it overrides boost/min-bump on a genuine fall.
+        if (cfg.fallTaperK > 0f) {
+            val rawRoc30 = cgmNowRaw - cgm30Ago
+            if (rawRoc30 < -1.0f) deliveredRate *= maxOf(0f, 1f + (rawRoc30 + 1.0f) / cfg.fallTaperK)
         }
         return TickResult(deliveredRate, conv, c, x14, target, g.n, solve.rawRate,
             p9 = p9, tau0 = tau0, w24 = floorBase, optBir = optBir, anchor = anchor, startG = startGlucose,
