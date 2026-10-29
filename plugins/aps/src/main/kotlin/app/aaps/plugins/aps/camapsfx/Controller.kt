@@ -93,6 +93,18 @@ object Controller {
     // user's real history: at BG≥6.0 this fires on 0/24 near-low-falling meal ticks (safe) and fixes 9/14 of the
     // spurious post-meal suspends (CompareFixEnd). The BG floor is a Config field (default 6.0).
     const val MEAL_GUT_MASS_MIN = 10f
+    // Burst IOB brake: scale the burst's excess above profile toward zero as bolus IOB rises. Full burst at
+    // ≤ BURST_IOB_FULL U on board, no burst at ≥ BURST_IOB_ZERO. Stops the burst stacking a hard correction on
+    // top of a meal bolus that is already working (the 2026-10-30 breakfast: burst held IOB pinned at ~7.8 → crash).
+    const val BURST_IOB_FULL = 1.5f
+    const val BURST_IOB_ZERO = 4.0f
+    /** Exponential bolus-IOB fraction remaining (Oref rapid: peak 75 min, DIA 300). */
+    private fun iobFrac(minAgo: Float): Float {
+        if (minAgo < 0f) return 1f; if (minAgo >= 300f) return 0f
+        val tp = 75f; val td = 300f; val tau = tp * (1f - tp / td) / (1f - 2f * tp / td); val a = 2f * tau / td
+        val s = 1f / (1f - a + (1f + a) * kotlin.math.exp(-td / tau))
+        return 1f - s * (1f - a) * ((minAgo * minAgo / (tau * td * (1f - a)) - minAgo / tau - 1f) * kotlin.math.exp(-minAgo / tau) + 1f)
+    }
 
     /**
      * The whole control tick from a parsed input file — the reusable replay entry (mirrors `oneRun`). Derives
@@ -257,6 +269,16 @@ object Controller {
             val recentMeal5h = p.meals.any { it.minute + 10 > p.nowMinute - 300 && it.minute + 10 <= p.nowMinute }
             if (deliveredRate < 0.05f && gutMassNow > MEAL_GUT_MASS_MIN && modGlu >= cfg.mealAntiSuspendBg && recentMeal5h)
                 deliveredRate = birPumpNow
+        }
+        // BURST IOB BRAKE (part of the burst bundle): when the burst is firing, scale its excess above profile
+        // basal toward zero as bolus IOB rises — so it won't stack a hard correction on a meal bolus that is
+        // already working. Only REDUCES (never lifts), and only touches burst ticks. This restores the "you
+        // already have enough on board" safety that rawCgmAggro otherwise bypasses.
+        if (cfg.burstIobBrake && aggroActive && deliveredRate > birPumpNow) {
+            var bolusIob = 0f
+            for (bo in p.boluses) { val age = (p.nowMinute - bo.minute).toFloat(); if (age in 0f..300f) bolusIob += bo.a * iobFrac(age) }
+            val iobScale = ((BURST_IOB_ZERO - bolusIob) / (BURST_IOB_ZERO - BURST_IOB_FULL)).coerceIn(0f, 1f)
+            deliveredRate = birPumpNow + (deliveredRate - birPumpNow) * iobScale
         }
         // FIX B2 (fallTaperK): taper delivery as the RAW CGM falls, so a hard correction self-limits the moment
         // glucose turns and nothing stacks into an overnight crater. Uses a 30-min raw delta (smooth, vs the noisy

@@ -23,7 +23,8 @@ object CamapsFxEngine {
             aggroCap = if (burst) 2.0f else 1.5f,
             mealAntiSuspend = mealAntiSuspend,
             rawCgmAggro = burst,
-            fallTaperK = if (burst) 1.5f else 0f)
+            fallTaperK = if (burst) 1.5f else 0f,
+            burstIobBrake = burst)
     }
 
     fun decide(
