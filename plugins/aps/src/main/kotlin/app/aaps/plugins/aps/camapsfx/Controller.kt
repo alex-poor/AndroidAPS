@@ -263,22 +263,33 @@ object Controller {
         // still absorbing (glucose then rises unopposed). When carbs were announced in the last 5h, substantial
         // gut mass remains, and glucose is not actually low, lift a TRUE suspend to profile basal. Safe: never
         // fires below the BG floor and never touches a tick the model already dosed (gate is <0.05).
+        // realProfileNow = profile basal in REAL U/h. birPumpNow is CONV-scaled (prof = basalProfileUh*conv),
+        // but after finalRate [deliveredRate] is real U/h (= r/conv). Every post-finalRate rule below MUST use the
+        // real-space profile, NOT the conv-scaled birPumpNow — otherwise (with conv≈2.1 here) it over-delivers by
+        // ~conv× (2026-11-10 units-bug fix).
+        val realProfileNow = if (conv > 0f) birPumpNow / conv else birPumpNow
         if (cfg.mealAntiSuspend) {
             var gutMassNow = 0f; for (i in 0 until 8) gutMassNow += (bank.models[i].st[7] + bank.models[i].st[8] + bank.models[i].st[9] + bank.models[i].st[10])
             gutMassNow /= 8f
             val recentMeal5h = p.meals.any { it.minute + 10 > p.nowMinute - 300 && it.minute + 10 <= p.nowMinute }
             if (deliveredRate < 0.05f && gutMassNow > MEAL_GUT_MASS_MIN && modGlu >= cfg.mealAntiSuspendBg && recentMeal5h)
-                deliveredRate = birPumpNow
+                deliveredRate = realProfileNow   // was birPumpNow (conv) → lifted a suspend to ~2× profile
         }
-        // BURST IOB BRAKE (part of the burst bundle): when the burst is firing, scale its excess above profile
-        // basal toward zero as bolus IOB rises — so it won't stack a hard correction on a meal bolus that is
-        // already working. Only REDUCES (never lifts), and only touches burst ticks. This restores the "you
-        // already have enough on board" safety that rawCgmAggro otherwise bypasses.
-        if (cfg.burstIobBrake && aggroActive && deliveredRate > birPumpNow) {
+        // IOB BRAKE (part of the burst bundle): whenever delivery exceeds profile basal, scale the excess above
+        // profile toward zero as bolus IOB rises — so no correction stacks on a meal bolus that is already working.
+        // Only REDUCES (never lifts). TWO bug fixes (2026-11-10, the breakfast that held 1.99 U/h for 25 min on
+        // ~6 U of meal IOB → crash to 2.9):
+        //   (1) UNITS: used conv-scaled birPumpNow against real-U/h deliveredRate. With conv≈2.1 the guard was
+        //       1.99(real) > 1.99(conv) → false, so the brake never fired. Now uses realProfileNow (= birPumpNow/conv).
+        //   (2) Dropped the aggroActive gate: the optimiser front-runs the meal spike and demands the correction
+        //       while the estimator still reads < 10 (plant over-clears the rise), so aggroActive is false in the
+        //       exact window the stacking happens. Gating on burstIobBrake + (rate > real profile) catches it.
+        // iobScale is 1.0 (no effect) with no meal IOB, so genuine no-bolus highs keep the full correction.
+        if (cfg.burstIobBrake && deliveredRate > realProfileNow) {
             var bolusIob = 0f
             for (bo in p.boluses) { val age = (p.nowMinute - bo.minute).toFloat(); if (age in 0f..300f) bolusIob += bo.a * iobFrac(age) }
             val iobScale = ((BURST_IOB_ZERO - bolusIob) / (BURST_IOB_ZERO - BURST_IOB_FULL)).coerceIn(0f, 1f)
-            deliveredRate = birPumpNow + (deliveredRate - birPumpNow) * iobScale
+            deliveredRate = realProfileNow + (deliveredRate - realProfileNow) * iobScale
         }
         // FIX B2 (fallTaperK): taper delivery as the RAW CGM falls, so a hard correction self-limits the moment
         // glucose turns and nothing stacks into an overnight crater. Uses a 30-min raw delta (smooth, vs the noisy
