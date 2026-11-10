@@ -245,13 +245,21 @@ class YpsoPumpPlugin @Inject constructor(
         // Baseline (prior-bolus 'injected' the pump still reports) — logged so validation can confirm whether
         // the pump RESETS deliveredUnits per bolus. Attribution only trusts values AFTER status goes
         // 'delivering', so a lingering prior reading alone can never be mistaken for this dose.
-        val baseInjected = readBolusStatusBlocking()?.deliveredUnits ?: 0.0
+        // SAFETY for the forward-scanning canary below: never start a bolus while the pump is already
+        // delivering one — scanning the counter forward and sending would otherwise stack a second dose.
+        val preStatus = readBolusStatusBlocking()
+        if (preStatus?.isDelivering == true) return fail("pump is already delivering a bolus — not stacking")
+        val baseInjected = preStatus?.deliveredUnits ?: 0.0
 
         // 1) START via the canary-gated write. The ACK is droppable while the pump still delivers, so it is
         //    NEVER used to decide what to record — the pump status is truth. What the outcome DOES decide is
         //    how hard to look: only [BolusStart.NOT_SENT] proves the bolus characteristic was never written.
         var startOutcome = YpsoBleManager.BolusStart.NOT_SENT; var startMsg = "no response from pump"
         val startLatch = java.util.concurrent.CountDownLatch(1)
+        // seedW = the live write counter the pre-flight reads left in place. decrypt() no longer zeroes it on a
+        // reboot-counter bump, and crucially it keeps the pump's REAL reboot counter (learned during those
+        // reads) — re-seeding here would reset it to the stale CAPTURED_REBOOT_COUNTER and the pump would
+        // reject every canary (observed 2026-11-11: bolus canary rejected at counters the TBR canary accepted).
         bleManager.startBolus(requested, bleManager.writeCounter) { o, m -> startOutcome = o; startMsg = m; startLatch.countDown() }
         if (!startLatch.await(2, java.util.concurrent.TimeUnit.MINUTES)) {
             // No callback at all — the write may still have landed. Treat as uncertain, never as "no bolus".

@@ -105,10 +105,14 @@ class SessionCrypto @Inject constructor() {
             val pumpRebootCounter = buf.getInt()
             val pumpCounter = buf.getLong()
 
-            // Handle reboot detection
+            // Adopt the pump's reboot counter (our seeded CAPTURED_REBOOT_COUNTER can be stale after a pump
+            // battery/cartridge change — the pump reported 9 while we seed 8). We do NOT zero writeCounter here:
+            // the driver re-seeds the write counter from the PERSISTED value on connect, and the pump's write
+            // check is forward-gap tolerant, so a persisted value above the pump's is accepted either way.
+            // Zeroing it instead made every post-read write carry writeCounter=0 (bolus canaried at 1), and the
+            // re-seed workaround then clobbered this reboot counter back to the stale value — breaking writes.
             if (pumpRebootCounter > rebootCounter) {
                 rebootCounter = pumpRebootCounter
-                writeCounter = 0L
             } else if (pumpRebootCounter < 0) {
                 throw IllegalArgumentException("Invalid reboot counter: $pumpRebootCounter")
             }

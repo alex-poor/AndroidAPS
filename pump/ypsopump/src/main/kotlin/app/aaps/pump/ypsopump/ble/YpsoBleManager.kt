@@ -601,23 +601,27 @@ class YpsoBleManager @Inject constructor(
     fun startBolus(units: Double, seedW: Long, onResult: (BolusStart, String) -> Unit) {
         if (!isConnected || bluetoothGatt == null) { onResult(BolusStart.NOT_SENT, "not connected"); return }
         val canary = glbEncode(0)                              // select event index 0 — zero therapy (GLB, no CRC)
-        // SAFETY: unlike the TBR path, the BOLUS canary does NOT scan the counter forward. A dropped ack on a
-        // bolus write can mean the pump ALREADY DELIVERED; self-healing the counter would let a retry double
-        // dose. So on a counter error we FAIL CLOSED (abort). Proper fix (TODO): on ambiguous counter, read
-        // CHAR_BOLUS_STATUS to confirm whether the prior bolus landed before allowing another.
-        val candidates = listOf(seedW + 1, seedW, seedW + 2)
+        // Scan the counter FORWARD from seedW+1, identical to the TBR canary (testTbrCanary). The canary is a
+        // BENIGN zero-therapy event-index write, so probing forward delivers NO insulin — it self-heals a
+        // counter the pump has advanced beyond our persisted value (e.g. mylife wrote during a re-key, which
+        // leaves the pump expecting a HIGHER counter → 0x8B ERR_COUNTER_BEHIND on seedW+1). The actual bolus is
+        // still sent EXACTLY ONCE at the confirmed counter (sendBolus). Fail-closed safety holds: on any
+        // NON-counter error, or if the whole scan is rejected, NO bolus is sent. The caller (deliverTreatment)
+        // has already aborted if the pump is mid-bolus, so a forward scan here cannot stack onto a live dose.
+        val candidates = (1..COUNTER_RESYNC_SCAN).map { seedW + it }
         fun tryCanary(i: Int) {
-            if (i >= candidates.size) { onResult(BolusStart.NOT_SENT, "canary failed (tried $candidates) — counter off, NO BOLUS sent (fail-closed; reseed after confirming no bolus was delivered)"); return }
+            if (i >= candidates.size) { onResult(BolusStart.NOT_SENT, "canary failed (scanned +1..+$COUNTER_RESYNC_SCAN from $seedW) — counter off, NO BOLUS sent (fail-closed)"); return }
             val c = candidates[i]
             aapsLogger.info(LTag.PUMP, "YpsoPump canary index-write @counter=$c")
             writeOnceAt(CHAR_EVENT_INDEX, canary, c) { status ->
                 when (status) {
                     BluetoothGatt.GATT_SUCCESS -> {
                         persistWriteCounter()
+                        if (i > 0) aapsLogger.warn(LTag.PUMP, "YpsoPump bolus counter was BEHIND by $i (pump advanced, e.g. re-key) — resynced to $c")
                         aapsLogger.info(LTag.PUMP, "YpsoPump CANARY ACCEPTED @$c — counter locked; bolus will be @${c + 1}")
                         sendBolus(units, c, onResult)
                     }
-                    ERR_WRITE_REJECTED         -> tryCanary(i + 1)
+                    ERR_WRITE_REJECTED, ERR_COUNTER_BEHIND -> tryCanary(i + 1)   // 0x8A/0x8B: counter off → scan forward (benign)
                     else                       -> onResult(BolusStart.NOT_SENT, "canary write status=$status — ABORT, NO BOLUS")
                 }
             }
