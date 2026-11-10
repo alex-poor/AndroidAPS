@@ -157,6 +157,16 @@ class YpsoBleManager @Inject constructor(
     fun saveSharedKey(hex: String) { ypsoPrefs.edit().putString(YpsoPumpConst.PREF_SHARED_KEY, hex.trim()).apply() }
 
     /**
+     * Epoch-ms when the CURRENT shared key was minted (mylife's sharedKeyDate), persisted as the
+     * [YpsoPumpConst.PREF_KEY_DATE] long. 0 = unknown (no warning possible). The pump hard-expires the key
+     * ~28 days later and then returns 0x8C NO_SHARED_KEY — so this drives the pre-expiry warning.
+     */
+    fun resolveKeyDate(): Long = ypsoPrefs.getLong(YpsoPumpConst.PREF_KEY_DATE, 0L)
+
+    /** Persist the key mint date (call after a re-key / re-capture). */
+    fun saveKeyDate(epochMs: Long) { ypsoPrefs.edit().putLong(YpsoPumpConst.PREF_KEY_DATE, epochMs).apply() }
+
+    /**
      * Seed the counters before any encrypted WRITE. [writeCounter] = the genuine app's CURRENT value
      * (mylife's numericWriteAppCounter, captured via frida) for the FIRST ever run; thereafter the
      * PERSISTED, AAPS-owned value wins (we use the higher of the two). The first write uses value+1 (the

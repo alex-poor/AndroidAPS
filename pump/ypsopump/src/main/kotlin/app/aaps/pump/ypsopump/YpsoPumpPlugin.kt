@@ -123,6 +123,7 @@ class YpsoPumpPlugin @Inject constructor(
             aapsLogger.info(LTag.PUMP, "YpsoPump: session key and/or pump MAC not set — skipping read")
             return
         }
+        checkKeyExpiry()   // flag the 28-day shared-key expiry BEFORE it silently kills the loop (0x8C)
         if (!bleManager.isConnected) { seedAndConnect(); return }
         // These test ops BLOCK the queue-worker thread until done — otherwise AAPS sees the command as
         // finished and disconnects (5s idle) mid-write. The GATT callbacks run on the BLE binder
@@ -588,7 +589,47 @@ class YpsoPumpPlugin @Inject constructor(
     override fun pumpSpecificShortStatus(veryShort: Boolean): String =
         "Reservoir ${pumpState.reservoirUnits}U Battery ${pumpState.batteryPercent}%"
 
+    /**
+     * Warn the user BEFORE the pump's 28-day shared-key expiry takes the loop down silently (it ends in a
+     * 0x8C NO_SHARED_KEY that historically fired overnight). Pure local time math from the stored key mint
+     * date ([YpsoPumpConst.PREF_KEY_DATE]); runs every status cycle. >7d = quiet (dismiss), <=7d = NORMAL,
+     * <=1d or expired = URGENT. No-op if the key date was never captured (0).
+     */
+    private fun checkKeyExpiry() {
+        val keyDate = bleManager.resolveKeyDate()
+        if (keyDate <= 0L) return
+        val expiry = keyDate + KEY_LIFETIME_MS
+        val msLeft = expiry - dateUtil.now()
+        val daysLeft = Math.ceil(msLeft.toDouble() / DAY_MS).toInt()
+        val whenStr = dateUtil.dateAndTimeString(expiry)
+        when {
+            msLeft <= 0L -> uiInteraction.addNotification(
+                KEY_EXPIRY_NOTIF_ID,
+                "YpsoPump key EXPIRED ($whenStr) — the loop can no longer read or dose. A new key exchange is required now.",
+                Notification.URGENT
+            )
+
+            daysLeft <= 1 -> uiInteraction.addNotification(
+                KEY_EXPIRY_NOTIF_ID,
+                "YpsoPump key expires in under 1 day ($whenStr) — re-key now to avoid a loop outage.",
+                Notification.URGENT
+            )
+
+            daysLeft <= 7 -> uiInteraction.addNotification(
+                KEY_EXPIRY_NOTIF_ID,
+                "YpsoPump key expires in $daysLeft days ($whenStr) — plan a re-key (needs a clean, un-revoked keybox).",
+                Notification.NORMAL
+            )
+
+            else            -> rxBus.send(EventDismissNotification(KEY_EXPIRY_NOTIF_ID))
+        }
+    }
+
     companion object {
+
+        private const val DAY_MS = 24L * 60 * 60 * 1000
+        private const val KEY_LIFETIME_MS = 28L * DAY_MS          // pump-side 28-day shared-key expiry
+        private const val KEY_EXPIRY_NOTIF_ID = 1091              // unique id so re-raising replaces, not stacks
 
         /** The pump reports remaining insulin in centi-units, so a true empty reads as exactly 0. */
         private const val RESERVOIR_EMPTY_UNITS = 0.0
