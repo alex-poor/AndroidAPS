@@ -156,7 +156,12 @@ class Libre3SecuritySession(
             Libre3Gatt.SecurityCommand.REQUEST_CERT -> {
                 val cert = Libre3AppCertificate.forVersion(pairingVersion)
                     ?: return Step.Failed("no app certificate for securityVersion $pairingVersion")
-                Step.Write(Libre3Gatt.SEC_CHAR_CERT_DATA, cert, thenCommand = null)
+                // After our app certificate is fully written, send CERT_ACCEPTED(3) — Juggluco's
+                // Libre3GattCallback.oncharwrite() sends security command 3 on CERT_DATA write-done
+                // (commandphase 3). Without it the sensor never sends its patch certificate and the
+                // handshake stalls ~8 s then drops the link unbonded (0x101/257). This was the
+                // open fresh-pairing bug: cert written with thenCommand=null, nothing prompted the reply.
+                Step.Write(Libre3Gatt.SEC_CHAR_CERT_DATA, cert, thenCommand = Libre3Gatt.SecurityCommand.CERT_ACCEPTED)
             }
 
             Libre3Gatt.SecurityCommand.EPHEMERAL_EXCHANGE -> {
@@ -166,7 +171,10 @@ class Libre3SecuritySession(
                 val framed = ByteArray(pub.size + 1)
                 framed[0] = 0x04
                 pub.copyInto(framed, 1)
-                Step.Write(Libre3Gatt.SEC_CHAR_CERT_DATA, framed, thenCommand = null)
+                // After our ephemeral key is fully written, send RESUME_AUTHORIZED(14) — Juggluco
+                // sends security command 14 on CERT_DATA write-done at commandphase 5. Without it the
+                // sensor never returns its 65-byte patch ephemeral key and pairing stalls at this step.
+                Step.Write(Libre3Gatt.SEC_CHAR_CERT_DATA, framed, thenCommand = Libre3Gatt.SecurityCommand.RESUME_AUTHORIZED)
             }
 
             else -> null
