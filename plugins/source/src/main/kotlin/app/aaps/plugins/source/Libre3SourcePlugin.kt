@@ -25,6 +25,7 @@ import app.aaps.libre3.Libre3BleClient
 import app.aaps.libre3.Libre3GlucoseRecord
 import app.aaps.libre3.Libre3History
 import app.aaps.libre3.Libre3LagOverride
+import app.aaps.libre3.Libre3LowHold
 import app.aaps.libre3.Libre3NfcActivation
 import app.aaps.libre3.Libre3NfcV
 import app.aaps.libre3.Libre3PatchStatus
@@ -103,6 +104,10 @@ class Libre3SourcePlugin @Inject constructor(
     /** Manual-BG lag override: a finger-prick during a fast rise corrects the lagging sensor stream.
      *  Rebuilt from preferences in [onStart], so pref changes apply on the next plugin start. */
     private var lagOverride = Libre3LagOverride()
+
+    /** Keeps the loop suspended when the sensor drops below its own 2.2 mmol/L floor during a hypo,
+     *  instead of going blind and letting the pump resume scheduled basal. See [Libre3LowHold]. */
+    private val lowHold = Libre3LowHold()
 
     private fun lagConfig() = Libre3LagOverride.Config(
         windowSize = preferences.get(IntKey.Libre3LagWindow),
@@ -211,16 +216,41 @@ class Libre3SourcePlugin @Inject constructor(
                 return
             }
             if (!record.isValid) {
-                // Outside Abbott's own 39..501 window. Never clamp a reading into range —
-                // an out-of-range value means the sensor is not measuring, not that glucose
-                // is at the limit.
-                aapsLogger.debug(LTag.BGSOURCE, "Libre3: reading ${record.readingMgDl} out of range, dropped")
+                // Outside Abbott's own 39..501 window. We never clamp a reading into range — an
+                // out-of-range value usually means the sensor is not measuring, not that glucose is
+                // at the limit. The one exception is a crash BELOW the floor: if this drop-out
+                // immediately follows a recent, low reading, going blind here would let the pump
+                // resume scheduled basal into a hypo. In that case [Libre3LowHold] returns a
+                // severe-low to report instead, so the loop stays suspended (bounded in time).
+                val now = dateUtil.now()
+                val held = lowHold.onOutOfRange(now, record.lifeCount.toLong())
+                if (held == null) {
+                    aapsLogger.debug(LTag.BGSOURCE, "Libre3: reading ${record.readingMgDl} out of range, dropped")
+                    return
+                }
+                aapsLogger.warn(LTag.BGSOURCE, "Libre3: below-range after a low reading — holding severe-low $held mg/dL to keep the loop suspended")
+                lastReadingAt = now
+                update {
+                    it.copy(
+                        connection = Libre3SensorState.Connection.Connected,
+                        lifecycle = lifecycleNow(),
+                        lastReadingAgoMinutes = 0,
+                        lastError = null
+                    )
+                }
+                val lowGv = GV(
+                    timestamp = now, value = held.toDouble(), raw = null, noise = null,
+                    trendArrow = TrendArrow.DOUBLE_DOWN, sourceSensor = SourceSensor.LIBRE_3
+                )
+                persistenceLayer.insertCgmSourceData(Sources.Libre3, listOf(lowGv), emptyList(), null)
+                    .subscribe({ }, { aapsLogger.error(LTag.BGSOURCE, "Libre3: low-hold insert failed", it) })
                 return
             }
             if (record.lifeCount == lastLifeCount) return      // repeat of the same minute
             lastLifeCount = record.lifeCount
             val now = dateUtil.now()
             lastReadingAt = now
+            lowHold.onValid(record.readingMgDl, now)           // remember the trajectory for a below-floor crash
             // Feed the raw reading to the lag override; the value stored is corrected only while an
             // override is active (raw otherwise). The override keeps its slope on the RAW stream.
             val stored = lagOverride.onReading(now, record.readingMgDl)
