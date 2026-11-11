@@ -37,6 +37,7 @@ object Tick {
         val rawCgmAggro: Boolean = false,      // FIX B1: gate aggression on RAW CGM trend (stay on through a stuck high)
         val fallTaperK: Float = 0f,            // FIX B2: >0 ⇒ cut delivery as raw CGM falls (taper, no overnight stack)
         val burstIobBrake: Boolean = false,    // FIX B3: scale the burst's excess toward 0 as bolus IOB rises
+        val unifiedFloor: Boolean = false,     // UNIFIED: one keyed aggression floor; replaces boost/cap/brake/taper
     )
 
     /** The result of one tick: the delivered basal rate + the intermediate solve (for logging / diffing). */

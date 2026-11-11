@@ -17,14 +17,19 @@ object CamapsFxEngine {
     // crater. Tuned on 14 days of the user's own data (boost 2.5 / aggroCap 2.0 / taper 1.5). Default OFF.
     private fun defaultCfg(mealActive: Int, aggressive: Boolean, mealAntiSuspend: Boolean, burst: Boolean): Tick.Config {
         val aggr = aggressive || burst
+        // BURST now drives the UNIFIED correction floor: one keyed law (rises with how high, trend-damped,
+        // bounded, budget-stopped) REPLACES the old boost/aggroCap/IOB-brake/fall-taper stack — so aggression
+        // and its brake are the same function and can't stack. The old multiplier/guard knobs are neutralised
+        // when burst is on (boost=1, no brake, no taper); plain `aggressive` (non-burst) keeps the old 1.8x.
         return Tick.Config(0f, 30f, 0f, 25, 25, 150, 6, p1 = 4, p2 = 7, bolus = 0,
             mealActive = mealActive, 0f, 0f, 0f, 0f, 0f, 0f, aggressive = aggr,
-            boostFactor = if (burst) 2.5f else if (aggr) 1.8f else 1.0f,
-            aggroCap = if (burst) 2.0f else 1.5f,
+            boostFactor = if (burst) 1.0f else if (aggr) 1.8f else 1.0f,
+            aggroCap = if (burst) 1.5f else 1.5f,
             mealAntiSuspend = mealAntiSuspend,
             rawCgmAggro = burst,
-            fallTaperK = if (burst) 1.5f else 0f,
-            burstIobBrake = burst)
+            fallTaperK = 0f,
+            burstIobBrake = false,
+            unifiedFloor = burst)
     }
 
     fun decide(

@@ -98,6 +98,19 @@ object Controller {
     // top of a meal bolus that is already working (the 2026-10-30 breakfast: burst held IOB pinned at ~7.8 → crash).
     const val BURST_IOB_FULL = 1.5f
     const val BURST_IOB_ZERO = 4.0f
+    // Floor the brake: at/above BURST_IOB_ZERO keep this FRACTION of the correction-above-basal alive instead
+    // of zeroing it, so a genuine high still gets corrected (just dampened) rather than switched off. Sized
+    // from 3 months of real history (brake_floor_analysis): 40% of high-BG/high-IOB episodes stayed >10 for a
+    // median 115 min with ~4.3 U of head-room below target, while the few crashes descended slowly (80-110 min
+    // to 3.9) where the fallTaper cut already protects. The fallTaper below remains the backstop on any fall.
+    const val BURST_IOB_FLOOR = 0.5f
+    // UNIFIED correction floor (cfg.unifiedFloor). One keyed law replacing boost/cap/brake/taper:
+    //   g = (1 + FLOOR_KL*(p9-target)) * trendDamp,  bounded [1, FLOOR_GMAX];  rate_floor = profileBasal*g
+    // FLOOR_KL = steepness (g per mmol above target); FLOOR_GMAX = hard bound (~3x basal ≈ 300%);
+    // FLOOR_KT = downward-trend damping (full cut at ~ -1/FLOOR_KT mmol/h of predicted fall).
+    const val FLOOR_KL = 0.25f
+    const val FLOOR_GMAX = 3.0f
+    const val FLOOR_KT = 0.33f
     /** Exponential bolus-IOB fraction remaining (Oref rapid: peak 75 min, DIA 300). */
     private fun iobFrac(minAgo: Float): Float {
         if (minAgo < 0f) return 1f; if (minAgo >= 300f) return 0f
@@ -285,10 +298,12 @@ object Controller {
         //       while the estimator still reads < 10 (plant over-clears the rise), so aggroActive is false in the
         //       exact window the stacking happens. Gating on burstIobBrake + (rate > real profile) catches it.
         // iobScale is 1.0 (no effect) with no meal IOB, so genuine no-bolus highs keep the full correction.
+        // Recent bolus IOB (exponential rapid-insulin tail). Computed once here because BOTH the IOB brake and
+        // the unified floor's deferral key on it — so neither stacks correction on a meal bolus still absorbing.
+        var bolusIob = 0f
+        for (bo in p.boluses) { val age = (p.nowMinute - bo.minute).toFloat(); if (age in 0f..300f) bolusIob += bo.a * iobFrac(age) }
         if (cfg.burstIobBrake && deliveredRate > realProfileNow) {
-            var bolusIob = 0f
-            for (bo in p.boluses) { val age = (p.nowMinute - bo.minute).toFloat(); if (age in 0f..300f) bolusIob += bo.a * iobFrac(age) }
-            val iobScale = ((BURST_IOB_ZERO - bolusIob) / (BURST_IOB_ZERO - BURST_IOB_FULL)).coerceIn(0f, 1f)
+            val iobScale = ((BURST_IOB_ZERO - bolusIob) / (BURST_IOB_ZERO - BURST_IOB_FULL)).coerceIn(BURST_IOB_FLOOR, 1f)
             deliveredRate = realProfileNow + (deliveredRate - realProfileNow) * iobScale
         }
         // FIX B2 (fallTaperK): taper delivery as the RAW CGM falls, so a hard correction self-limits the moment
@@ -298,6 +313,33 @@ object Controller {
         if (cfg.fallTaperK > 0f) {
             val rawRoc30 = cgmNowRaw - cgm30Ago
             if (rawRoc30 < -1.0f) deliveredRate *= maxOf(0f, 1f + (rawRoc30 + 1.0f) / cfg.fallTaperK)
+        }
+        // UNIFIED AGGRESSIVE CORRECTION FLOOR (cfg.unifiedFloor): ONE keyed law in place of the boost/
+        // aggroCap/IOB-brake/fall-taper add-ons, so aggression and its own brake are the same function and
+        // cannot stack into a drop. Keyed on ESTIMATED glucose p9 (NOT a multiplier on the cautious demand,
+        // so it doesn't collapse to ~0 at severe highs the way boostFactor did): the floor rises with how far
+        // p9 is above target, is scaled DOWN by a predicted downward trend (roc, mmol/h), hard-bounded at
+        // FLOOR_GMAX*profile, and gated OFF the moment the COMMITTED insulin already reaches target (occlusion
+        // projection lowestBG <= target) — the anti-stack, from the model's own forward projection. Applied as
+        // a FLOOR (max) over the pipeline output: it only ever ADDS correction. CamAPS suspend-on-low and
+        // hypo-rescue (pipeline #2/#7 above) stay the hard safety floor on an actual low, and are never lifted
+        // here because the whole block is gated on p9 > target.
+        // Gates keep the CamAPS safety suspends intact: only lift when glucose is genuinely high (p9>target),
+        // the committed insulin won't already reach target (lowestBG>target — respects the crash projection),
+        // CGM is fresh+continuous (never dose aggressively on stale CGM — respects staleness #6), and no
+        // exercise window is active (#5). suspend-on-low (#2) is untouched since the block needs p9>target.
+        if (cfg.unifiedFloor && p9 > target && lowestBG > target && recentContinuous && cgmWithin180 && !exerciseActive) {
+            val trendDamp = (1f - FLOOR_KT * maxOf(0f, -roc)).coerceIn(0f, 1f)
+            // DEFER TO A WORKING MEAL BOLUS. The floor's excess above profile is scaled toward zero as recent
+            // bolus IOB rises — full floor below BURST_IOB_FULL, no added correction at/above BURST_IOB_ZERO —
+            // so the floor never stacks aggression on a bolus tail that is already going to bring BG down. The
+            // 2026-11-12 crash: at the dinner peak roc≈0 (trendDamp≈1) so the trend damp could NOT catch it, and
+            // the floor added ~3× basal on top of a bolus whose tail then outlasted the carbs and rode BG 281→41.
+            // This IOB gate is the piece the trend damp alone missed. iobDefer=1 ⇒ identical to the prior law.
+            val iobDefer = ((BURST_IOB_ZERO - bolusIob) / (BURST_IOB_ZERO - BURST_IOB_FULL)).coerceIn(0f, 1f)
+            val g = ((1f + FLOOR_KL * (p9 - target) * iobDefer) * trendDamp).coerceIn(1f, FLOOR_GMAX)
+            val floorRate = realProfileNow * g
+            if (floorRate > deliveredRate) deliveredRate = floorRate
         }
         return TickResult(deliveredRate, conv, c, x14, target, g.n, solve.rawRate,
             p9 = p9, tau0 = tau0, w24 = floorBase, optBir = optBir, anchor = anchor, startG = startGlucose,
