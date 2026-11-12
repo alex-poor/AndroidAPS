@@ -234,6 +234,26 @@ class CamapsPlugin @Inject constructor(
         val eventualDisplay = decision.eventualMmol.toDouble().coerceIn(2.0, 25.0)
         val iobNow = iobCobCalculator.calculateIobFromBolus().iob + iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().basaliob
 
+        // WHOLE-SYSTEM OVERSHOOT GOVERNOR. The engine (base MPC and its correction floor) decides on the glucose
+        // level and its OWN forward projection — which under-predicts post-meal crashes: on 2026-11-12 it held
+        // ~370% for 35 min while BG fell 13.6 -> 2.2 on a working breakfast bolus, because its forecast read ~7-8
+        // and never saw the crash. Backstop it, model-INDEPENDENTLY, with a mass balance on AAPS's own total IOB
+        // (bolus + basal) and profile ISF: where does the insulin already on board land BG? As that projection
+        // approaches target, taper the correction ABOVE profile basal to zero — so NO component (floor or base)
+        // can stack insulin into a predicted low. A genuine high with little IOB is untouched (projection stays
+        // high -> full correction). Suspend-on-low (above) and the max-basal clamp stay the hard safety rails.
+        val profileBasalUhr = profile.getBasal(now)
+        if (rateUhr > profileBasalUhr) {
+            val projBgMmol = rawCgmMmol - iobNow * isfMmol
+            val scale = ((projBgMmol - controlTargetMmol) / OVERSHOOT_MARGIN_MMOL).coerceIn(0.0, 1.0)
+            val governed = profileBasalUhr + (rateUhr - profileBasalUhr) * scale
+            if (governed < rateUhr) {
+                aapsLogger.debug(LTag.APS, "CamAPS-FX governor: IOB %.1f projects BG %.1f mmol (tgt %.1f) -> cap %.2f to %.2f U/hr"
+                    .format(iobNow, projBgMmol, controlTargetMmol, rateUhr, governed))
+                rateUhr = max(0.0, round(governed * 100.0) / 100.0)
+            }
+        }
+
         val reasonStr = "CamAPS-FX -> %.2f U/hr | tgt %.1f | pred %.1f | ncgm=%d nbol=%d nmeal=%d (IOB %.1f)"
             .format(rateUhr, decision.targetMmol, eventualDisplay, decision.nCgm, decision.nBolus, decision.nMeal, iobNow)
         val rt = RT(
@@ -337,6 +357,11 @@ class CamapsPlugin @Inject constructor(
         const val TMAXG_MIN = 90.0
         const val RAW_HYPO_SUSPEND_MMOL = 3.9
         const val MAX_BASAL_ABS_CAP = 5.0
+        // Whole-system overshoot governor: once the insulin already on board projects BG to within this many
+        // mmol of target, the correction ABOVE profile basal is fully withdrawn. Sized on the user's own 8-day
+        // tick history (floor_ab / governor_ab): catches the 2026-11-11 and 2026-11-12 post-meal crashes while
+        // leaving low-IOB genuine highs fully corrected.
+        const val OVERSHOOT_MARGIN_MMOL = 2.0
 
         /**
          * The three parameters of [CamapsEstimator] whose values the binary does not expose, fitted
