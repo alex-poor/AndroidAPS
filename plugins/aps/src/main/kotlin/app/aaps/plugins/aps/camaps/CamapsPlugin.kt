@@ -234,22 +234,27 @@ class CamapsPlugin @Inject constructor(
         val eventualDisplay = decision.eventualMmol.toDouble().coerceIn(2.0, 25.0)
         val iobNow = iobCobCalculator.calculateIobFromBolus().iob + iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().basaliob
 
-        // WHOLE-SYSTEM OVERSHOOT GOVERNOR. The engine (base MPC and its correction floor) decides on the glucose
-        // level and its OWN forward projection — which under-predicts post-meal crashes: on 2026-11-12 it held
-        // ~370% for 35 min while BG fell 13.6 -> 2.2 on a working breakfast bolus, because its forecast read ~7-8
-        // and never saw the crash. Backstop it, model-INDEPENDENTLY, with a mass balance on AAPS's own total IOB
-        // (bolus + basal) and profile ISF: where does the insulin already on board land BG? As that projection
-        // approaches target, taper the correction ABOVE profile basal to zero — so NO component (floor or base)
-        // can stack insulin into a predicted low. A genuine high with little IOB is untouched (projection stays
-        // high -> full correction). Suspend-on-low (above) and the max-basal clamp stay the hard safety rails.
+        // CAMAPS-FAITHFUL CORRECTION BOUND. The engine runs with its delivery ceiling LIFTED (burst) and a
+        // forecast that under-predicts post-meal crashes (2026-11-12: 3.55 U/hr held through a flat 13.4 plateau
+        // -> BG 13.6 -> 2.9 for 3 h; forecast read ~7-8 and never saw it). Bound the correction ABOVE profile
+        // basal by what real CamAPS does — simultaneously: (1) its measured ceiling (CAMAPS_GMAX x basal),
+        // (2) trend weighting (full only while RISING, taper to basal once it stops climbing), (3) the on-board
+        // IOB projection (never stack past what insulin already carries you to target). We take the MOST
+        // restrictive of the three; every one can only reduce delivery, so none can deepen a low. Suspend-on-low
+        // (above) and the max-basal clamp remain the hard rails.
         val profileBasalUhr = profile.getBasal(now)
         if (rateUhr > profileBasalUhr) {
+            val excess = rateUhr - profileBasalUhr
+            val rocMmolH = glucoseStatus.shortAvgDelta * 12.0 / MGDL_PER_MMOL
+            val trendScale = ((rocMmolH - CORR_ROC_CUT) / (CORR_ROC_FULL - CORR_ROC_CUT)).coerceIn(0.0, 1.0)
             val projBgMmol = rawCgmMmol - iobNow * isfMmol
-            val scale = ((projBgMmol - controlTargetMmol) / OVERSHOOT_MARGIN_MMOL).coerceIn(0.0, 1.0)
-            val governed = profileBasalUhr + (rateUhr - profileBasalUhr) * scale
-            if (governed < rateUhr) {
-                aapsLogger.debug(LTag.APS, "CamAPS-FX governor: IOB %.1f projects BG %.1f mmol (tgt %.1f) -> cap %.2f to %.2f U/hr"
-                    .format(iobNow, projBgMmol, controlTargetMmol, rateUhr, governed))
+            val iobScale = ((projBgMmol - controlTargetMmol) / OVERSHOOT_MARGIN_MMOL).coerceIn(0.0, 1.0)
+            val ceilExcess = profileBasalUhr * (CAMAPS_GMAX - 1.0)
+            val boundedExcess = minOf(excess * trendScale, excess * iobScale, ceilExcess)
+            val governed = profileBasalUhr + boundedExcess
+            if (governed < rateUhr - 1e-6) {
+                aapsLogger.debug(LTag.APS, "CamAPS-FX correction bound: roc %.1f (trend x%.2f) projBG %.1f (iob x%.2f) ceil %.2f -> %.2f to %.2f U/hr"
+                    .format(rocMmolH, trendScale, projBgMmol, iobScale, profileBasalUhr * CAMAPS_GMAX, rateUhr, governed))
                 rateUhr = max(0.0, round(governed * 100.0) / 100.0)
             }
         }
@@ -362,6 +367,18 @@ class CamapsPlugin @Inject constructor(
         // tick history (floor_ab / governor_ab): catches the 2026-11-11 and 2026-11-12 post-meal crashes while
         // leaving low-IOB genuine highs fully corrected.
         const val OVERSHOOT_MARGIN_MMOL = 2.0
+        // CamAPS-faithful correction bound (replaces the IOB-only governor above). Two more bounds on the
+        // correction ABOVE profile basal, each of which can only REDUCE delivery (so none can deepen a low):
+        //   CAMAPS_GMAX     — CamAPS's measured delivery ceiling (~2.55x basal). The live engine runs with its
+        //                     hard ceiling LIFTED by the burst flag, which let it deliver 3.74x on 2026-11-12
+        //                     (3.55 U/hr on 0.95 basal) and crash BG 13.6 -> 2.9 for 3 h. This restores it.
+        //   CORR_ROC_CUT/FULL — trend weighting (CamAPS weights trend 5x level). Full correction only while BG
+        //                     is RISING >= FULL mmol/h; taper to basal as roc falls to CUT, because a high that
+        //                     has stopped climbing is about to fall on its own and more insulin overshoots. The
+        //                     2026-11-12 overnight crash was 3.5 U/hr delivered through a FLAT plateau at 13.4.
+        const val CAMAPS_GMAX = 2.55
+        const val CORR_ROC_CUT = 0.0    // mmol/h: at/below this (flat or falling) correction-excess -> 0
+        const val CORR_ROC_FULL = 2.0   // mmol/h: at/above this (clearly rising) full correction allowed
 
         /**
          * The three parameters of [CamapsEstimator] whose values the binary does not expose, fitted
