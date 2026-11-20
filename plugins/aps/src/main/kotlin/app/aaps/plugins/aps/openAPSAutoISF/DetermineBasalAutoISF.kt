@@ -389,13 +389,17 @@ class DetermineBasalAutoISF @Inject constructor(
 
         // min_bg of 90 -> threshold of 65, 100 -> 70 110 -> 75, and 130 -> 85
         var threshold = min_bg - 0.5 * (min_bg - 40)
-        // if (profile.lgsThreshold != null) {
-        //     val lgsThreshold = profile.lgsThreshold ?: error("lgsThreshold missing")
-        //     if (lgsThreshold > threshold) {
-        //         consoleError.add("Threshold set from ${convert_bg(threshold)} to ${convert_bg(lgsThreshold.toDouble())}; ")
-        //         threshold = lgsThreshold.toDouble()
-        //     }
-        // }
+        // Honour the user's Low Glucose Suspend threshold preference. Mainline ships this block
+        // commented out in the autoISF plugin (DetermineBasalSMB.kt keeps it active), so the
+        // lgsThreshold setting is silently inert whenever autoISF is the active APS. Re-enabled so
+        // the pref can raise the suspend floor above the target-derived default.
+        if (profile.lgsThreshold != null) {
+            val lgsThreshold = profile.lgsThreshold ?: error("lgsThreshold missing")
+            if (lgsThreshold > threshold) {
+                consoleError.add("Threshold set from ${convert_bg(threshold)} to ${convert_bg(lgsThreshold.toDouble())}; ")
+                threshold = lgsThreshold.toDouble()
+            }
+        }
 
         //console.error(reservoir_data);
 
