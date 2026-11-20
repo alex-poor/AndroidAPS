@@ -98,10 +98,12 @@ class ObjectivesPluginTest : TestBaseWithProfile() {
         assertThat(c.value()).isFalse()
     }
 
-    @Test fun notStartedObjective10ShouldLimitSMBMode() {
+    @Test fun smbModeIsNotGatedByObjective() {
+        // The Objectives SMB gate was intentionally removed for this build (operator has run SMB
+        // before). An unstarted SMB objective must NOT disable SMB mode here; closed-loop and the
+        // use_smb preference remain the real gates elsewhere.
         objectivesPlugin.objectives[Objectives.SMB_OBJECTIVE].startedOn = 0
         val c = objectivesPlugin.isSMBModeEnabled(ConstraintObject(true, aapsLogger))
-        assertThat(c.getReasons()).contains("Objective 9 not started")
-        assertThat(c.value()).isFalse()
+        assertThat(c.value()).isTrue()
     }
 }
