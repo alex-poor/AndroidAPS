@@ -54,6 +54,16 @@ class Libre3BleClient(
     /** Set by [disconnect] so a deliberate teardown is not treated as a dropout to recover from. */
     private var stopping = false
     private var reconnectAttempt = 0
+
+    /**
+     * True while a reconnect is already queued. [scheduleReconnect] tears the GATT down, and that
+     * teardown's own `onConnectionStateChange(DISCONNECTED)` re-enters [scheduleReconnect]; repeated
+     * error frames do the same. Without this guard each call spawned another `connectGatt`, so a
+     * single glitch became a storm of hundreds of overlapping connections (observed live 2026-11-20:
+     * 312 `status=147` disconnects over ~15 min before backoff throttled it back). The guard
+     * collapses all of that into one orderly retry.
+     */
+    private var reconnectScheduled = false
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val opQueue = ConcurrentLinkedQueue<() -> Unit>()
@@ -81,11 +91,16 @@ class Libre3BleClient(
         this.device = device
         stopping = false
         reconnectAttempt = 0
+        reconnectScheduled = false
         openGatt()
     }
 
     private fun openGatt() {
         val d = device ?: return
+        // Defensive: never leave a previous client open when starting a new one. With the
+        // reconnectScheduled guard this should already be null, but a leaked gatt is exactly what
+        // turned one glitch into a connection storm, so close before replacing.
+        gatt?.let { it.disconnect(); it.close() }
         // autoConnect=false: the direct connection is far quicker, and we drive our own retry
         // schedule rather than leaving it to the platform's opaque background attempts.
         gatt = d.connectGatt(context, false, this, BluetoothDevice.TRANSPORT_LE)
@@ -123,6 +138,7 @@ class Libre3BleClient(
     fun disconnect() {
         stopping = true
         authorized = false
+        reconnectScheduled = false
         handler.removeCallbacksAndMessages(null)
         gatt?.disconnect()
         gatt?.close()
@@ -140,6 +156,11 @@ class Libre3BleClient(
      */
     private fun scheduleReconnect() {
         if (stopping) return
+        // Coalesce: one reconnect in flight at a time. The gatt.disconnect() below fires a
+        // DISCONNECTED callback that re-enters here, and error frames can call in repeatedly — any
+        // of which, unguarded, would start an overlapping connectGatt and storm the radio.
+        if (reconnectScheduled) return
+        reconnectScheduled = true
         handler.removeCallbacks(watchdog)
         authorized = false
         gatt?.disconnect()
@@ -151,7 +172,10 @@ class Libre3BleClient(
             RECONNECT_MAX_DELAY_MS
         )
         reconnectAttempt++
-        handler.postDelayed({ if (!stopping) openGatt() }, delay)
+        handler.postDelayed({
+            reconnectScheduled = false
+            if (!stopping) openGatt()
+        }, delay)
     }
 
     // --- operation queue ----------------------------------------------------
