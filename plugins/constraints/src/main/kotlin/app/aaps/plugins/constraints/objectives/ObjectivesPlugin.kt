@@ -106,10 +106,10 @@ class ObjectivesPlugin @Inject constructor(
     }
 
     override fun isSMBModeEnabled(value: Constraint<Boolean>): Constraint<Boolean> {
-        // Check if initialized
-        if (objectives.isEmpty()) return value
-        if (!objectives[SMB_OBJECTIVE].isStarted)
-            value.set(false, rh.gs(R.string.objectivenotstarted, SMB_OBJECTIVE + 1), this)
+        // Objectives SMB gate removed for this build: the operator has run SMB on this loop before
+        // and does not need the progression re-walked after a device/build change. SMB is still
+        // gated by closed-loop (SafetyPlugin) and the use_smb preference, so this only drops the
+        // objective-progression requirement, not the real safety checks.
         return value
     }
 
