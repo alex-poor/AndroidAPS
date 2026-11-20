@@ -23,5 +23,8 @@ enum class UnitDoubleKey(
     OverviewHypoTarget("hypo_target", 160.0, 108, 180, defaultedBySM = true),
     OverviewLowMark("low_mark", 72.0, 25, 160, showInNsClientMode = false, hideParentScreenIfHidden = true),
     OverviewHighMark("high_mark", 180.0, 90, 250, showInNsClientMode = false),
-    ApsLgsThreshold("lgsThreshold", 65.0, 60, 100, defaultedBySM = true, dependency = BooleanKey.ApsUseDynamicSensitivity)
+    // dependency on ApsUseDynamicSensitivity removed: LGS threshold is a general safety floor, not a
+    // DynISF-only setting, and hiding it when DynISF is off makes it unreachable for autoISF users who
+    // run with DynISF disabled. The autoISF algorithm reads lgsThreshold regardless of DynISF.
+    ApsLgsThreshold("lgsThreshold", 65.0, 60, 100, defaultedBySM = true)
 }
