@@ -301,7 +301,10 @@ class Libre3BleClient(
             }
             is Libre3SecuritySession.Step.Failed     -> {
                 listener.onError(step.reason)
-                disconnect()
+                // A failed handshake step is recoverable: the next clean connect re-runs it from
+                // scratch. Do NOT call disconnect() — that sets `stopping` and permanently kills
+                // reconnection (same trap the onCharacteristicWrite path warns about). Retry instead.
+                scheduleReconnect()
             }
         }
     }
@@ -425,7 +428,11 @@ class Libre3BleClient(
         when (val result = r.offer(value)) {
             is Libre3Framing.Reassembler.Result.NeedMore -> Unit
             is Libre3Framing.Reassembler.Result.Error    -> {
-                listener.onError("reassembly: ${result.reason}"); disconnect()
+                // An out-of-order / dropped BLE frame mid-handshake is a transient radio glitch,
+                // not a reason to stop forever. disconnect() sets `stopping` and permanently
+                // disables reconnection (observed live 2026-11-20: 3 h with no BG). scheduleReconnect()
+                // tears down the GATT and re-handshakes cleanly on backoff.
+                listener.onError("reassembly: ${result.reason}"); scheduleReconnect()
             }
             is Libre3Framing.Reassembler.Result.Complete -> {
                 reassembler = null
