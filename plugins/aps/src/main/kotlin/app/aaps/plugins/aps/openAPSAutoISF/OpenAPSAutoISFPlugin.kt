@@ -143,6 +143,8 @@ open class OpenAPSAutoISFPlugin @Inject constructor(
     val smbMaxRangeExtension; get() = preferences.get(DoubleKey.ApsAutoIsfSmbMaxRangeExtension)
     private val enableSMB_EvenOn_OddOff_always; get() = preferences.get(BooleanKey.ApsAutoIsfSmbOnEvenTarget) // for profile target
     val iobThresholdPercent; get() = preferences.get(IntKey.ApsAutoIsfIobThPercent)
+    val uamAnnouncedCeilingEnabled; get() = preferences.get(BooleanKey.ApsUamAnnouncedCeilingEnabled)
+    val uamAnnouncedAbsorptionRate; get() = preferences.get(IntKey.ApsUamAnnouncedAbsorptionRate)
     private val exerciseMode; get() = SMBDefaults.exercise_mode
     private val highTemptargetRaisesSensitivity; get() = preferences.get(BooleanKey.ApsAutoIsfHighTtRaisesSens)
     val normalTarget = Constants.NORMAL_TARGET_MGDL
@@ -388,7 +390,9 @@ open class OpenAPSAutoISFPlugin @Inject constructor(
             smb_max_range_extension = smbMaxRangeExtension,
             enableSMB_EvenOn_OddOff_always = enableSMB_EvenOn_OddOff_always,
             iob_threshold_percent = iobThresholdPercent,
-            profile_percentage = profile_percentage
+            profile_percentage = profile_percentage,
+            uamAnnouncedCeilingEnabled = uamAnnouncedCeilingEnabled,
+            uamAnnouncedAbsorptionRate = uamAnnouncedAbsorptionRate
         )
         //done calculate exercise ratio
         var exerciseRatio = 1.0

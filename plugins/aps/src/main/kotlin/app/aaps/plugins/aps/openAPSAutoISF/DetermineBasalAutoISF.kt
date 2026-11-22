@@ -444,7 +444,7 @@ class DetermineBasalAutoISF @Inject constructor(
         // calculate current carb absorption rate, and how long to absorb all carbs
         // CI = current carb impact on BG in mg/dL/5m
         ci = round((minDelta - bgi), 1)
-        val uci = round((minDelta - bgi), 1)
+        var uci = round((minDelta - bgi), 1)
         // ISF (mg/dL/U) / CR (g/U) = CSF (mg/dL/g)
 
         // TODO: remove commented-out code for old behavior
@@ -461,6 +461,26 @@ class DetermineBasalAutoISF @Inject constructor(
         // this avoids overdosing insulin for large meals when low temp targets are active
         val csf = sens / profile.carb_ratio
         consoleError.add("profile.sens: ${profile.sens}, sens: $sens, CSF: $csf")
+
+        // autoISF UAM-ceiling (opt-in): when a meal has been announced, cap the UAM carb-impact
+        // (uci) to the surplus above what the announced carbs can plausibly be absorbing right now.
+        // This stops UAM from re-interpreting a normal (even fast) announced-meal rise as additional
+        // "unannounced" carbs and double-dosing it. Above the ceiling (faster than the announced carbs
+        // could absorb) the surplus still drives UAM, so a genuine under-count is still caught.
+        if (profile.uamAnnouncedCeilingEnabled && meal_data.lastCarbTime > 0) {
+            val mealWindowH = 4.0 // treat an announced meal as "active" for this many hours
+            val hSinceCarb = (systemTime - meal_data.lastCarbTime) / 3600000.0
+            if (hSinceCarb in 0.0..mealWindowH) {
+                // jitter-free remaining-carb estimate: floor the noisy instantaneous COB with a smooth time-decay
+                val timeRemaining = meal_data.carbs * max(0.0, 1.0 - hSinceCarb / mealWindowH)
+                val effectiveCOB = max(meal_data.mealCOB, timeRemaining)
+                val rateG5 = profile.uamAnnouncedAbsorptionRate * 5.0 / 60.0 // max announced g absorbed per 5m
+                val announcedCeilingCI = round(min(effectiveCOB, rateG5) * csf, 1) // mg/dL per 5m
+                val cappedUci = max(0.0, uci - announcedCeilingCI)
+                consoleError.add("autoISF UAM-ceiling: announced meal ${round(hSinceCarb, 1)}h old, effCOB ${round(effectiveCOB, 1)}g, ceilingCI $announcedCeilingCI mg/dL/5m; UCI $uci -> $cappedUci")
+                uci = cappedUci
+            }
+        }
 
         val maxCarbAbsorptionRate = 30 // g/h; maximum rate to assume carbs will absorb if no CI observed
         // limit Carb Impact to maxCarbAbsorptionRate * csf in mg/dL per 5m

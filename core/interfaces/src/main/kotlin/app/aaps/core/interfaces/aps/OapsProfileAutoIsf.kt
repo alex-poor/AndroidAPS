@@ -63,5 +63,9 @@ data class OapsProfileAutoIsf(
     var smb_max_range_extension: Double,
     var enableSMB_EvenOn_OddOff_always: Boolean,
     var iob_threshold_percent: Int,
-    var profile_percentage: Int
+    var profile_percentage: Int,
+    // autoISF: suppress phantom UAM dosing on an announced meal by capping UAM carb-impact
+    // to the surplus above what the announced carbs can plausibly absorb. Opt-in.
+    var uamAnnouncedCeilingEnabled: Boolean = false,
+    var uamAnnouncedAbsorptionRate: Int = 80 // g/h; max assumed absorption of announced carbs
 )
